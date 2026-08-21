@@ -198,7 +198,8 @@ func (o observation) evidence() (domain.Evidence, error) {
 	return domain.NewEvidence(domain.EvidenceInput{
 		// The same components as the TCP node, distinguished by the step, so one
 		// endpoint's L2 and L3 facts sit together and never collide (ADR 0019).
-		ID:           probe.EvidenceID(StepHandshake, o.params.Endpoint, address.Addr().String()),
+		ID: probe.ScopedEvidenceID(
+			o.params.Scope, StepHandshake, o.params.Endpoint, address.Addr().String()),
 		Subject:      subject,
 		Layer:        domain.LayerTLS,
 		Step:         StepHandshake,

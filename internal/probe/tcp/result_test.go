@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 )
 
 // These tests are the proof that the connection-ownership invariant is real
@@ -97,7 +99,7 @@ func TestTakeConnIsSingleUse(t *testing.T) {
 // release it.
 func TestCloseBeforeTransferReleasesTheConnection(t *testing.T) {
 	conn := newFakeConn(t)
-	r, err := Connect(context.Background(), &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(context.Background(), &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -121,7 +123,7 @@ func TestCloseBeforeTransferReleasesTheConnection(t *testing.T) {
 // using.
 func TestCloseAfterTransferDoesNothing(t *testing.T) {
 	conn := newFakeConn(t)
-	r, err := Connect(context.Background(), &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(context.Background(), &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -151,7 +153,7 @@ func TestCloseAfterTransferDoesNothing(t *testing.T) {
 // without closing the underlying connection twice.
 func TestCloseIsIdempotent(t *testing.T) {
 	conn := newFakeConn(t)
-	r, err := Connect(context.Background(), &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(context.Background(), &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -170,7 +172,7 @@ func TestCloseIsIdempotent(t *testing.T) {
 // ownership API is safe to call unconditionally.
 func TestFailedAttemptOwnsNothing(t *testing.T) {
 	r, err := Connect(context.Background(),
-		&fakeDialer{err: errors.New("refused")}, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+		&fakeDialer{err: errors.New("refused")}, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -193,7 +195,7 @@ func TestFailedAttemptOwnsNothing(t *testing.T) {
 // still says the attempt succeeded after the socket is gone, because it did.
 func TestEvidenceOutlivesTheConnection(t *testing.T) {
 	conn := newFakeConn(t)
-	r, err := Connect(context.Background(), &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(context.Background(), &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -226,7 +228,7 @@ func TestEvidenceConstructionFailureClosesTheConnection(t *testing.T) {
 	r, err := newResult(observation{
 		addr: addrPort(t, "10.0.0.1:9092"),
 		conn: conn,
-	}, testEndpoint)
+	}, testEndpoint, probe.SweepScope{})
 
 	if err == nil {
 		t.Fatal("expected evidence construction to fail")

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 )
 
 // fakeDialer is why Dialer exists. Every test here is hermetic: nothing dials a
@@ -78,7 +80,7 @@ const testEndpoint = "primary.internal:9092"
 func connect(t *testing.T, d Dialer, addr netip.AddrPort) *Result {
 	t.Helper()
 
-	r, err := Connect(context.Background(), d, testEndpoint, addr)
+	r, err := Connect(context.Background(), d, testEndpoint, addr, probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: unexpected error: %v", err)
 	}
@@ -320,7 +322,7 @@ func TestCallerDeadlineIsNotARemoteFailure(t *testing.T) {
 	defer cancel()
 
 	d := &fakeDialer{err: &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}}
-	r, err := Connect(ctx, d, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(ctx, d, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: unexpected error: %v", err)
 	}
@@ -340,7 +342,7 @@ func TestCancellationIsNotARemoteFailure(t *testing.T) {
 	cancel()
 
 	d := &fakeDialer{err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("operation was canceled")}}
-	r, err := Connect(ctx, d, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(ctx, d, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: unexpected error: %v", err)
 	}
@@ -372,7 +374,7 @@ func TestCompletedConnectionSurvivesLaterContextExpiry(t *testing.T) {
 	defer cancel()
 
 	conn := newFakeConn(t)
-	r, err := Connect(ctx, &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(ctx, &fakeDialer{conn: conn}, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: unexpected error: %v", err)
 	}
@@ -410,13 +412,13 @@ func TestEvidenceIDsDistinguishAddressesUnderOneEndpoint(t *testing.T) {
 func TestEvidenceIDsDistinguishEndpointsSharingAnAddress(t *testing.T) {
 	addr := addrPort(t, "10.0.0.1:9092")
 
-	first, err := Connect(context.Background(), &fakeDialer{conn: newFakeConn(t)}, "one.internal:9092", addr)
+	first, err := Connect(context.Background(), &fakeDialer{conn: newFakeConn(t)}, "one.internal:9092", addr, probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
 	defer func() { _ = first.Close() }()
 
-	second, err := Connect(context.Background(), &fakeDialer{conn: newFakeConn(t)}, "two.internal:9092", addr)
+	second, err := Connect(context.Background(), &fakeDialer{conn: newFakeConn(t)}, "two.internal:9092", addr, probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -447,7 +449,7 @@ func TestEvidenceIDIsDeterministic(t *testing.T) {
 // bracketed endpoint form stays readable.
 func TestIPv6IdentifiersAreUnambiguous(t *testing.T) {
 	r, err := Connect(context.Background(), &fakeDialer{conn: newFakeConn(t)},
-		"[2001:db8::1]:9092", addrPort(t, "[2001:db8::1]:9092"))
+		"[2001:db8::1]:9092", addrPort(t, "[2001:db8::1]:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -467,7 +469,7 @@ func TestIPv6IdentifiersAreUnambiguous(t *testing.T) {
 // separator is encoded, not refused.
 func TestIdentifierSeparatorDoesNotRestrictInput(t *testing.T) {
 	r, err := Connect(context.Background(), &fakeDialer{conn: newFakeConn(t)},
-		"weird/endpoint:9092", addrPort(t, "10.0.0.1:9092"))
+		"weird/endpoint:9092", addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: an endpoint containing the separator was refused: %v", err)
 	}
@@ -496,7 +498,7 @@ func TestConnectRejectsUnusableInput(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			d := &fakeDialer{conn: newFakeConn(t)}
-			r, err := Connect(context.Background(), d, tt.endpoint, tt.addr)
+			r, err := Connect(context.Background(), d, tt.endpoint, tt.addr, probe.SweepScope{})
 
 			if !errors.Is(err, ErrInvalidInput) {
 				t.Fatalf("error = %v, want ErrInvalidInput", err)
@@ -522,7 +524,7 @@ func TestEndpointLabelsAreNotOverRestricted(t *testing.T) {
 
 	for _, endpoint := range endpoints {
 		r, err := Connect(context.Background(), &fakeDialer{conn: newFakeConn(t)},
-			endpoint, addrPort(t, "10.0.0.1:9092"))
+			endpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 		if err != nil {
 			t.Errorf("endpoint %q was refused: %v", endpoint, err)
 			continue
@@ -532,7 +534,7 @@ func TestEndpointLabelsAreNotOverRestricted(t *testing.T) {
 }
 
 func TestConnectRejectsNilDialer(t *testing.T) {
-	r, err := Connect(context.Background(), nil, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(context.Background(), nil, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("error = %v, want ErrInvalidInput", err)
 	}
@@ -543,7 +545,7 @@ func TestConnectRejectsNilDialer(t *testing.T) {
 
 //nolint:staticcheck // passing a nil context is exactly what this guard is for.
 func TestConnectRejectsNilContext(t *testing.T) {
-	r, err := Connect(nil, &fakeDialer{}, testEndpoint, addrPort(t, "10.0.0.1:9092"))
+	r, err := Connect(nil, &fakeDialer{}, testEndpoint, addrPort(t, "10.0.0.1:9092"), probe.SweepScope{})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("error = %v, want ErrInvalidInput", err)
 	}

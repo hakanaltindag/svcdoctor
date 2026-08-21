@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tls"
@@ -69,6 +71,41 @@ type Params struct {
 	// chain after TCP.
 	TLS *TLSOptions
 
+	// Scope names this sweep, so that a run may measure one endpoint more than
+	// once and keep both measurements.
+	//
+	// Optional. The zero value is unscoped and reproduces, byte for byte, the
+	// evidence identifiers this chain has produced since Phase 2 — so a caller
+	// that does not need a second sweep never sees this field's effects.
+	//
+	// It exists because a bootstrap sweep and a later topology sweep can
+	// legitimately resolve the same hostname: two executions, at two moments,
+	// for two reasons, of one subject. Without a scope the second mints an
+	// identifier the first already holds and the graph rejects it, which is
+	// correct and was the blocker this field removes.
+	//
+	// **It is not provenance.** A scope says which execution produced a
+	// measurement, never how a subject entered the run. `Origin` is a different
+	// question and remains deferred (ADR 0013, ADR 0031). It is not endpoint
+	// identity either: two scopes measuring one endpoint do not make it two
+	// endpoints. See ADR 0032.
+	Scope probe.SweepScope
+
+	// Parent optionally records that this sweep derives from an existing
+	// evidence node — the node whose observation caused the sweep to happen.
+	//
+	// Optional. When empty the sweep's DNS node is a graph root, exactly as
+	// every sweep has been until now.
+	//
+	// The edge means **derivation** and nothing else: this measurement exists
+	// because that node did. It does not mean the subject was discovered,
+	// user-supplied, or trusted — `docs/REPORT_SCHEMA.md` forbids reading
+	// provenance out of graph shape, and this field does not change that.
+	//
+	// The node must already be in the builder. A parent that is absent is a
+	// caller defect and comes back as an error, never as evidence.
+	Parent domain.EvidenceID
+
 	// StepTimeout optionally bounds each probe call, derived from the caller's
 	// context. Zero means only the caller's context bounds the work.
 	//
@@ -113,6 +150,7 @@ func (p Params) tlsParams(addr netip.AddrPort) tls.Params {
 	}
 	return tls.Params{
 		Endpoint:           p.endpoint(),
+		Scope:              p.Scope,
 		Address:            addr,
 		ServerName:         serverName,
 		RootCAs:            p.TLS.RootCAs,

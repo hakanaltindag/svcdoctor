@@ -332,6 +332,35 @@ with two representations that can disagree (ADR 0013, ADR 0016). What eventually
 reaches a report is not the channel but its consequence — a `SKIPPED` node with
 `EXEC_SKIPPED_BY_POLICY` when policy refused an attempt.
 
+### 5.2b One run may measure one subject more than once
+
+A run can legitimately measure the same thing twice: a bootstrap sweep resolves a
+hostname, and a later topology sweep resolves it again because a service
+advertised it. Two executions, at two moments, for two reasons, of one subject —
+and both are true.
+
+Evidence identifiers are derived from what a node is about, so those two lookups
+mint one identifier and the graph rejects the second. That rejection is correct;
+what was missing was a way to say the measurements differ. A **sweep scope**
+(**ADR 0032**) supplies it: an opaque caller-owned label, carried unchanged
+through DNS, TCP and TLS, contributing one optional component to the identifier
+and touching nothing else.
+
+Three properties make it safe to rely on:
+
+- **It never reaches a subject or an attribute.** What was observed is unchanged
+  by who asked. If a scope could reach a subject, two measurements of one host
+  would begin describing two hosts.
+- **It is not `Origin`.** A scope says which execution produced a measurement,
+  never how a subject entered the run. The same distinction section 5.3 draws for
+  parent edges.
+- **Unscoped is the default and reproduces Phase 2 byte for byte**, so a caller
+  that never needs a second sweep never sees it.
+
+The chain also accepts an optional derivation parent, so a sweep caused by an
+earlier observation can say so. That edge means derivation and not provenance,
+exactly as elsewhere.
+
 ### 5.3 Topology discovery records endpoints and probes none of them
 
 Phase 3.3 is where svcdoctor first learns of endpoints the operator never named.

@@ -62,13 +62,26 @@ func Run(ctx context.Context, builder *domain.GraphBuilder, params Params) (*Res
 	}()
 
 	lookupCtx, cancel := stepContext(ctx, params.StepTimeout)
-	lookup, err := dns.Lookup(lookupCtx, params.Resolver, params.Host)
+	lookup, err := dns.Lookup(lookupCtx, params.Resolver, params.Host, params.Scope)
 	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("dns lookup: %w", err)
 	}
 	if err := builder.AddEvidence(lookup); err != nil {
 		return nil, fmt.Errorf("recording dns evidence: %w", err)
+	}
+	// A sweep that was caused by an earlier observation says so. The edge is
+	// derivation, not provenance: it records that this measurement exists
+	// because that node did, and nothing about how its subject entered the run.
+	//
+	// The check happens here rather than before the lookup because the builder
+	// deliberately offers no way to ask what it holds (ADR 0013), and giving it
+	// one to save a lookup would trade a correct boundary for a cheap
+	// pre-flight. An absent parent is a caller defect and surfaces as an error.
+	if params.Parent != "" {
+		if err := builder.AddParent(lookup.ID(), params.Parent); err != nil {
+			return nil, fmt.Errorf("recording sweep parent: %w", err)
+		}
 	}
 
 	for _, address := range resolvedAddresses(lookup) {
@@ -142,7 +155,7 @@ func sweepAddress(
 	}
 
 	stepCtx, cancel := stepContext(ctx, params.StepTimeout)
-	connection, err := tcp.Connect(stepCtx, params.Dialer, params.endpoint(), addr)
+	connection, err := tcp.Connect(stepCtx, params.Dialer, params.endpoint(), addr, params.Scope)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("tcp connect: %w", err)
@@ -264,7 +277,8 @@ func recordUnattempted(
 	addr netip.AddrPort,
 	failure domain.FailureClass,
 ) error {
-	skipped, err := skippedEvidence(tcp.StepConnect, domain.LayerTCP, params.endpoint(), addr, failure)
+	skipped, err := skippedEvidence(
+		tcp.StepConnect, domain.LayerTCP, params.endpoint(), addr, failure, params.Scope)
 	if err != nil {
 		return err
 	}
@@ -292,7 +306,7 @@ func recordSkippedTLS(
 ) error {
 	skipped, err := skippedEvidence(
 		tls.StepHandshake, domain.LayerTLS, params.endpoint(), addr,
-		domain.FailureExecSkippedPrerequisiteFailed,
+		domain.FailureExecSkippedPrerequisiteFailed, params.Scope,
 	)
 	if err != nil {
 		return err
@@ -318,6 +332,7 @@ func skippedEvidence(
 	endpoint string,
 	addr netip.AddrPort,
 	failure domain.FailureClass,
+	scope probe.SweepScope,
 ) (domain.Evidence, error) {
 	subject, err := domain.NewEndpointSubject(addr.String())
 	if err != nil {
@@ -325,7 +340,7 @@ func skippedEvidence(
 	}
 
 	evidence, err := domain.NewEvidence(domain.EvidenceInput{
-		ID:           probe.EvidenceID(step, endpoint, addr.Addr().String()),
+		ID:           probe.ScopedEvidenceID(scope, step, endpoint, addr.Addr().String()),
 		Subject:      subject,
 		Layer:        layer,
 		Step:         step,

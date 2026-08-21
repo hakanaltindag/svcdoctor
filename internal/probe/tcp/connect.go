@@ -46,7 +46,10 @@ var ErrInvalidInput = errors.New("invalid tcp probe input")
 // An error is returned only for unusable input or for a failure to construct
 // valid evidence, neither of which is a statement about the target. Every
 // connection outcome, including every failure, is reported through the evidence.
-func Connect(ctx context.Context, d Dialer, endpoint string, addr netip.AddrPort) (*Result, error) {
+func Connect(
+	ctx context.Context, d Dialer, endpoint string, addr netip.AddrPort,
+	scope probe.SweepScope,
+) (*Result, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: context must not be nil", ErrInvalidInput)
 	}
@@ -60,7 +63,7 @@ func Connect(ctx context.Context, d Dialer, endpoint string, addr netip.AddrPort
 	if err != nil {
 		return nil, err
 	}
-	return newResult(observe(ctx, d, addr), endpoint)
+	return newResult(observe(ctx, d, addr), endpoint, scope)
 }
 
 // validateEndpoint checks the scope label, and deliberately checks very little.
@@ -155,8 +158,8 @@ func observe(ctx context.Context, d Dialer, addr netip.AddrPort) observation {
 // If evidence cannot be built the connection is closed here. That path should be
 // unreachable — every input was validated — but a probe that returned an error
 // while holding an open socket would leak one, and the guard costs a line.
-func newResult(o observation, endpoint string) (*Result, error) {
-	evidence, err := o.evidence(endpoint)
+func newResult(o observation, endpoint string, scope probe.SweepScope) (*Result, error) {
+	evidence, err := o.evidence(endpoint, scope)
 	if err != nil {
 		if o.conn != nil {
 			_ = o.conn.Close()
@@ -171,7 +174,9 @@ func newResult(o observation, endpoint string) (*Result, error) {
 // This is the probe boundary. Above it there is a connection, an error and a
 // dialer; below it there is a layer, a step, a state, a failure class and a
 // canonical address.
-func (o observation) evidence(endpoint string) (domain.Evidence, error) {
+func (o observation) evidence(
+	endpoint string, scope probe.SweepScope,
+) (domain.Evidence, error) {
 	subject, err := domain.NewEndpointSubject(o.addr.String())
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
@@ -183,7 +188,7 @@ func (o observation) evidence(endpoint string) (domain.Evidence, error) {
 		// The endpoint scopes the identifier so that two names resolving to one
 		// address stay two attempts. It is not part of the subject: the dial
 		// never used a name. See ADR 0019.
-		ID:           probe.EvidenceID(StepConnect, endpoint, o.addr.Addr().String()),
+		ID:           probe.ScopedEvidenceID(scope, StepConnect, endpoint, o.addr.Addr().String()),
 		Subject:      subject,
 		Layer:        domain.LayerTCP,
 		Step:         StepConnect,

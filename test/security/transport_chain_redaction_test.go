@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
 	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 )
@@ -167,6 +168,14 @@ func chainReport(t *testing.T) domain.Report {
 	if err != nil {
 		t.Fatalf("Freeze: %v", err)
 	}
+	return chainReportFrom(t, graph)
+}
+
+// chainReportFrom assembles a LOCAL_FULL report around an already-frozen graph,
+// so that a test can vary how the graph was produced without repeating the
+// report metadata.
+func chainReportFrom(t *testing.T, graph domain.Graph) domain.Report {
+	t.Helper()
 
 	service, err := domain.NewServiceID("example")
 	if err != nil {
@@ -313,4 +322,134 @@ func countRelationships(graph domain.Graph) (parents, blocked int) {
 		blocked += len(graph.BlockedBy(evidence.ID()))
 	}
 	return parents, blocked
+}
+
+// --- sweep scope ------------------------------------------------------------
+
+// A sweep scope is caller-chosen execution context, and a caller could put
+// anything in it — an internal cluster name, a ticket reference, a hostname. It
+// becomes part of an evidence identifier, so the question is whether the
+// existing wholesale identifier remapping is enough to remove it.
+//
+// It is, and that is the point: no new redaction rule is needed, because a scope
+// never reaches a subject or an attribute. These tests prove both halves.
+
+// chainCanaryScope is deliberately shaped like infrastructure identity.
+const chainCanaryScope = "topology-sweep-of-chain-canary.prod.internal"
+
+// scopedChainReport runs the same chain twice — once unscoped, once scoped —
+// which is the situation this whole phase exists to make representable.
+func scopedChainReport(t *testing.T) domain.Report {
+	t.Helper()
+
+	peerAddr, pool := chainTLSPeer(t)
+	builder := domain.NewGraphBuilder()
+
+	bootstrap, err := transport.Run(context.Background(), builder, transport.Params{
+		Host:     chainCanaryHost,
+		Port:     9093,
+		Resolver: chainResolver{},
+		Dialer:   chainDialer{target: peerAddr},
+		TLS:      &transport.TLSOptions{RootCAs: pool},
+	})
+	if err != nil {
+		t.Fatalf("bootstrap sweep: %v", err)
+	}
+	t.Cleanup(func() { _ = bootstrap.Close() })
+
+	sweep, err := probe.NewSweepScope(chainCanaryScope)
+	if err != nil {
+		t.Fatalf("NewSweepScope: %v", err)
+	}
+
+	topology, err := transport.Run(context.Background(), builder, transport.Params{
+		Host:     chainCanaryHost,
+		Port:     9093,
+		Resolver: chainResolver{},
+		Dialer:   chainDialer{target: peerAddr},
+		TLS:      &transport.TLSOptions{RootCAs: pool},
+		Scope:    sweep,
+		Parent:   domain.EvidenceID("dns.lookup/" + chainCanaryHost),
+	})
+	if err != nil {
+		t.Fatalf("topology sweep: %v", err)
+	}
+	t.Cleanup(func() { _ = topology.Close() })
+
+	graph, err := builder.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	return chainReportFrom(t, graph)
+}
+
+// TestLocalScopedReportContainsTheScope is the precondition: the value redaction
+// must remove has to be present first.
+func TestLocalScopedReportContainsTheScope(t *testing.T) {
+	encoded := canonicalJSON(t, scopedChainReport(t))
+
+	if !strings.Contains(encoded, chainCanaryScope) {
+		t.Fatal("the local report does not contain the scope, so the leak test proves nothing")
+	}
+}
+
+// TestShareableReportRemovesTheSweepScope: identifier remapping is wholesale, so
+// a scope embedded in an identifier goes with it.
+func TestShareableReportRemovesTheSweepScope(t *testing.T) {
+	shareable, err := redaction.Redact(scopedChainReport(t))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+	encoded := canonicalJSON(t, shareable)
+
+	if strings.Contains(encoded, chainCanaryScope) {
+		t.Errorf("the shareable report leaks the sweep scope:\n%s", encoded)
+	}
+	// The hostname inside the scope must not survive as a fragment either.
+	if strings.Contains(encoded, chainCanaryHost) {
+		t.Errorf("the shareable report leaks the hostname:\n%s", encoded)
+	}
+}
+
+// TestScopeNeverEntersSubjectOrAttributes proves the containment that makes the
+// test above sufficient. If a scope could reach a subject or an attribute,
+// identifier remapping alone would not remove it and a new redaction rule would
+// be needed.
+func TestScopeNeverEntersSubjectOrAttributes(t *testing.T) {
+	report := scopedChainReport(t)
+
+	for _, evidence := range report.Graph().Nodes() {
+		if strings.Contains(evidence.Subject().Ref(), chainCanaryScope) {
+			t.Errorf("%s: the scope reached the subject", evidence.ID())
+		}
+		encoded, err := evidence.MarshalJSON()
+		if err != nil {
+			t.Fatalf("MarshalJSON: %v", err)
+		}
+		// The scope may appear in the identifier and nowhere else, so strip the
+		// identifier before searching the rest of the node.
+		withoutID := strings.ReplaceAll(string(encoded), evidence.ID().String(), "")
+		if strings.Contains(withoutID, chainCanaryScope) {
+			t.Errorf("%s: the scope appears outside the identifier:\n%s", evidence.ID(), encoded)
+		}
+	}
+}
+
+// TestBothSweepsSurviveRedactionAsDistinctNodes: the point of a scope is that
+// two measurements stay two measurements, and redaction must not merge them.
+func TestBothSweepsSurviveRedactionAsDistinctNodes(t *testing.T) {
+	shareable, err := redaction.Redact(scopedChainReport(t))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+
+	lookups := 0
+	for _, evidence := range shareable.Graph().Nodes() {
+		if evidence.Layer() == domain.LayerDNS {
+			lookups++
+		}
+	}
+	if lookups != 2 {
+		t.Errorf("dns nodes after redaction = %d, want 2 distinct measurements", lookups)
+	}
 }

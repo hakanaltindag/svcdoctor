@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 )
 
 // These two tests use a loopback listener this test creates and controls. That
@@ -53,7 +55,7 @@ func TestSystemDialerConnectsToALoopbackListener(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	r, err := Connect(ctx, SystemDialer{}, "loopback.test:0", addr)
+	r, err := Connect(ctx, SystemDialer{}, "loopback.test:0", addr, probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -104,7 +106,7 @@ func TestSystemDialerClassifiesARealRefusal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	r, err := Connect(ctx, SystemDialer{}, "loopback.test:0", addr)
+	r, err := Connect(ctx, SystemDialer{}, "loopback.test:0", addr, probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

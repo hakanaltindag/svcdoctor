@@ -112,6 +112,14 @@ Three cases remain open, and each belongs to the phase that produces it:
 - **Topology.** One endpoint discovered twice by different paths may be two facts.
   That is the `Origin` question, deferred by ADR 0013 until topology orchestration
   exists.
+
+  > **Resolved in Phase 3.3b (ADR 0032), and it turned out not to be the `Origin`
+  > question after all.** What a second measurement needed was a way to say
+  > *which execution* produced it — a `SweepScope`, added as an optional
+  > identifier component after the step. `Origin`, which asks how a subject
+  > entered the run, remains deferred and is a different question (ADR 0031 §6).
+  > The prediction below held exactly: the duplicate rejection is what surfaced
+  > it.
 - **Server names.** Phase 2.3 added a layer whose attempt depends on a third
   input: two TLS handshakes to one address under different server names are two
   facts, and today they would collide. No caller does it — the chain performs one

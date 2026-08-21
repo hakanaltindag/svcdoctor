@@ -52,7 +52,9 @@ var ErrInvalidInput = errors.New("invalid dns probe input")
 // The context is honoured by the resolver and is also what distinguishes a local
 // budget expiry from a remote failure. Cancelling it does not discard the
 // measurement; it changes what the evidence is allowed to claim.
-func Lookup(ctx context.Context, r Resolver, host string) (domain.Evidence, error) {
+func Lookup(
+	ctx context.Context, r Resolver, host string, scope probe.SweepScope,
+) (domain.Evidence, error) {
 	if ctx == nil {
 		return domain.Evidence{}, fmt.Errorf("%w: context must not be nil", ErrInvalidInput)
 	}
@@ -62,7 +64,7 @@ func Lookup(ctx context.Context, r Resolver, host string) (domain.Evidence, erro
 	if err := validateHost(host); err != nil {
 		return domain.Evidence{}, err
 	}
-	return observe(ctx, r, host).evidence()
+	return observe(ctx, r, host, scope).evidence()
 }
 
 // validateHost rejects input the probe cannot turn into a meaningful query.
@@ -111,6 +113,7 @@ func validateHost(host string) error {
 // Evidence or become the arbitrary payload ADR 0010 forbids.
 type observation struct {
 	host  string
+	scope probe.SweepScope
 	addrs []netip.Addr
 
 	// err is what the resolver returned, and ctxErr is what the caller's context
@@ -134,13 +137,16 @@ type observation struct {
 // unaffected by wall-clock adjustment during the lookup. domain.Evidence
 // normalizes the start instant to UTC and drops the monotonic part, which is
 // meaningless once serialized.
-func observe(ctx context.Context, r Resolver, host string) observation {
+func observe(
+	ctx context.Context, r Resolver, host string, scope probe.SweepScope,
+) observation {
 	startedAt := time.Now()
 	addrs, err := r.LookupAddresses(ctx, host)
 	duration := time.Since(startedAt)
 
 	return observation{
 		host:      host,
+		scope:     scope,
 		addrs:     addrs,
 		err:       err,
 		ctxErr:    ctx.Err(),
@@ -171,7 +177,7 @@ func (o observation) evidence() (domain.Evidence, error) {
 	}
 
 	return domain.NewEvidence(domain.EvidenceInput{
-		ID:           evidenceID(o.host),
+		ID:           evidenceID(o.host, o.scope),
 		Subject:      subject,
 		Layer:        domain.LayerDNS,
 		Step:         StepLookup,
@@ -289,6 +295,11 @@ func classifyResolverError(err error) domain.FailureClass {
 // component. The encoding, including what happens to a name containing the
 // separator, belongs to internal/probe so that every probe agrees on it.
 // See ADR 0019.
-func evidenceID(host string) domain.EvidenceID {
-	return probe.EvidenceID(StepLookup, host)
+//
+// The scope distinguishes two sweeps that queried the same name, and nothing
+// else: it is not part of what was looked up, and it never reaches the subject.
+// A zero scope reproduces the identifier this probe has minted since Phase 2.
+// See ADR 0032.
+func evidenceID(host string, scope probe.SweepScope) domain.EvidenceID {
+	return probe.ScopedEvidenceID(scope, StepLookup, host)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
 	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 )
@@ -61,7 +62,7 @@ func tcpReport(t *testing.T) domain.Report {
 	for _, address := range []string{tcpCanaryIPv4, tcpCanaryIPv6} {
 		addr := netip.AddrPortFrom(netip.MustParseAddr(address), 9092)
 
-		result, err := tcp.Connect(context.Background(), stubDialer{err: errRefused}, endpoint, addr)
+		result, err := tcp.Connect(context.Background(), stubDialer{err: errRefused}, endpoint, addr, probe.SweepScope{})
 		if err != nil {
 			t.Fatalf("tcp.Connect: %v", err)
 		}
@@ -146,7 +147,7 @@ func TestEndpointInsideAnIdentifierIsRemoved(t *testing.T) {
 	endpoint := tcpCanaryEndpointHost + ":9092"
 	addr := netip.AddrPortFrom(netip.MustParseAddr(tcpCanaryIPv4), 9092)
 
-	result, err := tcp.Connect(context.Background(), stubDialer{err: errRefused}, endpoint, addr)
+	result, err := tcp.Connect(context.Background(), stubDialer{err: errRefused}, endpoint, addr, probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("tcp.Connect: %v", err)
 	}

@@ -43,6 +43,7 @@ does not overturn it, and both remain authoritative.
 | 0029 | A connection carries what it proved, and a fail-closed policy reads it | Accepted | Implements 0028 §6. Sends no credential; changes no report schema |
 | 0030 | PLAIN authentication, and the ordering that governs every credential byte | Accepted | Implements 0028 over 0029's mechanisms, inside 0027's boundary. **The first phase that transmits a credential.** Supplies the blocker carrier 0028 §3 assumed |
 | 0031 | Metadata discovers a topology, records it, and probes none of it | Accepted | First topology discovery. Answers the `Origin` reopen condition of 0013 and the topology-uniqueness case of 0019 |
+| 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4 |
 
 ## Decisions that govern work not yet written
 
@@ -98,6 +99,13 @@ A deferral is a decision too, and each names the condition that should reopen it
   that would record it, under one shared condition: a layer that can carry an
   explicit per-run decision. Neither is useful without the other, so they arrive
   together or not at all.
+- **0032** closes the *Topology* case ADR 0019 listed as unsolved, in the layer
+  that owns identifiers rather than in an adapter. It leaves 0019's other two
+  open cases untouched — retries still have no owner, and no caller performs two
+  TLS handshakes to one address under different server names — and it
+  deliberately does not answer the many-causes→one-execution question, keeping
+  its derivation parent singular so that a future phase decides that on its
+  merits.
 - **0031** answers 0019's topology-uniqueness case — one broker seen by two
   responses is two observations, never one merged claim — and **leaves `Origin`
   deferred** after examining it against a real implementation. The distinction it

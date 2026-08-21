@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
 	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 )
@@ -52,7 +53,7 @@ func localReport(t *testing.T) domain.Report {
 			netip.MustParseAddr(canaryIPv4),
 			netip.MustParseAddr(canaryIPv6),
 		}},
-		canaryHost,
+		canaryHost, probe.SweepScope{},
 	)
 	if err != nil {
 		t.Fatalf("dns.Lookup: %v", err)

@@ -57,8 +57,64 @@ const Separator = "/"
 // The caller validates its own components. This function has no opinion about
 // what a hostname or an endpoint looks like.
 func EvidenceID(step domain.Step, components ...string) domain.EvidenceID {
+	return ScopedEvidenceID(SweepScope{}, step, components...)
+}
+
+// ScopedEvidenceID builds the identifier of one evidence node produced by a
+// named sweep.
+//
+//	ScopedEvidenceID(scope, "dns.lookup", "primary.internal")
+//	    -> "dns.lookup/<scope>/primary.internal"
+//
+// The scope sits between the step and the components, which is the position the
+// ordering rule above already dictates: components run from the widest scope to
+// the narrowest, and a sweep is wider than any endpoint inside it. The step
+// stays first, so an identifier still says what its node is at a glance.
+//
+// # An unscoped call is byte-identical to EvidenceID
+//
+// A zero SweepScope contributes no component at all — not an empty one. That is
+// what lets every existing producer keep the identifiers it has minted since
+// Phase 2, and it is why this function can be the single implementation of both.
+//
+// # Injectivity, and the precondition it rests on
+//
+// Adding an optional component to a delimited encoding is where a scheme usually
+// stops being injective, so the guarantee is stated precisely rather than
+// generously.
+//
+// **Two scoped identifiers collide only when their scope and every component
+// match**, which is exactly when they describe the same measurement of the same
+// subject by the same sweep. Escaping is what makes that hold: a separator in
+// the output is never a separator inside a component.
+//
+// **A scoped and an unscoped identifier are distinguished by arity, not by
+// escaping.** They are not universally distinct, and the counter-example is
+// short:
+//
+//	EvidenceID("dns.lookup", "a", "b")                  -> dns.lookup/a/b
+//	ScopedEvidenceID(scope "a", "dns.lookup", "b")      -> dns.lookup/a/b
+//
+// What keeps the scheme injective in this repository is that **a step mints a
+// fixed number of components**: dns.lookup always one, tcp.connect and
+// tls.handshake always two, and so on. A scoped identifier for a given step
+// therefore always carries exactly one component more than its unscoped form,
+// and the two can never be confused. TestStepArityIsFixed pins that precondition.
+//
+// A producer that varied its component count per call would break this, and
+// would need to re-derive the argument before doing so. That is a real
+// constraint on future producers, recorded here rather than discovered later.
+//
+// See ADR 0019 and ADR 0032.
+func ScopedEvidenceID(
+	scope SweepScope, step domain.Step, components ...string,
+) domain.EvidenceID {
 	var b strings.Builder
 	b.WriteString(escape(step.String()))
+	if !scope.IsZero() {
+		b.WriteString(Separator)
+		b.WriteString(escape(scope.String()))
+	}
 	for _, component := range components {
 		b.WriteString(Separator)
 		b.WriteString(escape(component))

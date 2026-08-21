@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 )
 
 // fakeResolver is the whole reason Resolver exists. Every test here is hermetic:
@@ -44,7 +46,7 @@ func addrs(t *testing.T, values ...string) []netip.Addr {
 
 func lookup(t *testing.T, r Resolver, host string) domain.Evidence {
 	t.Helper()
-	e, err := Lookup(context.Background(), r, host)
+	e, err := Lookup(context.Background(), r, host, probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Lookup(%q): unexpected error: %v", host, err)
 	}
@@ -324,7 +326,7 @@ func TestCallerDeadlineIsNotARemoteFailure(t *testing.T) {
 	defer cancel()
 
 	r := &fakeResolver{err: &net.DNSError{Err: "i/o timeout", Name: "slow.internal", IsTimeout: true}}
-	e, err := Lookup(ctx, r, "slow.internal")
+	e, err := Lookup(ctx, r, "slow.internal", probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Lookup: unexpected error: %v", err)
 	}
@@ -354,7 +356,7 @@ func TestCancellationIsNotARemoteFailure(t *testing.T) {
 	cancel()
 
 	r := &fakeResolver{err: &net.DNSError{Err: "operation was canceled", Name: "host.internal"}}
-	e, err := Lookup(ctx, r, "host.internal")
+	e, err := Lookup(ctx, r, "host.internal", probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Lookup: unexpected error: %v", err)
 	}
@@ -386,7 +388,7 @@ func TestCompletedLookupSurvivesLaterContextExpiry(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	e, err := Lookup(ctx, &fakeResolver{addrs: addrs(t, "10.0.0.1")}, "host.internal")
+	e, err := Lookup(ctx, &fakeResolver{addrs: addrs(t, "10.0.0.1")}, "host.internal", probe.SweepScope{})
 	if err != nil {
 		t.Fatalf("Lookup: unexpected error: %v", err)
 	}
@@ -412,7 +414,7 @@ func TestLookupRejectsUnusableInput(t *testing.T) {
 
 	for name, host := range hosts {
 		t.Run(name, func(t *testing.T) {
-			e, err := Lookup(context.Background(), &fakeResolver{}, host)
+			e, err := Lookup(context.Background(), &fakeResolver{}, host, probe.SweepScope{})
 			if !errors.Is(err, ErrInvalidInput) {
 				t.Fatalf("error = %v, want ErrInvalidInput", err)
 			}
@@ -456,7 +458,7 @@ func TestIdentifierSeparatorDoesNotRestrictInput(t *testing.T) {
 }
 
 func TestLookupRejectsNilResolver(t *testing.T) {
-	e, err := Lookup(context.Background(), nil, "host.internal")
+	e, err := Lookup(context.Background(), nil, "host.internal", probe.SweepScope{})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("error = %v, want ErrInvalidInput", err)
 	}
@@ -467,7 +469,7 @@ func TestLookupRejectsNilResolver(t *testing.T) {
 
 //nolint:staticcheck // passing a nil context is exactly what this guard is for.
 func TestLookupRejectsNilContext(t *testing.T) {
-	e, err := Lookup(nil, &fakeResolver{}, "host.internal")
+	e, err := Lookup(nil, &fakeResolver{}, "host.internal", probe.SweepScope{})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("error = %v, want ErrInvalidInput", err)
 	}
@@ -478,7 +480,7 @@ func TestLookupRejectsNilContext(t *testing.T) {
 
 func TestInvalidInputDoesNotReachTheResolver(t *testing.T) {
 	r := &fakeResolver{}
-	if _, err := Lookup(context.Background(), r, ""); err == nil {
+	if _, err := Lookup(context.Background(), r, "", probe.SweepScope{}); err == nil {
 		t.Fatal("expected an error for an empty host")
 	}
 	if r.callHost {

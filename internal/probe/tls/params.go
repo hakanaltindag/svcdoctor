@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"strings"
 	"unicode"
+
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 )
 
 // Trust source values recorded on the evidence. The set is deliberately tiny:
@@ -30,6 +32,15 @@ type Params struct {
 	// "primary.internal:9092". It scopes the evidence identifier and nothing
 	// else, exactly as in the TCP probe. Required.
 	Endpoint string
+
+	// Scope distinguishes this handshake from another one that measured the same
+	// endpoint and address in the same run. Optional; the zero value reproduces
+	// the identifier this probe has minted since Phase 2.
+	//
+	// It names an execution, not a subject and not a provenance. Nothing here
+	// reads it: it becomes one component of the evidence identifier and nothing
+	// more. See ADR 0032.
+	Scope probe.SweepScope
 
 	// Address is the concrete peer the connection was established to. It becomes
 	// the evidence subject. Required.

@@ -55,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -920,6 +920,45 @@ registry, no CLI, no new dependency, no report-schema change.
 - [ ] **Two Metadata exchanges over one path collide**, and the second is rejected rather
       than merged. This is ADR 0019's retry case arriving for the first time. **Reopen when**
       a layer owns retry policy
+
+### Phase 3.3b — Generic transport sweep identity (complete)
+
+**A prerequisite, discovered by attempting Phase 3.4 and finding it structurally blocked.**
+See **ADR 0032**.
+
+Evidence identifiers are derived from what a node is about, and a DNS lookup is about a name
+alone — so `dns.lookup/<host>` allowed at most one lookup per hostname per run. A topology
+sweep of a host the bootstrap already resolved was therefore rejected by the graph. That is
+routine, not exotic: a single-listener cluster advertises its bootstrap host back.
+
+- [x] `probe.SweepScope` — an opaque, validated, caller-owned label naming one execution.
+      Zero value is unscoped
+- [x] `probe.ScopedEvidenceID` — the scope as an optional component after the step.
+      **Unscoped output is byte-identical to every identifier minted since Phase 2**
+- [x] Threaded through `dns.Lookup`, `tcp.Connect`, `tls.Params` and the chain's own
+      skipped/unattempted nodes — one sweep, one scope, no probe inventing its own
+- [x] Optional `transport.Params.Parent` recording that a sweep derives from the observation
+      that caused it. Absent leaves the DNS node a root, as before
+- [x] Scope reaches the identifier and **nothing else** — never a subject, never an attribute
+- [x] Redaction needs no new rule: wholesale identifier remapping removes it, proven with a
+      hostname-shaped canary scope
+- [x] Injectivity argument stated honestly, including the arity caveat, and pinned by a test
+
+**Deliberately not done in 3.3b:** no execution dedup, no many-causes→one-execution model,
+no `Origin`, no retry policy, no recursion, no concurrency, no Kafka code, no reachability,
+no findings, no schema change, no new dependency.
+
+**Decisions taken, with their reopen conditions:**
+
+- [x] **`GraphBuilder` allocates nothing.** A hidden counter would make identifiers depend on
+      execution order and turn an inert container into an allocator (ADR 0013). Scope is
+      caller-owned. **Reopen** never
+- [x] **The derivation parent is singular.** The graph permits several, but a slice would
+      pre-empt the many-causes→one-execution question. **Reopen when** a caller genuinely
+      deduplicates execution
+- [ ] **Scoped/unscoped identifiers are distinguished by arity, not by escaping.** Safe
+      because every step mints a fixed number of components. **Reopen when** a producer varies
+      its component count per call
 
 ### Phase 3.4 — Advertised endpoint reachability (not started)
 
