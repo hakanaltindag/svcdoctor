@@ -56,8 +56,17 @@ record it by picking one advertisement as *the* cause and silently leaving the o
 measurement attached. Truthful attribution was chosen over saving a bounded number of
 credential-free connections (ADR 0033).
 
+**The first diagnosis policy is settled, and no rule is written yet.** Phase 3.5 decided what
+svcdoctor may conclude from advertised-endpoint reachability evidence: the Kafka finding owns
+those transport failures outright so no generic finding duplicates them, an unreachable
+advertised broker is `ERROR` because severity is the impact of a finding's claim about its own
+subject, a partially reachable endpoint gets no finding because svcdoctor does not observe
+which address a client would select, and an unfinished measurement never becomes a remote
+failure. `Origin` was examined a third time and stays deferred — a rule anchored at the
+advertisement has its context by construction (ADR 0034).
+
 What is not implemented: SCRAM and every other SASL mechanism, protocol checks against
-discovered brokers, topic and partition analysis, PostgreSQL, concrete diagnosis rules,
+discovered brokers, topic and partition analysis, PostgreSQL, diagnosis rules of any kind,
 renderers and the CLI. Those directories contain no Go code.
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.

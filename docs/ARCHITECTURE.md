@@ -447,6 +447,42 @@ with the generic transport chain — DNS, TCP and TLS — and nothing else
   socket reaches the caller. Per-layer latency is preserved, and no aggregate
   replaces it.
 
+### 5.5 A service rule anchored at a service fact needs no provenance
+
+Phase 3.5 decided what may be concluded from advertised-endpoint reachability
+evidence, before any rule was written (**ADR 0034**). One idea in it generalizes
+past Kafka and belongs here rather than in a service record:
+
+> **A diagnosis rule that starts at a service fact and walks derivation edges
+> downward has its context by construction. A rule that starts at a transport
+> node and asks what that node is about does not, and cannot get it without
+> provenance.**
+
+The direction of traversal is the whole difference. A rule anchored at
+`kafka.broker_advertised` is looking at a discovered endpoint because it walked
+there from the advertisement; it never asks how any endpoint entered the run, so
+`REPORT_SCHEMA.md`'s prohibition on reading provenance out of graph shape is not
+merely obeyed but unreachable. A generic rule meeting a failed `dns.lookup` node
+has no such anchor, and the question it must ask first — *was this endpoint asked
+for, or discovered?* — is exactly `Origin`.
+
+That is why ADR 0017's severity blocker dissolves for the Kafka rule and stands
+unchanged for a generic transport rule, and why svcdoctor authorizes the first
+and declines the second. The same asymmetry will apply to PostgreSQL: a rule
+anchored at a discovered replica endpoint can state its impact; an unanchored
+transport rule still cannot.
+
+Two consequences worth keeping visible:
+
+- **Ownership is resolved by anchoring, not by suppression.** Where a service
+  rule owns a piece of evidence, no generic rule is written for it. The engine
+  does not deduplicate findings and must not learn to: suppression keyed on
+  identity no document defines is how a report starts hiding things.
+- **Severity is the impact of a finding's claim about its own subject**, never a
+  count-derived verdict about the whole target. "Two of three brokers are
+  reachable, so this is fine" is an availability model, and svcdoctor observes no
+  replication topology to justify one.
+
 ### Adapter contract sizing
 
 The registration boundary may be defined early. The adapter contract itself must stay minimal.

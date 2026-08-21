@@ -36,6 +36,14 @@ TCP_CONNECTION_REFUSED
 TLS_CERTIFICATE_EXPIRED
 ```
 
+> **These remain naming examples. No generic transport rule is authorized, and none exists.**
+> ADR 0034 gives advertised-endpoint transport failures to the Kafka rule outright, so a
+> generic rule firing on the same evidence would duplicate it. Whether generic transport
+> findings should exist *at all* is still open, and it is blocked on a fact rather than on
+> effort: it needs run intent — "is this a Kafka diagnosis or a bare endpoint check?" — which
+> `diagnosis.Rule` cannot see, because it receives only a `Graph`. The bootstrap path, the
+> other place such a rule would fire, has no owner until application orchestration exists.
+
 This is the chosen convention: **the namespace names the owner of the rule.** A rule owned by
 `internal/diagnosis/transport/` is namespaced by its transport layer; a rule owned by
 `internal/diagnosis/<service>/` is namespaced by its service.
@@ -187,3 +195,31 @@ carrying this finding must make that unmistakable.
 
 No code structures are defined here. Verification of discovered endpoints uses credential-free
 probes by default, per `docs/SECURITY.md`.
+
+### Settled by ADR 0034
+
+Phase 3.5 turned the conceptual description above into an exact policy, against the real
+Phase 3.4 evidence graph. The finding is **authorized and not yet implemented**; Phase 3.6
+implements it and invents nothing. The binding parts:
+
+| | |
+|---|---|
+| **Trigger** | For one advertisement whose endpoint is usable: the `kafka.metadata` exchange is PASS, no path of the sweep derived from that advertisement reached the sweep's terminal layer in PASS, at least one node is FAIL, and no node is UNKNOWN or skipped for budget |
+| **Terminal layer** | TLS when the sweep's TCP nodes have TLS children, TCP otherwise. The chain mints a TLS node — real or SKIPPED — under every TCP node **iff** the plan required TLS, which is pinned by `internal/probe/transport/terminallayer_test.go` |
+| **Kind** | `CONFIRMED`. `HYPOTHESIS` only for the mixed FAIL/UNKNOWN sweep, with a discriminator naming the observation that would settle it |
+| **Severity** | `ERROR` per unreachable advertised broker — impact of the finding's claim about its own subject, never a count-derived cluster verdict. The hypothesis is `WARN`, because it states a weaker claim, not because belief is weaker |
+| **Confidence** | `HIGH` for the confirmed finding; `LOW` for the hypothesis |
+| **Subject** | The advertised endpoint, taken from the advertisement node's subject. Never a resolved address, never the node identifier |
+| **Vantage** | `vantageDependent: true`, always |
+| **Evidence** | The `kafka.metadata` node, the `kafka.broker_advertised` node, and **the minimal causal set: each measured path's earliest non-PASS node**, or the DNS node alone when the lookup did not pass. That one rule handles every shape — it cannot reach a downstream `SKIPPED` node, because a skip's blocker is its parent and therefore earlier on the same path. In the authorized cases no PASS node is ever referenced. The HYPOTHESIS additionally cites its unmeasured paths, as evidence of the incompleteness it asserts rather than as causes. ADR 0034 §11 carries the exact per-case table |
+
+**No generic transport finding is produced for the same evidence.** The Kafka finding entails
+the transport observation and adds the broker identity and the contrast with a successful
+bootstrap; a generic one would add nothing the evidence node does not already state. Section 5
+below forbids the analogous noise, and ADR 0034 section 3 gives the duplicate/complementary
+test in general form.
+
+**Withheld deliberately:** no finding when any path reaches the terminal layer (a client that
+selects that path succeeds), no partial-reachability finding, no cluster-level aggregate, and
+no `KAFKA_CLUSTER_UNHEALTHY`, `KAFKA_BROKER_DOWN` or `KAFKA_NETWORK_BROKEN`. Each is recorded
+with the fact whose absence blocks it.

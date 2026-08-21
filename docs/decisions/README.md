@@ -45,6 +45,7 @@ does not overturn it, and both remain authoritative.
 | 0031 | Metadata discovers a topology, records it, and probes none of it | Accepted | First topology discovery. Answers the `Origin` reopen condition of 0013 and the topology-uniqueness case of 0019 |
 | 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4 |
 | 0033 | An advertised endpoint is measured once per advertisement, and only at L1-L3 | Accepted | The consumer 0031 was built to feed and the first caller of 0032. Answers the execution-dedup question by deliberately not deduplicating |
+| 0034 | A Kafka rule owns advertised-endpoint reachability, anchored at the advertisement | Accepted (policy) | Revisits the two questions 0017 deferred and answers them for service-anchored rules. Authorizes one finding code; implements none |
 
 ## Decisions that govern work not yet written
 
@@ -129,6 +130,18 @@ A deferral is a decision too, and each names the condition that should reopen it
   transport policy, and a node that positively records "no TLS was attempted".
   The last is the one that would give a plaintext policy refusal a truthful
   blocker; today it correctly has none.
+
+- **0034** is a policy record: it decides what may be concluded from 0033's
+  evidence and implements nothing. It closes the generic-versus-service overlap
+  **for advertised endpoints** by giving the Kafka rule exclusive ownership, and
+  it settles severity by reading it as per-subject impact under an anchor. Its
+  central move is that **ADR 0017's severity blocker dissolves for a rule
+  anchored at a service fact and still stands for an unanchored generic one** —
+  which is why it authorizes a Kafka rule and declines to authorize a generic
+  transport rule. It leaves partial multi-address reachability, cluster-level
+  aggregates, controller-aware severity and the bootstrap path's owner open, each
+  with the missing fact named. `Origin` is examined for the third time and stays
+  deferred, unchanged.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
