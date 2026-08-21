@@ -162,6 +162,30 @@ This distinction is a boundary clarification, not a new decision: it follows fro
 and from the invariant that probes collect facts. `docs/BACKLOG.md` applies it to the phase
 plan.
 
+### 3.3 The transport chain
+
+`internal/probe/transport` is the first orchestration in the repository. It runs one endpoint
+through DNS, then TCP for **every** resolved address, then TLS where the caller asked for it,
+and records the relationships the probes know nothing about (**ADR 0024**).
+
+- **Every address is attempted.** A production client stops at the first that works; a
+  diagnostic tool must not, because the untried address is the one that hides the problem.
+- **Execution is sequential**, in the canonical order the DNS probe produced, so the graph and
+  the retained connection do not depend on timing.
+- **Every completed path is handed back, and the chain chooses none.** There is no
+  transport-level reason to prefer one working path over another, and any rule the chain
+  applied would be client policy in disguise: canonical address ordering, for instance, would
+  make IPv4 the continuation whenever both families work. Choosing belongs to the layer that
+  knows which protocol it is about to speak. `Continuations()` is ordered for byte-stability,
+  not as a ranking.
+- **The graph belongs to the caller.** The chain writes into a `GraphBuilder` and never
+  freezes it, because one endpoint is not one report.
+- **No aggregate judgement.** "Two addresses worked and one did not" is the whole result;
+  what it means needs a severity policy this layer does not have.
+
+Parent edges here mean derivation — the TCP attempt exists because the lookup produced that
+address — and never provenance (ADR 0013).
+
 ## 4. Connection ownership
 
 Generic transport owns DNS, TCP, and TLS. A protocol adapter must not reimplement that logic.
@@ -499,6 +523,18 @@ Dependent layers must not generate false positives when an earlier layer fails.
 
 - DNS FAIL -> TCP/TLS/protocol/auth are SKIPPED for that endpoint and no downstream claim is made.
 - TCP FAIL -> TLS/protocol/auth are SKIPPED.
+
+**A SKIPPED node requires a subject that can be named honestly.** The rule above is about
+claims, not about manufacturing nodes: a subject names what its layer would have touched
+(ADR 0020), so a skipped node exists only when that thing is known.
+
+- TCP failed for a known address, so the TLS node exists: `SKIPPED`, classified
+  `EXEC_SKIPPED_PREREQUISITE_FAILED`, and `BlockedBy` the TCP node.
+- A lookup that produced no address leaves **no** TCP or TLS nodes, because there is no
+  address to name. Inventing one to hang a skipped node on would be a synthetic fact. The
+  failed DNS node is the record, and the summary's first broken layer is L1.
+
+See ADR 0024.
 - TLS FAIL on a TLS-required path -> protocol/auth are SKIPPED unless a safe diagnostic probe explicitly justifies otherwise.
 
 Additional claim rules:

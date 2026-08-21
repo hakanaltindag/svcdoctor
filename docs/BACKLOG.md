@@ -14,6 +14,7 @@ runtime dependencies:
 - `internal/probe/dns` — the DNS probe, the first real I/O producer (Phase 2.1)
 - `internal/probe/tcp` — the TCP probe and connection ownership (Phase 2.2)
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
+- `internal/probe/transport` — the generic transport chain (Phase 2.4)
 
 No Go code exists in any of the following, and nothing in them may be assumed implemented:
 
@@ -23,11 +24,11 @@ No Go code exists in any of the following, and nothing in them may be assumed im
 - `internal/app`
 - `cmd/svcdoctor`
 
-So all three generic transport probes exist, and nothing sequences them: there is no
-transport chain, no short-circuit execution engine, no adapters, no Kafka, no PostgreSQL, no
-topology execution, no renderers and no CLI. **The tool still cannot diagnose anything**: it
-can resolve a name, open a connection, complete a handshake and record what it saw, and
-nothing consumes that yet.
+So the generic transport engine is complete: it sweeps an endpoint end to end and produces a
+deterministic evidence graph plus one live connection. What is still absent is everything that
+would consume it — no adapters, no Kafka, no PostgreSQL, no topology execution, no diagnosis
+rules, no renderers, no CLI. **The tool still cannot diagnose anything**: it can gather
+transport evidence for one endpoint, and nothing interprets or presents it yet.
 
 `internal/diagnosis` ships the rule contract and the engine and **no concrete rules**. That
 is a deliberate deferral with a recorded reason, not missing work; see Phase 1.5 and Phase 2
@@ -46,7 +47,7 @@ stale and should be corrected against this table.
 |---|---|---|
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
-| 2 | Generic Transport Engine | **In progress** — 2.1 DNS, 2.2 TCP and 2.3 TLS complete |
+| 2 | Generic Transport Engine | **In progress** — 2.1 DNS, 2.2 TCP, 2.3 TLS and 2.4 chain complete |
 | 3 | Kafka Vertical Slice | Not started |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
@@ -343,7 +344,7 @@ Phase 2 delivers a **reusable generic transport engine**: the facts a client can
 reaching an endpoint, and a live connection the first adapter can take over in Phase 3. It
 delivers no product.
 
-Phases 2.1, 2.2 and 2.3 are complete. Everything else below is not started.
+Phases 2.1 through 2.4 are complete. Everything else below is not started.
 
 ### Phase 2.1 — Generic probe contracts and DNS (complete)
 
@@ -508,12 +509,56 @@ Questions 2.3 surfaced:
       identifier. No caller does it, so no component was added on speculation. Recorded with
       the other identifier-scoping cases in ADR 0019.
 
+### Phase 2.4 — Generic transport chain (complete)
+
+Implemented in `internal/probe/transport/`, standard library plus `internal/domain` and the
+three probe packages, **no new interface**:
+
+- [x] `Run` sweeps one endpoint: DNS, then TCP for **every** resolved address, then TLS where
+      the caller asked for it (**ADR 0024**)
+- [x] Sequential execution in the canonical address order the DNS probe produced
+- [x] Every completed path returned as a `Continuation`, with the chain choosing none of them:
+      selecting a working path is client policy that belongs to the layer which knows what
+      protocol it will speak (**ADR 0024**)
+- [x] `GraphBuilder` relationships built outside the probe packages: parent edges for
+      derivation, `BlockedBy` for a TLS step that could not run
+- [x] `SKIPPED` TLS evidence after a TCP failure, and **no synthetic nodes** when a lookup
+      produced no address
+- [x] Transport-local budget: the caller's context plus an optional per-step timeout; an
+      exhausted budget records `SKIPPED` with `EXEC_CANCELLED` / `EXEC_LOCAL_TIMEOUT`, never a
+      remote failure
+- [x] TLS optionality expressed by the presence of `Params.TLS`, never inferred from a port
+- [x] Chain `Result` owning every retained connection under the ADR 0021 rules, plus the
+      address and evidence identifier a protocol layer needs to continue from each
+- [x] Ownership regression tests over real sockets, including a proof that bytes flow over the
+      transferred connection and that a failed run leaks nothing
+- [x] `test/security/transport_chain_redaction_test.go` — the first redaction test over a graph
+      with real parent and `BlockedBy` edges
+
+**Deliberately not done in 2.4:** no adapters, no topology, no `Origin`, no diagnosis rules, no
+findings, no severity, no renderer, no CLI, no `internal/app`, no retries, no Happy Eyeballs,
+no concurrency.
+
+**Lint reassessment:** `noctx` and `gosec` stay enabled and clean. `bodyclose` was run against
+the new chain and reports nothing, because no code uses `net/http`; it stays off. Both the
+`probe-is-service-agnostic` and `diagnosis-is-pure` depguard rules were verified empirically
+against deliberate violations in the new package.
+
+**Design corrected before commit.** The first implementation retained "the first successful
+path in canonical address order". Canonical order puts every IPv4 address before every IPv6
+one, so the observable behaviour was an IPv4 preference that nobody chose and no test guarded.
+Evidence ordering and runtime connection selection were being coupled; they are now separate,
+and `TestCanonicalOrderIsNotAFamilyPreference` keeps them that way. See ADR 0024.
+
+**Contract tension found and resolved:** `docs/ARCHITECTURE.md` section 12 read as though a
+failed lookup must still produce SKIPPED TCP and TLS nodes, while ADR 0020 requires a subject
+to name what its layer touched — and after a failed lookup there is no address to name.
+Section 12 now states the rule explicitly: a skipped node exists only when its subject is
+known. See ADR 0024.
+
 ### What the rest of Phase 2 may implement
 
-- [ ] Generic transport chain, orchestrating DNS → TCP → TLS execution inside the probe
-      boundary, including address iteration order and whether to stop at the first success
-- [ ] Transport-local timeout and budget handling for the chain as a whole
-- [ ] Short-circuit execution producing `SKIPPED` evidence and `BlockedBy` relationships
+Nothing. The generic transport engine is complete; Phase 3 is the next work.
 
 **Watch this boundary.** Connection ownership transfer is the invariant most easily lost by
 accident: if a probe is written as "connect, measure, close", the adapter is forced to open

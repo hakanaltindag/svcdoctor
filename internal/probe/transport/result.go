@@ -1,0 +1,155 @@
+package transport
+
+import (
+	"net"
+	"net/netip"
+
+	"github.com/hakanaltindag/svcdoctor/internal/domain"
+)
+
+// Continuation is one transport path that completed everything the caller asked
+// for, together with the live connection it produced.
+//
+// It exists so that a caller can speak a protocol over a connection whose
+// establishment was measured. Everything about the path is already in the
+// evidence graph; this adds the resource and the identifier needed to keep
+// going.
+type Continuation struct {
+	address    netip.AddrPort
+	evidenceID domain.EvidenceID
+
+	conn   net.Conn
+	taken  bool
+	closed bool
+}
+
+// Address returns the peer this path reached.
+//
+// It is reported rather than read off the socket because a connection's remote
+// address is not always the address the evidence was recorded against — a proxy
+// or a test double may say otherwise — and the two must agree.
+func (c *Continuation) Address() netip.AddrPort { return c.address }
+
+// Evidence returns the identifier of the deepest node recorded for this path:
+// the TLS node when TLS ran, otherwise the TCP node.
+//
+// A protocol layer parents its own evidence to it, so the graph shows the
+// exchange happening over the transport that was measured.
+func (c *Continuation) Evidence() domain.EvidenceID { return c.evidenceID }
+
+// Available reports whether the connection is still here to take.
+func (c *Continuation) Available() bool {
+	return c.conn != nil && !c.taken && !c.closed
+}
+
+// TakeConn transfers ownership of this path's connection to the caller.
+//
+// It reports false when the connection has already been taken or closed. A
+// caller that receives true owns the connection and must close it; neither this
+// Continuation nor the Result will.
+func (c *Continuation) TakeConn() (net.Conn, bool) {
+	if !c.Available() {
+		return nil, false
+	}
+	c.taken = true
+	return c.conn, true
+}
+
+// Close releases this path's connection if it is still owned here.
+//
+// It is idempotent, and it does nothing after a transfer. A caller that has
+// chosen one path can close the others individually, or close the Result and
+// release them all at once.
+func (c *Continuation) Close() error {
+	if c.conn == nil || c.taken || c.closed {
+		return nil
+	}
+	c.closed = true
+	return c.conn.Close()
+}
+
+// Result is what a chain run leaves the caller holding: the connections of every
+// path that completed, and nothing else.
+//
+// It carries no graph. The chain wrote its evidence into the builder the caller
+// supplied, because one endpoint is not one report and only the caller knows
+// when a run is finished.
+//
+// # The chain chooses nothing
+//
+// Every path that completed what was asked is returned. The chain does not pick
+// one, because there is no transport-level reason to prefer one working path
+// over another, and any rule it applied would be a client policy dressed as a
+// mechanism — canonical address order, for instance, would make IPv4 the
+// continuation whenever both families work.
+//
+// Which path a protocol should speak over is a decision for the layer that knows
+// what it is about to say. See ADR 0024.
+//
+// # Ownership
+//
+//	r, err := transport.Run(ctx, builder, params)
+//	if err != nil { return err }
+//	defer r.Close()                      // releases every path not taken
+//
+//	for _, path := range r.Continuations() {
+//	    if conn, ok := path.TakeConn(); ok {
+//	        defer conn.Close()           // the caller owns this one now
+//	        break
+//	    }
+//	}
+//
+// The rules are the ones ADR 0021 fixed for the probes: a connection has exactly
+// one owner at any moment, a transfer happens at most once, and Close is safe to
+// defer unconditionally. A caller that wanted only the evidence closes the
+// Result and every connection goes with it.
+//
+// A Result is not safe for concurrent use.
+type Result struct {
+	continuations []*Continuation
+}
+
+// Continuations returns every path that completed, in the canonical address
+// order the DNS probe produced.
+//
+// **That order is evidence ordering, not a ranking.** It exists so a report is
+// byte-stable for the same facts; the first entry is not a recommendation, and a
+// caller that takes it is making its own choice rather than following one made
+// here. A caller with no preference should say so, in its own layer, where the
+// reason can be recorded.
+//
+// The returned slice is a copy, so a caller cannot reorder what the Result
+// holds, but the Continuations themselves are shared: taking a connection
+// through one of them takes it from the Result too.
+func (r *Result) Continuations() []*Continuation {
+	if len(r.continuations) == 0 {
+		return nil
+	}
+	out := make([]*Continuation, len(r.continuations))
+	copy(out, r.continuations)
+	return out
+}
+
+// Close releases every connection the Result still owns.
+//
+// It is idempotent, safe when nothing was retained, and skips any path whose
+// connection has already been taken. The first error is returned; every
+// connection is closed regardless.
+func (r *Result) Close() error {
+	var firstErr error
+	for _, continuation := range r.continuations {
+		if err := continuation.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// add records a completed path and takes ownership of its connection.
+func (r *Result) add(conn net.Conn, address netip.AddrPort, evidenceID domain.EvidenceID) {
+	r.continuations = append(r.continuations, &Continuation{
+		address:    address,
+		evidenceID: evidenceID,
+		conn:       conn,
+	})
+}
