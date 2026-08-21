@@ -55,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -74,9 +74,10 @@ condition that should reopen it.
 
 | Decision | Why deferred | Reopen when |
 |---|---|---|
-| **Transport severity policy** | Severity is impact, and whether a failed lookup or refused connection prevents correct use depends on whether the endpoint was user-supplied or discovered — that distinction is `Origin` | Phase 2 has produced real transport evidence (ADR 0017) |
+| **Transport severity policy** | Severity is impact, and whether a failed lookup or refused connection prevents correct use depends on whether the endpoint was user-supplied or discovered — that distinction is `Origin`. **Phase 3.4 now produces exactly the evidence such a rule needs and deliberately does not use it**: whether one unreachable broker out of three is WARN, ERROR or CRITICAL is Kafka semantics plus diagnosis policy (ADR 0033 §15) | Phase 2 has produced real transport evidence (ADR 0017) |
 | **`Origin` / provenance** | **Examined in Phase 3.3 and left deferred.** Discovery now exists and needed only *derivation* — which parent edges already record — not provenance. The two are distinct: when a cluster advertises the bootstrap endpoint back, one `host:port` has both a discovery-derived node and a lookup-derived transport path, so origin is not a function of the subject and cannot be read off graph shape (`REPORT_SCHEMA.md`) | An execution or topology planner has a real consumer for provenance (ADR 0031 §6) |
 | **Generic vs service finding overlap** | Nothing says how a generic `TCP_CONNECTION_REFUSED` and a service `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` avoid describing one fact twice | The first service rules are written, in Phase 3 (ADR 0017) |
+| **Execution deduplication, and a many-causes→one-execution graph shape** | Phase 3.4 runs one transport sweep per advertisement, including when two advertisements name one endpoint. A deduplicated sweep would have two causes and one effect, and the derivation parent is singular — recording it would mean picking one cause by a tiebreak and leaving the other with no measurement a finding could reference (ADR 0033 §3) | The graph gains a truthful many-causes→one-execution representation; the dedup key stays the normalized endpoint, never the node identifier |
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
 | **Service attribute-key ownership** | Where service-specific key constants live is unsettled, and `internal/domain` must not grow a registry of them | The Kafka adapter demonstrates the real boundary, in Phase 3 |
 | **Contract-package placement** for the adapter contract, the registry, the probe chain contract and CLI orchestration | Concrete structs first; interfaces only at real boundaries. A placement chosen before a real consumer is a guess | Each is forced by the implementation that needs it |
@@ -665,6 +666,17 @@ before, and that still needs a severity policy it cannot invent for itself. The 
 component in an identifier is **not** `Origin`: it is caller-supplied bookkeeping in an opaque
 string, not a claim recorded on a node. All three remain open.
 
+Phase 3.4 sharpened them again, and added a **second level of aggregation** to the same
+question. One advertisement now produces a whole scoped sweep, so a rule must say what an
+advertised endpoint being "unreachable" means when one address of two refused *and* what a
+cluster being reachable means when one advertised broker of five failed — and the two compose.
+`docs/FINDINGS.md` section 6 is ambiguous at exactly that point: "one or more discovered broker
+endpoints fail connectivity verification" does not say whether a broker fails when any address
+failed or only when all of them did, and both rules' *trigger condition* depends on the answer.
+Phase 3.4 also demonstrated concretely that the overlap question is not hypothetical: a generic
+`TCP_CONNECTION_REFUSED` rule and `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` would cite the same
+evidence identifier on the first real run. All of it remains open.
+
 ### Items that used to be listed here
 
 Recorded so the move is traceable rather than looking like a loss:
@@ -960,17 +972,68 @@ no findings, no schema change, no new dependency.
       because every step mints a fixed number of components. **Reopen when** a producer varies
       its component count per call
 
-### Phase 3.4 — Advertised endpoint reachability (not started)
+### Phase 3.4 — Advertised endpoint reachability (complete)
 
-The consumer Phase 3.3 was built to feed. It probes discovered endpoints with the generic
-transport chain, credential-free, and owns the decisions 3.3 deliberately did not take:
-execution deduplication keyed by normalized endpoint, a recursion bound if expansion is ever
-recursive, and what an unreachable advertised broker means.
+The consumer Phase 3.3 was built to feed, and the first caller of 3.3b's sweep scope. See
+**ADR 0033**.
 
-- [ ] Credential-free DNS/TCP/TLS against each discovered endpoint
-- [ ] Execution dedup keyed by the normalized endpoint, never by node identifier
-- [ ] Transport evidence parented to the advertisement node that named the endpoint
-- [ ] Explicit one-hop boundary, or an explicit bound if it is ever more
+- [x] `kafka.MeasureAdvertised` — one scoped generic DNS/TCP/TLS sweep per usable
+      advertisement, credential-free, sequential, stopping at L3
+- [x] **The transport plan is caller-supplied.** A Metadata response carries a host and a
+      port and says nothing about whether the listener is plaintext or TLS, so nothing is
+      inferred from the port, the bootstrap channel, the node identifier or convention. It
+      reuses `transport.TLSOptions` rather than duplicating a TLS model in an adapter
+- [x] Transport evidence parented to the advertisement node that named the endpoint —
+      derivation, never provenance — with no synthetic wrapper node between them
+- [x] Sweep scope = `advertised.` plus the **full** SHA-256 of the advertisement's evidence
+      identifier, used as opaque input. Deterministic, order-independent, unique by
+      inheritance from the graph's own identifier uniqueness. A 64-bit truncation was
+      implemented first and rejected on review: it made uniqueness probabilistic in a scheme
+      whose contract is *proven* injectivity (ADR 0019, ADR 0032 §3), and its collision
+      failure mode was not uniformly loud — colliding scopes on different hostnames produce
+      no identifier collision at all, so nothing fails and two unrelated measurements share
+      a label. The full digest costs 48 characters and no compute (ADR 0033 §5.1)
+- [x] Bootstrap endpoint advertised back is measured **again** under its own scope, reusing
+      no bootstrap DNS, TCP or TLS evidence
+- [x] Every connection released before the call returns, proven on both ends: the peer goes
+      idle, and each of svcdoctor's own sockets is closed exactly once
+- [x] Zero Kafka bytes to a discovered endpoint, measured on a peer that counts what arrives
+      above TLS. `reachability.go` imports neither `wire` nor `kmsg` nor `internal/security`
+- [x] Generic failure classes only, per-layer latency preserved, no aggregate verdict, no
+      finding, no severity
+
+**Deliberately not done in 3.4:** no execution dedup, no protocol request or authentication
+against a discovered broker, no credential forwarding, no recursion or depth bound, no
+`Origin`, no retry, no concurrency, no findings, no severity, no schema change, no new
+dependency, no `GraphBuilder` change.
+
+**Decisions taken, with their reopen conditions:**
+
+- [x] **Execution dedup is deliberately NOT implemented, and this reverses the expectation
+      this backlog previously recorded.** ADR 0031 §4 said that when dedup arrives it would be
+      keyed by the normalized endpoint; this phase decides it does not arrive yet. A
+      deduplicated sweep has two causes and one effect, and `transport.Params.Parent` is
+      singular (ADR 0032 §6), so recording it would mean picking one advertisement as *the*
+      cause by a tiebreak — leaving the loser with no measurement a finding could reference
+      (ADR 0014). **Redundant but truthful execution was chosen over deduplicated execution
+      because the graph has no canonical many-causes→one-execution representation.**
+      **Reopen when** it has one; the key stays the normalized endpoint, never the node
+      identifier
+- [x] **The existing `StepTimeout` is the only budget.** It already bounds every DNS, TCP and
+      TLS call, which is the one place a topology sweep can block. A per-advertisement or
+      phase-global budget would bound the same work twice with numbers that can disagree.
+      **Reopen when** a blocking case appears that `StepTimeout` does not cover
+- [x] **A cancelled run leaves unreached advertisements with no evidence at all.** Nothing was
+      measured about them, and a node claiming otherwise would report svcdoctor's budget as a
+      remote failure. **Reopen** never
+- [x] **Reachability lives in `internal/adapter/kafka`.** A `topology` subpackage would add a
+      boundary with no new responsibility, and could not deliver the isolation it appears to:
+      importing the package for `DiscoveredBroker` links `kmsg` transitively anyway. The
+      file's own import list is the honest guarantee. **Reopen when** a consumer of the
+      advertisement facts exists outside this package
+- [ ] **One transport plan applies to every advertisement in a call.** A cluster mixing
+      plaintext and TLS listeners needs two calls. **Reopen when** something can say which
+      listener is which — nothing on the wire does
 
 ### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
 
@@ -1016,18 +1079,39 @@ changes scope.
 - [x] Metadata discovery (L6) — Phase 3.3, ADR 0031
 - [x] Normalize broker endpoints — Phase 3.3, by the `security.Endpoint` rules and
       deliberately not by that type
-- [ ] Probe every advertised endpoint from the current vantage, credential-free by default
-- [ ] Endpoint deduplication and topology depth policy — orchestration, never the graph
+- [x] Measure every advertised endpoint from the current vantage, credential-free — Phase 3.4,
+      ADR 0033. Generic DNS/TCP/TLS only; no protocol request reaches a discovered broker
+- [ ] Endpoint deduplication and topology depth policy — orchestration, never the graph.
+      **Phase 3.4 deliberately did not take either**: it runs one sweep per advertisement
+      because the graph cannot yet attribute one execution to several causes, and there is no
+      traversal to bound. See ADR 0033 §3 and §9
 - [ ] Credential-forwarding wiring into topology discovery, with `deny` as the default policy
 - [ ] Answer the `Origin` / provenance question, now that topology orchestration exists
 
 ### Diagnosis rules
 
-- [ ] Answer the transport severity policy and generic/service overlap questions from the
-      evidence Phase 2 and this phase produce
-- [ ] Concrete generic transport rules under `internal/diagnosis/transport/`, unblocked by
-      that answer
-- [ ] `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` rule (`docs/FINDINGS.md` section 6)
+**The policy comes first, as its own subphase, and it decides which of the items below are
+even written.** The evidence side is now complete enough to settle it — Phase 3.4 produced the
+advertised-endpoint transport evidence the questions were waiting on — and writing any rule
+before it would answer them by implementation instead of by decision, which is the failure mode
+ADR 0017 exists to prevent.
+
+- [ ] **Phase 3.5 — Kafka advertised endpoint diagnosis policy** (decision work; no rules).
+      Settles, against the real Phase 3.4 graph: whether generic transport findings should
+      exist at all; who owns an advertised-endpoint failure, generic or Kafka; what severity
+      inputs replace `Origin`, which stays deferred; partial multi-address success; partial
+      multi-broker success; and the exact evidence-reference discipline for a finding whose
+      meaning is a *contrast* between the bootstrap half and the discovered half
+      (`docs/FINDINGS.md` section 6). **It must not resolve `Origin` as a side effect**: if the
+      policy cannot be stated without provenance, that is ADR 0013's reopen condition being met
+      deliberately, not incidentally
+- [ ] Concrete generic transport rules under `internal/diagnosis/transport/` — **only if the
+      policy above says they should exist**
+- [ ] `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` rule (`docs/FINDINGS.md` section 6), unblocked by
+      that policy. A Kafka rule can already reach its evidence by *derivation* — walking
+      `kafka.broker_advertised` to the transport nodes that derive from it — which needs no
+      `Origin` (ADR 0031 §6, ADR 0033 §6). What it still lacks is severity and the aggregation
+      rules above
 - [ ] Protocol/security mismatch rules
 - [ ] Privilege-aware skipped states
 

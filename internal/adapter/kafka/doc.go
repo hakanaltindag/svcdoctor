@@ -1,18 +1,27 @@
 // Package kafka turns Kafka protocol exchanges into normalized evidence.
 //
 // It is the first service adapter. It understands the Kafka protocol; it does
-// not understand DNS, TCP or TLS, and it never opens a connection. The transport
-// chain establishes and measures the paths, and this package speaks over the
-// exact connections that were measured (ADR 0021).
+// not understand DNS, TCP or TLS, and it never dials or performs a handshake
+// itself. The transport chain establishes and measures every path — including
+// the ones this package asks for when it measures an advertised endpoint — and
+// the protocol steps speak over the exact connections that were measured
+// (ADR 0021).
 //
 //	transport.Continuation -> ApiVersions      -> Session              -> domain.Evidence (L4)
 //	Session                -> SaslHandshake    -> HandshakeSession     -> domain.Evidence (L5)
 //	HandshakeSession       -> SaslAuthenticate -> AuthenticatedSession -> domain.Evidence (L5)
 //	AuthenticatedSession   -> Metadata         -> MetadataResult       -> domain.Evidence (L6)
+//	[]DiscoveredBroker     -> MeasureAdvertised -> MeasurementResult   -> domain.Evidence (L1-L3)
 //
-// Four steps exist: ApiVersions (Phase 3.1), SASL mechanism discovery
-// (Phase 3.2a), SASL/PLAIN authentication (Phase 3.2c) and Metadata topology
-// discovery (Phase 3.3). There is no finding and no diagnosis.
+// Five steps exist: ApiVersions (Phase 3.1), SASL mechanism discovery
+// (Phase 3.2a), SASL/PLAIN authentication (Phase 3.2c), Metadata topology
+// discovery (Phase 3.3) and advertised endpoint reachability (Phase 3.4). There
+// is no finding and no diagnosis.
+//
+// The last one is the odd one out, and deliberately so: it is the only step here
+// that speaks no Kafka. It drives the generic transport chain over endpoints the
+// cluster advertised, which is why its evidence is DNS, TCP and TLS rather than
+// anything protocol-shaped.
 //
 // # Discovery records; it probes nothing
 //
@@ -23,12 +32,32 @@
 // endpoint entered the run is a separate question the graph does not answer, and
 // `Origin` stays deferred (ADR 0031 section 6).
 //
-// Nothing advertised is resolved, dialled, or spoken to, and no credential goes
-// anywhere near it. A credential authorized for the bootstrap endpoint is not
-// authorized for a broker merely because the cluster advertised one — "same
-// cluster" is not credential authority. Reachability is a later phase that owns
-// the forwarding, deduplication and recursion decisions this one deliberately
-// does not take. See ADR 0031.
+// Nothing advertised is resolved, dialled, or spoken to by that step, and no
+// credential goes anywhere near it. A credential authorized for the bootstrap
+// endpoint is not authorized for a broker merely because the cluster advertised
+// one — "same cluster" is not credential authority. See ADR 0031.
+//
+// # Reachability measures those endpoints, and speaks no protocol to them
+//
+// MeasureAdvertised is the consumer discovery was built to feed. For each usable
+// advertisement it runs one generic DNS -> TCP -> TLS sweep whose root node
+// derives from that advertisement, and it closes every connection it opened.
+// Then it stops (ADR 0033):
+//
+//   - **The transport plan is the caller's.** A Metadata response says nothing
+//     about whether a listener is plaintext or TLS, so nothing is inferred from
+//     the port, from the bootstrap connection, or from convention.
+//   - **One advertisement, one sweep.** Two advertisements naming one endpoint
+//     are two measurements. Deduplicating them would mean choosing one of them
+//     as the cause of a single sweep by a tiebreak, leaving the other with no
+//     measurement attached to it.
+//   - **No credential can reach it.** The API has no parameter one could occupy,
+//     and this phase's file imports neither internal/security nor the wire
+//     package below.
+//   - **No protocol byte leaves.** Transport is established and released; a
+//     fixture peer counts what arrives, and the count is zero.
+//   - **It judges nothing.** Generic failure classes, per-layer latency, no
+//     aggregate verdict, no finding, no severity.
 //
 // # Two of the three steps send no credential, and the third is why that matters
 //

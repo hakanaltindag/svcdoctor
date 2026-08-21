@@ -67,11 +67,23 @@ type authPeer struct {
 	// travels on a path that produces a FAIL node.
 	reject bool
 
+	// advertised is the topology this peer describes. It is fixed before the
+	// listener starts, so nothing the serving goroutine reads is ever written
+	// afterwards.
+	advertised []kmsg.MetadataResponseBroker
+
 	received chan []byte
 }
 
-func newAuthPeer(t *testing.T, reject bool) *authPeer {
+// newAuthPeer starts the controlled peer. It describes advertisedCanaryBrokers
+// unless a caller names its own topology, which the reachability tests do so
+// that a run can contain the bootstrap host advertised back.
+func newAuthPeer(t *testing.T, reject bool, advertised ...kmsg.MetadataResponseBroker) *authPeer {
 	t.Helper()
+
+	if len(advertised) == 0 {
+		advertised = advertisedCanaryBrokers()
+	}
 
 	cert, pool := authCertificate(t, authCanaryHost)
 
@@ -88,10 +100,11 @@ func newAuthPeer(t *testing.T, reject bool) *authPeer {
 	}
 
 	peer := &authPeer{
-		addr:     addr,
-		pool:     pool,
-		reject:   reject,
-		received: make(chan []byte, 4),
+		addr:       addr,
+		pool:       pool,
+		reject:     reject,
+		advertised: advertised,
+		received:   make(chan []byte, 4),
 	}
 
 	go func() {
@@ -137,7 +150,7 @@ func (p *authPeer) serve(conn net.Conn) {
 			response := kmsg.NewPtrMetadataResponse()
 			response.SetVersion(1)
 			response.ControllerID = 11
-			response.Brokers = advertisedCanaryBrokers()
+			response.Brokers = p.advertised
 			payload = response.AppendTo(correlationBytes(request.correlationID))
 		case 36: // SaslAuthenticate
 			p.recordAuth(request.body)

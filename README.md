@@ -7,8 +7,9 @@
 **Phases 1 and 2 are complete, and Phase 3 — the Kafka vertical slice — is in progress. The
 tool is not usable yet**: it can sweep one endpoint end to end, ask every reachable broker for
 its API versions and which SASL mechanisms it offers, authenticate to one chosen broker with
-SASL/PLAIN, ask that broker to describe the cluster's brokers, and produce an evidence graph. Nothing interprets or presents that yet, because no
-diagnosis rule, renderer or CLI exists.
+SASL/PLAIN, ask that broker to describe the cluster's brokers, measure every endpoint that
+broker advertised, and produce an evidence graph. Nothing interprets or presents that yet,
+because no diagnosis rule, renderer or CLI exists.
 
 **svcdoctor now transmits credentials, under a contract written before the first byte.** A
 password is sent only over a channel whose peer identity was verified — never plaintext, never
@@ -35,19 +36,29 @@ BSD-3-Clause, no transitive dependencies):
 - `internal/probe/transport` — the generic transport chain: DNS → TCP per address → TLS (Phase 2.4)
 - `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1),
   SASL mechanism discovery (Phase 3.2a), channel propagation (Phase 3.2b), SASL/PLAIN
-  authentication (Phase 3.2c) and Metadata topology discovery (Phase 3.3)
+  authentication (Phase 3.2c), Metadata topology discovery (Phase 3.3) and advertised
+  endpoint reachability (Phase 3.4)
 - `internal/adapter/kafka/wire` — the only importer of the Kafka protocol library, and the only
   package permitted to call `security.Reveal`
 
-**Discovered endpoints are recorded, never probed, and never given a credential.** Metadata
-tells svcdoctor which brokers a cluster advertises; this phase writes each one into the
-evidence graph, parented to the exchange that carried it, and stops there. Reachability is a
-separate phase, because probing a discovered broker needs a credential-forwarding decision
-svcdoctor's default answers with "no" (ADR 0031).
+**Discovered endpoints are measured, never spoken to, and never given a credential.** Metadata
+tells svcdoctor which brokers a cluster advertises, and each advertisement becomes its own
+evidence node parented to the exchange that carried it. Reachability then measures those
+endpoints with the generic transport chain — DNS, TCP and TLS — and stops: no Kafka request
+reaches a discovered broker, no credential can, and there is no recursion to bound. The
+transport plan is supplied by the caller rather than guessed from a port or copied from the
+bootstrap connection, because a Metadata response says nothing about what a listener speaks
+(ADR 0031, ADR 0033).
 
-What is not implemented: SCRAM and every other SASL mechanism, reachability of discovered
-brokers, topic and partition analysis, PostgreSQL, concrete diagnosis rules, renderers and
-the CLI. Those directories contain no Go code.
+**Two advertisements naming one endpoint produce two measurements.** That redundancy is
+deliberate: a deduplicated sweep would have two causes and one effect, and the graph could only
+record it by picking one advertisement as *the* cause and silently leaving the other with no
+measurement attached. Truthful attribution was chosen over saving a bounded number of
+credential-free connections (ADR 0033).
+
+What is not implemented: SCRAM and every other SASL mechanism, protocol checks against
+discovered brokers, topic and partition analysis, PostgreSQL, concrete diagnosis rules,
+renderers and the CLI. Those directories contain no Go code.
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
 > It reconstructs the mental model, the locked invariants, the rejected alternatives and the

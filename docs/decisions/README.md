@@ -44,6 +44,7 @@ does not overturn it, and both remain authoritative.
 | 0030 | PLAIN authentication, and the ordering that governs every credential byte | Accepted | Implements 0028 over 0029's mechanisms, inside 0027's boundary. **The first phase that transmits a credential.** Supplies the blocker carrier 0028 §3 assumed |
 | 0031 | Metadata discovers a topology, records it, and probes none of it | Accepted | First topology discovery. Answers the `Origin` reopen condition of 0013 and the topology-uniqueness case of 0019 |
 | 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4 |
+| 0033 | An advertised endpoint is measured once per advertisement, and only at L1-L3 | Accepted | The consumer 0031 was built to feed and the first caller of 0032. Answers the execution-dedup question by deliberately not deduplicating |
 
 ## Decisions that govern work not yet written
 
@@ -115,6 +116,13 @@ A deferral is a decision too, and each names the condition that should reopen it
   from an authenticated session, which is svcdoctor's scope and not Kafka's
   protocol, and a second exchange over one path collides, which is 0019's retry
   case arriving.
+- **0033** answers one open question and re-defers three. It decides that
+  execution deduplication does **not** arrive with reachability, because the graph
+  has no truthful many-causes→one-execution representation and a deduplicated
+  sweep could only be recorded by dropping a cause; that is its own reopen
+  condition. It leaves credential forwarding, `Origin` and transport severity
+  exactly as deferred as they were, and states explicitly that producing the
+  evidence a severity rule needs does not settle what the rule should say.
 - **0030** defers nothing that blocks work, and names five conditions that would
   extend it: a multi-round-trip mechanism, a distinct authorization identity, an
   identity-bearing attribute kind for principals, a layer that can choose a

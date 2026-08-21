@@ -402,8 +402,16 @@ out a `security.Endpoint` would put forwarding one function call away from a
 caller who merely wanted somewhere to connect. Same rules, different type, no
 conversion offered.
 
-**Nothing advertised is probed in this phase.** Discovery records; reachability
-is a later phase with its own decisions about forwarding policy and recursion.
+**Discovery records; reachability measures, credential-free.** The Metadata step
+probes nothing it discovers. Phase 3.4 measures the advertised endpoints with the
+generic transport chain — DNS, TCP and TLS — which is exactly the credential-free
+initial verification the section above requires, and it stops there: no protocol
+request, no authentication, no recursion, and no parameter its API could put a
+credential into. `reachability.go` does not import `internal/security`, and the
+production `security.Reveal` call-site count is unchanged at one (**ADR 0033**).
+
+Authenticated follow-up against a discovered endpoint still requires the explicit
+policy decision this document has always demanded, and no layer takes it yet.
 
 **An advertised hostname is declared identity.** It is recorded through the
 `host` attribute kind rather than as a plain string, so redaction pseudonymizes

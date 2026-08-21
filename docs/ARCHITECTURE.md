@@ -405,6 +405,48 @@ is the first step whose result is a connection *more* usable than the one it
 consumed, which is why it produces a distinct type. The criterion throughout is
 whether the protocol defines a next message on that socket.
 
+### 5.4 A discovered endpoint is measured by generic transport, once per advertisement
+
+Phase 3.4 is the consumer section 5.3 was built to feed. It takes the
+advertisements a Metadata exchange recorded and measures their network endpoints
+with the generic transport chain — DNS, TCP and TLS — and nothing else
+(**ADR 0033**).
+
+- **It stops at L3, and the stop is the phase.** No protocol request, no
+  authentication and no second Metadata reaches a discovered broker. Nothing
+  re-enters, so there is no recursion, no depth limit to tune and no visited set:
+  the bound arrives with the traversal.
+- **The transport plan is supplied by the caller, never inferred.** A Metadata
+  response carries a host and a port and says nothing about whether that listener
+  is plaintext or TLS. The port is a convention, and the bootstrap connection
+  describes one listener on one broker — copying either would turn "this run was
+  encrypted" into "this cluster is encrypted". The plan reuses the transport
+  chain's own TLS type rather than an adapter-shaped copy, and it is execution
+  *intent*: `security.Channel` remains something only the layer that performed a
+  handshake may state.
+- **One advertisement, one sweep.** Two advertisements naming one endpoint produce
+  two measurements. That redundancy is deliberate: a deduplicated sweep would have
+  two causes and one effect, and with a singular derivation parent it could only be
+  recorded by choosing one advertisement as *the* cause — a semantic ownership
+  decision made by a tiebreak, with the loser's measurement silently unattributed.
+  **Redundant but truthful execution was chosen over deduplicated execution**, and
+  the reopen condition is a graph representation that can hold many causes for one
+  execution.
+- **Fact normalization belongs to the layer above.** Discovery decides what counts
+  as one advertisement; reachability executes once per resulting fact and adds no
+  second dedup layer.
+- **Measurement identity is not subject identity.** A bootstrap endpoint advertised
+  back is measured again under its own sweep scope, reusing no bootstrap evidence;
+  the two nodes share a subject and differ only in which execution they belong to.
+- **It judges nothing.** The evidence is generic transport evidence with generic
+  failure classes. No service-specific transport failure class, no aggregate
+  reachability verdict, no finding and no severity — this phase produces exactly
+  the data a future rule needs and deliberately does not use it.
+- **It is measurement-only, so it owns nothing afterwards.** Every connection a
+  sweep establishes is closed before the call returns; no continuation and no
+  socket reaches the caller. Per-layer latency is preserved, and no aggregate
+  replaces it.
+
 ### Adapter contract sizing
 
 The registration boundary may be defined early. The adapter contract itself must stay minimal.
