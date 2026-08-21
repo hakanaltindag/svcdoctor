@@ -57,6 +57,17 @@ evidence, that belongs in a recommendation for the operator to act on deliberate
 
 Credentials are not automatically sent over an unverified TLS channel.
 
+## Report output mode
+
+A report is produced unredacted for local use. The shareable, redacted form is a separate
+report produced by transforming a local one.
+
+Until that transformation exists, a report **cannot be labelled shareable**: the report
+constructor refuses the mode, and the redacted-field metadata is absent rather than zero.
+A report that claimed redaction it never performed would be acted on by a reader who shares
+it. Prefer an unavailable mode over an aspirational one. See `docs/REPORT_SCHEMA.md`
+section 9.
+
 ## Redaction boundary
 
 Redaction is:

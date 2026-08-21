@@ -91,8 +91,23 @@ affectedResources
 help / reference
 ```
 
-None of these are being introduced as mandatory implementation fields yet. Phase 1 decides
-which are required at the type level and which are optional.
+Phase 1.4a settled which of these are required at the type level:
+
+- **Required:** `code`, `kind`, `severity`, `confidence`, `layer`, `summary`,
+  `evidenceRefs` (at least one), and `vantageDependent` (a bool, always encoded,
+  because `false` is a statement rather than an absence).
+- **Optional:** `subject`, `detail`, `recommendations`, `discriminator`.
+- **Deferred:** `affectedResources`, and a reference link or remediation risk on a
+  recommendation. Nothing consumes them yet and no renderer exists.
+
+`layer` is supplied by the caller and never derived from `code`, so the core never holds a
+code-to-layer mapping that every new service would have to edit.
+
+A `CONFIRMED` finding must not carry a discriminator: a discriminator states what would
+settle an open question, and a confirmed finding has none. A `HYPOTHESIS` without one is
+accepted — this document says to *prefer* stating it and `docs/REPORT_SCHEMA.md` says the
+model *allows* one, so requiring it would be diagnosis policy rather than structural
+validation.
 
 ## 4. Claim discipline
 

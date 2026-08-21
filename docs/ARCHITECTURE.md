@@ -298,6 +298,39 @@ A resulting finding may be `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`, explicitly q
 being true **from the current vantage point**, and linked to the evidence that demonstrates
 both bootstrap success and discovered-endpoint failure.
 
+### 11.1 Evidence graph boundary
+
+```text
+Evidence     = one canonical normalized fact
+Graph        = the relationships between facts
+GraphBuilder = mutable construction
+Freeze       = the immutable boundary diagnosis consumes
+```
+
+> **The graph stores structure. It does not decide execution semantics.**
+
+- **Relationships are graph-owned.** Parent references live in the graph, not on
+  `Evidence`. A fact does not carry a claim about the shape of the run.
+- **Multiple parents are allowed**, which is what makes the structure a DAG. Cycles and
+  self edges are rejected.
+- **`BlockedBy` is distinct from a parent.** A parent is structure or derivation; a
+  blocked-by reference is the explicit causal explanation for why a `SKIPPED` check did
+  not run, and only `SKIPPED` evidence may carry one. The graph never infers it — the
+  orchestration layer records it.
+- **Ordering is lexical `EvidenceID` order**, never insertion order, so a report is
+  byte-stable for the same content regardless of probe concurrency.
+- **`Freeze` produces an immutable `Graph`.** Diagnosis consumes only that, never the
+  builder, which is what allows diagnosis to be a pure function.
+
+Explicitly outside the graph's responsibility: endpoint semantic equality and
+deduplication, topology recursion, visited sets, depth limits, retries, concurrency,
+scheduling, timeouts, authentication, credential forwarding, short-circuit decisions,
+and any service-specific semantics. The graph validates only its own structural
+integrity.
+
+Cycle detection and a visited set look alike and are not the same thing. Cycle detection
+is graph integrity; "do not probe this endpoint again" is execution policy. See ADR 0013.
+
 ## 12. Short-circuiting and claim discipline
 
 Dependent layers must not generate false positives when an earlier layer fails.

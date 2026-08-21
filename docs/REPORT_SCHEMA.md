@@ -64,7 +64,14 @@ Minimum concepts:
 
 The last two also appear in the `security` section, which is the authoritative place for
 report-interpretation warnings. `run` carries them as basic run facts; `security` carries
-their consequences.
+their consequences. They are stored once, in the security metadata, and written into both
+sections from that one value, so the two can never disagree.
+
+**Execution mode is deliberately not implemented.** No document defines its vocabulary, and
+the two things it could mean already have owners: where a run executed from is `vantage`
+(ADR 0012), and whether it completed fully is incompleteness, which
+`docs/ARCHITECTURE.md` section 13 assigns to the summary and the exit code. It can be added
+when a real execution mode exists that neither of those already expresses.
 
 ---
 
@@ -190,6 +197,27 @@ probe chain beneath the node that discovered it.
 A complex graph serialization format is not designed here. Parent references plus
 deterministic ordering are sufficient for v0.1.
 
+### Encoded shape (schema v1)
+
+The conceptual field list above includes `parent / parents`, which reads as though
+relationships belong on each node. ADR 0013 subsequently made relationships graph-owned
+rather than properties of a fact, and the encoding follows the architecture:
+
+```json
+"evidence": {
+  "nodes": [ { "id": "...", "layer": "L1", "state": "PASS", ... } ],
+  "relationships": [
+    { "id": "...", "parents": ["..."], "blockedBy": ["..."] }
+  ]
+}
+```
+
+Nodes carry their own fields; relationships are listed separately, in the graph's canonical
+`EvidenceID` order, and only for nodes that have any. The information content is the same
+exact identifiers plus deterministic ordering this section requires. See ADR 0016.
+
+The report owns this shape. The in-memory graph type has no standalone JSON encoding.
+
 ---
 
 ## 6. attributes
@@ -293,6 +321,11 @@ Confidence is not a probability and must not be rendered as one.
 A renderer must be able to answer "why was this finding produced?" from the report alone,
 without rerunning probes. A finding that cannot point at its evidence is not reportable.
 
+A finding carries identifiers, never embedded evidence values, and validates only that each
+identifier is well formed. The cross-object invariant — every reference resolves to a node in
+the report's evidence graph — is validated when the report is assembled, because the report is
+the first thing that owns both sets. See ADR 0014.
+
 ---
 
 ## 8. summary
@@ -311,6 +344,23 @@ half the checks were skipped is not the same as a clean report, and the summary 
 that visible.
 
 The overall status is also the basis of the exit code contract in `docs/SCOPE.md`.
+
+### Derivation (schema v1)
+
+The summary is computed by the report from its graph and findings. A caller cannot supply
+one, so it can never contradict the report that contains it. See ADR 0015.
+
+- `status` is `PROBLEMS_FOUND` when any finding is `ERROR` or `CRITICAL`, otherwise `OK`.
+  This is exactly the exit-code 0/1 boundary. **`OK` means "no ERROR or CRITICAL finding",
+  not "healthy"** — read it together with the skipped and unknown counts.
+- `firstBrokenLayer` is the lowest layer holding evidence in state `FAIL`. `UNKNOWN` and
+  `SKIPPED` are not failures, and a blocked-by reference is not one either. Omitted when
+  nothing failed.
+- `findingCountsBySeverity` counts findings; the four levels are always present.
+- `skippedEvidenceCount` and `unknownEvidenceCount` count evidence nodes.
+
+Exit codes 2, 3 and 4 stay outside the summary: they describe usage errors, internal
+failures and partial runs, none of which a report can observe about itself.
 
 ---
 
@@ -332,3 +382,15 @@ Recording the count and category of redacted fields lets a reader know that reda
 happened, and roughly what was removed, without exposing anything.
 
 See `docs/SECURITY.md`.
+
+### Implemented in schema v1
+
+`outputMode`, `tlsVerificationDisabled` and `credentialForwardingEnabled`.
+
+**Redacted-field counts and categories are absent, and `SHAREABLE_REDACTED` cannot be
+produced.** Structural redaction does not exist yet, so any count would be a fabrication —
+a zero would read as "nothing sensitive was present" rather than "nothing was examined" —
+and a report labelled shareable would assert a transformation that never ran, which a reader
+would act on by sharing it. The vocabulary is defined so the encoded shape is stable; the
+constructor refuses the mode until a redactor exists. A shareable report is produced by
+transforming a local one, which is the phase that will populate these fields honestly.
