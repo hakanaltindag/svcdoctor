@@ -1,0 +1,56 @@
+# AI / agent instructions (local-only for now)
+CLAUDE.md
+AGENTS.md
+.claude/
+.codex/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials*
+secrets*
+*.secret
+*.secrets
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors / IDEs
+.idea/
+.vscode/
+.zed/
+
+# Go build artifacts (for future implementation)
+bin/
+dist/
+build/
+coverage.out
+coverage.html
+*.test
+*.prof
+
+# Temporary files
+.tmp/
+tmp/
+temp/
+*.tmp
+*.log
+
+# Local svcdoctor output
+# Do not add docs/decisions/ here. ADRs are tracked repository artefacts.
+reports/
+artifacts/
+coverage/
+test-results/
+*.local.json
+*.local.yaml
+*.local.yml

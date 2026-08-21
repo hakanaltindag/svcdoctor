@@ -1,0 +1,51 @@
+# ADR 0011: CLI uses service-specific subcommands
+
+## Status
+
+Accepted.
+
+## Decision
+
+The primary CLI shape is a service-specific subcommand:
+
+```text
+svcdoctor kafka ...
+svcdoctor postgres ...
+```
+
+Future services follow the same shape:
+
+```text
+svcdoctor redis ...
+svcdoctor rabbitmq ...
+```
+
+Subcommands come from explicit service registration at the composition root (ADR 0009). The
+CLI does not hold a service switch.
+
+## Rejected
+
+- `svcdoctor --service kafka ...` as the primary UX.
+- Inferring the service type from port numbers.
+
+## Rationale
+
+Each service has genuinely different inputs. Kafka takes bootstrap endpoints and a security
+protocol; PostgreSQL takes a DSN or multi-host target with an sslmode. A single flat flag set
+covering every service would either become a union of unrelated flags or push service-specific
+validation into shared code.
+
+A subcommand gives each service its own flag set, its own help text, and its own validation,
+without any of that leaking into the core.
+
+Port-based inference is rejected outright. Ports are conventions, not facts. Guessing wrong
+would make svcdoctor produce a confidently mislabelled diagnosis, which is the exact failure
+mode the project's claim discipline exists to prevent.
+
+## Consequences
+
+- Adding a service adds a subcommand through the same registration point that adds its
+  adapter and rules. No separate CLI edit, no central branching.
+- Help output is generated from registered services rather than maintained by hand.
+- A `--service` style flag may still exist later as a secondary convenience, but it is not the
+  primary interface and must not become the path that shared code branches on.

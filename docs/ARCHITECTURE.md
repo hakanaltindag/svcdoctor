@@ -1,0 +1,429 @@
+# Architecture
+
+## 1. Style
+
+svcdoctor v0.x is a **modular monolith**: one process, one Go codebase, and one cgo-free binary.
+
+The architectural flow is:
+
+```text
+Input / CLI
+    |
+    v
+Application orchestration
+    |
+    +--> Generic probes ---------> Observations
+    |
+    +--> Service adapter --------> Protocol/topology observations
+                                  |
+                                  v
+                            Evidence graph
+                                  |
+                                  v
+                              Diagnosis
+                                  |
+                                  v
+                               Report
+                                  |
+              +---------+---------+---------+
+              |         |         |         |
+           Terminal   JSON    Markdown    HTML
+```
+
+The invariant is:
+
+> **Probes collect facts. Adapters understand protocols. Diagnosis correlates evidence. Renderers explain results.**
+
+A second principle governs how this architecture grows:
+
+> **Extensibility comes from stable boundaries, not from maximizing abstractions.**
+
+Concrete structs first. Interfaces only at real boundaries.
+
+## 2. Layer order
+
+The authoritative layer order is:
+
+```text
+L0  Input / config normalization
+L1  DNS
+L2  TCP
+L3  TLS
+L4  Protocol / capability discovery
+L5  Authentication / authorization
+L6  Topology discovery
+```
+
+Protocol/capability discovery precedes authentication because that is the real wire
+order of the services in scope.
+
+Kafka:
+
+```text
+DNS -> TCP -> TLS -> ApiVersions -> SASL mechanism discovery / authentication
+    -> Metadata -> topology verification
+```
+
+PostgreSQL:
+
+```text
+DNS -> TCP -> TLS / SSLRequest -> Startup / protocol negotiation
+    -> AuthenticationRequest / authentication -> multi-host / role discovery
+```
+
+Short-circuiting and first-broken-layer reporting follow this order. See ADR 0007.
+
+## 3. Probes
+
+Generic probes collect transport facts such as DNS, TCP, and TLS. They do not understand Kafka, PostgreSQL, Redis, or any other service semantics.
+
+A probe returns observations. A probe does not diagnose a problem.
+
+Examples:
+
+- DNS resolution result and latency
+- TCP connect result and latency
+- TLS handshake, chain validation, SAN validation, expiry, negotiated protocol/cipher
+
+Generic does not mean parameterless. A TLS probe may accept SNI, ALPN, protocol version
+bounds, trust source, and client certificate material, because those are generic TLS
+concepts. The caller supplies them; the probe does not know which service asked.
+
+## 4. Connection ownership
+
+Generic transport owns DNS, TCP, and TLS. A protocol adapter must not reimplement that logic.
+
+Protocol handshakes require the established connection to stay open, so:
+
+> **Generic transport must be able to transfer ownership of a successfully established live connection to the protocol adapter when required.**
+
+Guardrail: a service adapter calling `net.Dial` directly, or performing its own TLS
+handshake, is an architecture violation. If the adapter needs a live connection, the
+transport layer hands one over; the adapter does not open a second one.
+
+Opening a second connection is not only a layering violation. It also breaks measurement
+fidelity, because the protocol step would then be attributed to a connection that was
+never the one measured.
+
+## 5. Adapters
+
+Adapters understand service protocol semantics. Kafka and PostgreSQL adapters may orchestrate generic probes, perform protocol-specific handshakes, discover authentication mechanisms, normalize protocol errors, and discover topology.
+
+Adapters do not render output and should not contain human-oriented root-cause narratives.
+
+Adapters own normalization: raw protocol responses and error codes become normalized
+observations at the adapter boundary. Diagnosis never receives a raw protocol object.
+
+### Adapter contract sizing
+
+The registration boundary may be defined early. The adapter contract itself must stay minimal.
+
+- Define the registration boundary before the first service lands.
+- Keep the shared contract as small as the Kafka implementation actually requires.
+- Let the real Kafka implementation reveal what belongs in the contract.
+- Treat PostgreSQL as the second real implementation that validates any shared abstraction.
+- Do not create speculative generic interfaces for a single implementation.
+
+See ADR 0009.
+
+## 6. Diagnosis
+
+Diagnosis consumes normalized evidence only.
+
+> **Diagnosis consumes normalized evidence. Diagnosis does not perform network or protocol I/O.**
+
+Diagnosis does not:
+
+- call probes
+- call adapters
+- resolve DNS
+- open sockets
+- perform TLS handshakes
+- send protocol requests such as Kafka requests
+
+Diagnosis runs on a frozen, complete evidence set. When evidence is missing or
+inconclusive, diagnosis reports `UNKNOWN`, `SKIPPED`, or an explicit insufficient-evidence
+result. It never performs I/O to fill the gap.
+
+Cross-service correlation logic and service-specific correlation rules remain separate.
+Cross-service transport correlation lives in `internal/diagnosis/transport/`; service rules
+live in `internal/diagnosis/<service>/`. This allows service-specific knowledge without
+contaminating the shared engine.
+
+## 7. Renderers
+
+Renderers transform the canonical report model into output formats.
+
+v0.1 target outputs:
+
+- Terminal
+- JSON
+- Markdown
+- HTML
+
+JSON is the canonical representation. Terminal, Markdown, and HTML are derived from the
+same canonical report model.
+
+Renderers do not:
+
+- diagnose
+- create findings
+- compute severity
+- discover secrets
+- interpret protocol semantics
+
+## 8. Service extensibility
+
+New services are registered explicitly at a single composition root. There is no central
+service switch.
+
+Forbidden:
+
+```text
+if kafka { ... } else if postgres { ... } else if redis { ... }
+```
+
+Accepted, and not considered sprawl:
+
+```text
+registry.Register(kafka)
+registry.Register(postgres)
+registry.Register(redis)
+```
+
+Adding a service may change that one wiring point. It must not require edits across
+unrelated adapters, probes, diagnosis rules, or renderers.
+
+Not wanted:
+
+- magic `init()` auto-registration
+- reflection-based plugin discovery
+- a generic plugin framework
+
+Desired extension shape:
+
+```text
+internal/adapter/redis/
+internal/diagnosis/redis/
+internal/adapter/redis/testdata/
+```
+
+See ADR 0009.
+
+## 9. Finding codes
+
+Finding codes carry a service namespace, for example:
+
+```text
+KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE
+POSTGRES_TLS_POLICY_MISMATCH
+REDIS_ANNOUNCED_NODE_UNREACHABLE
+```
+
+The core knows only the generic code contract. It must not hold a central enumeration of
+every service's codes. Code ownership stays in the service-specific package.
+
+A central enum listing every service is the same coupling as central service branching,
+in a different shape.
+
+## 10. Evidence boundary
+
+The chain is:
+
+```text
+raw protocol/network result -> Observation -> normalized Evidence -> Diagnosis -> Finding
+```
+
+Canonical evidence must preserve:
+
+- a stable schema
+- deterministic serialization
+- redaction safety
+- no raw protocol-library or runtime objects crossing the boundary
+
+Raw objects such as protocol-library response structs, `tls.ConnectionState`, or transport
+error values must not enter canonical evidence. Uncontrolled `map[string]any` payloads are
+also excluded, because they defeat schema stability, deterministic output, and structural
+redaction at the same time.
+
+When a service needs complex data, prefer:
+
+- a normalized scalar or list representation, or
+- separate evidence nodes
+
+Do not introduce speculative machinery around this boundary. Constructs such as
+`EvidenceProvider`, `ObservationFactory`, `EvidenceProcessor`, `ProbeResultFactory`, or
+`GenericEvidenceNormalizer` should not exist without a demonstrated need.
+
+See ADR 0010.
+
+## 11. Evidence DAG
+
+The evidence structure is not a linear pipeline. Topology discovery reveals new endpoints,
+each of which opens its own probe chain.
+
+```text
+TARGET
+  |
+  v
+DNS -> TCP -> TLS -> PROTOCOL -> AUTH -> TOPOLOGY
+                                            |
+                                            +--> broker-1 -> DNS -> TCP -> TLS -> protocol
+                                            +--> broker-2 -> DNS -> TCP -> TLS -> protocol
+                                            +--> broker-3 -> DNS -> TCP -> TLS -> protocol
+```
+
+Each node carries one of:
+
+```text
+PASS | FAIL | DEGRADED | UNKNOWN | SKIPPED
+```
+
+Kafka example:
+
+```text
+bootstrap.kafka:9092
+  -> DNS PASS
+  -> TCP PASS
+  -> TLS PASS
+  -> ApiVersions PASS
+  -> Metadata PASS
+       |
+       +-> broker-1:9092 -> DNS PASS -> TCP PASS -> TLS PASS
+       +-> broker-2:9092 -> DNS FAIL
+       +-> broker-3:9092 -> DNS PASS -> TCP FAIL
+```
+
+A resulting finding may be `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`, explicitly qualified as
+being true **from the current vantage point**, and linked to the evidence that demonstrates
+both bootstrap success and discovered-endpoint failure.
+
+## 12. Short-circuiting and claim discipline
+
+Dependent layers must not generate false positives when an earlier layer fails.
+
+- DNS FAIL -> TCP/TLS/protocol/auth are SKIPPED for that endpoint and no downstream claim is made.
+- TCP FAIL -> TLS/protocol/auth are SKIPPED.
+- TLS FAIL on a TLS-required path -> protocol/auth are SKIPPED unless a safe diagnostic probe explicitly justifies otherwise.
+
+Additional claim rules:
+
+- An unsupported capability is not a FAIL. svcdoctor not supporting a mechanism is a gap in
+  svcdoctor, not a defect in the target. Use `UNKNOWN`.
+- Missing privilege is not healthy and not a FAIL. Use `SKIPPED` and record the privilege required.
+- A local timeout is not a remote failure. Distinguish an exceeded local budget from an
+  observed remote timeout; the former means nothing was learned about the target.
+- Unknown version blocks version-dependent claims.
+
+Short-circuiting is part of correctness, not merely an optimization.
+
+## 13. Execution budget, cancellation, and concurrency
+
+These are architectural semantics. Exact timeout values and worker counts are implementation
+decisions and are not fixed here.
+
+- Every run has a local execution budget.
+- Individual probes may have narrower timeouts than the run budget.
+- A local deadline expiring is **not** proof that the remote target failed. An exhausted local
+  budget means nothing was learned about that step; it is `UNKNOWN`, not `FAIL`.
+- Cancellation preserves already collected evidence. Evidence gathered before cancellation
+  remains valid and is reported.
+- A partial run may still produce a report. Incompleteness is surfaced in the summary and in
+  the exit code (see `docs/SCOPE.md`).
+- Concurrency may be used later to probe independent endpoints in parallel.
+- Output ordering must remain deterministic regardless of execution concurrency. Concurrent
+  execution is an implementation detail; the canonical report is ordered canonically.
+
+The last two points together are the constraint that matters: parallelism may change how fast
+a run completes, never what the report says or in what order it says it.
+
+## 14. Dependency direction
+
+Preferred direction:
+
+```text
+cmd -> app -> adapter/probe -> domain
+             diagnosis -----> domain
+             render --------> domain
+             platform ------> domain
+             security ------> shared safe primitives
+```
+
+Forbidden dependencies include:
+
+- probe -> adapter
+- probe -> diagnosis
+- adapter -> render
+- diagnosis -> probe
+- diagnosis -> adapter/network client
+- render -> adapter/probe/diagnosis execution
+- platform -> adapter/probe/diagnosis
+
+## 15. Platform boundary and vantage
+
+`internal/platform/` provides environment context, not diagnosis.
+
+Platform collectors and context providers:
+
+- collect facts and context
+- do not produce diagnosis
+- do not contain adapter logic
+- do not contain protocol semantics
+
+The application/orchestration layer collects platform context when required. Diagnosis
+consumes only normalized platform evidence/context, exactly as it consumes any other
+evidence, and performs no platform I/O itself.
+
+Kubernetes integration stays Phase 4 work. No Kubernetes client library selection is made
+at this stage.
+
+### Vantage
+
+A **vantage** identifies where probes were executed from, and it is a first-class concept
+rather than run metadata. Vantage collection belongs to this platform/orchestration boundary.
+
+For v0.1 local execution the vantage must at minimum distinguish the local host. Kubernetes
+and remote execution contexts are future extensions and are deliberately under-specified.
+
+> A connectivity finding is only valid from the recorded vantage point, unless the evidence
+> explicitly proves otherwise.
+
+Every topology and connectivity finding retains its vantage context. See ADR 0012 and
+`docs/REPORT_SCHEMA.md`.
+
+## 16. Rules
+
+v0.1 uses typed Go rules. Do not add an external DSL. Rules must be deterministic and unit-testable. Expr/CEL may be considered later only for validated user-defined predicate requirements.
+
+## 17. Test data convention
+
+- Unit and package-level fixtures live in a package-adjacent `testdata/` directory,
+  for example `internal/adapter/kafka/testdata/` and `internal/diagnosis/kafka/testdata/`.
+- Cross-package and environment-dependent tests live under `test/integration/` and `test/security/`.
+
+## 18. Open implementation decisions
+
+These are deliberately left open. Implementation should reveal the minimum natural boundary
+rather than a boundary chosen in advance.
+
+**Attribute-key ownership.** Adapters and diagnosis rules for the same service will need a
+shared normalized attribute vocabulary. Where those key definitions live is not decided. Any
+chosen location must not create a forbidden dependency direction (section 14). Kafka
+demonstrates the real boundary first; PostgreSQL later validates whether the pattern is stable.
+
+**Contract-package placement.** Final package ownership for the Adapter contract, the
+registry, the probe chain contract, the diagnosis `Rule` contract, and CLI orchestration is
+not decided beyond the architecture principles already locked. Concrete structs first;
+interfaces only at real boundaries.
+
+## 19. MCP and other frontends
+
+MCP is not part of the core. Once the canonical JSON schema and reusable application service are stable, MCP can become another frontend/adapter:
+
+```text
+             +-> CLI
+Diag engine -+-> MCP (later)
+             +-> API (later, only if justified)
+```
+
+Do not couple core domain types to MCP types today.
