@@ -116,14 +116,21 @@ linters:
             - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
               desc: probes produce observations; they must not diagnose
 
-        # Adapters own protocol semantics; they never render.
+        # Adapters own protocol semantics; they produce evidence and nothing else.
         # docs/ARCHITECTURE.md section 5.
+        #
+        # The diagnosis deny became expressible in Phase 3.1, when the first
+        # adapter package arrived. An adapter that could import diagnosis could
+        # reach a conclusion about the service it just measured, which is the
+        # separation ADR 0002 exists to keep.
         adapter-does-not-render:
           files:
             - "**/internal/adapter/**"
           deny:
             - pkg: github.com/hakanaltindag/svcdoctor/internal/render
               desc: adapters must not render output
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
+              desc: adapters produce evidence; interpreting it is diagnosis work
 
         # Renderers explain an existing report and discover nothing.
         # docs/ARCHITECTURE.md section 7.

@@ -76,6 +76,19 @@ evidence, that belongs in a recommendation for the operator to act on deliberate
 
 Credentials are not automatically sent over an unverified TLS channel.
 
+## Protocol wire boundaries
+
+A service adapter's wire package is where credentials will eventually be written to
+a socket. `internal/adapter/kafka/wire` is built for that before it needs to be:
+it is the only package that touches the protocol library, it holds no state
+between exchanges, and everything it returns upward is plain values that a report
+can carry.
+
+Phase 3.1 sends no credentials — ApiVersions is unauthenticated — but the boundary
+already keeps three things out of evidence: raw protocol objects, buffers, and the
+socket's own error text. When SASL arrives, secret handling stays inside that one
+package rather than spreading through the adapter.
+
 ## Report output mode
 
 A report is produced unredacted for local use. The shareable, redacted form is a separate

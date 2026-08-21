@@ -162,7 +162,7 @@ func sweepAddress(
 
 	if params.TLS == nil {
 		conn, _ := connection.TakeConn()
-		result.add(conn, addr, tcpEvidence.ID())
+		result.add(conn, params.endpoint(), addr, tcpEvidence.ID())
 		return nil
 	}
 
@@ -205,7 +205,7 @@ func handshake(
 	}
 
 	wrapped, _ := session.TakeConn()
-	result.add(wrapped, addr, tlsEvidence.ID())
+	result.add(wrapped, params.endpoint(), addr, tlsEvidence.ID())
 	return nil
 }
 

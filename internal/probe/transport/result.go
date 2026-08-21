@@ -15,6 +15,7 @@ import (
 // evidence graph; this adds the resource and the identifier needed to keep
 // going.
 type Continuation struct {
+	endpoint   string
 	address    netip.AddrPort
 	evidenceID domain.EvidenceID
 
@@ -22,6 +23,15 @@ type Continuation struct {
 	taken  bool
 	closed bool
 }
+
+// Endpoint returns the logical label this path belongs to, such as
+// "primary.internal:9092".
+//
+// A later layer needs it to scope its own evidence identifiers to the same
+// endpoint the transport nodes used. It is reported here rather than passed
+// again by the caller, so the two can never disagree and produce one run with
+// two identifier scopes for one endpoint.
+func (c *Continuation) Endpoint() string { return c.endpoint }
 
 // Address returns the peer this path reached.
 //
@@ -146,8 +156,11 @@ func (r *Result) Close() error {
 }
 
 // add records a completed path and takes ownership of its connection.
-func (r *Result) add(conn net.Conn, address netip.AddrPort, evidenceID domain.EvidenceID) {
+func (r *Result) add(
+	conn net.Conn, endpoint string, address netip.AddrPort, evidenceID domain.EvidenceID,
+) {
 	r.continuations = append(r.continuations, &Continuation{
+		endpoint:   endpoint,
 		address:    address,
 		evidenceID: evidenceID,
 		conn:       conn,

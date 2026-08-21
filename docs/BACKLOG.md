@@ -2,8 +2,9 @@
 
 ## Repository state
 
-Repository and tooling bootstrap exists. The following packages are implemented, with zero
-runtime dependencies:
+Repository and tooling bootstrap exists. The following packages are implemented. The project
+has exactly one runtime dependency, added in Phase 3.1: `github.com/twmb/franz-go/pkg/kmsg`
+(BSD-3-Clause, no transitive dependencies).
 
 - `internal/domain` — domain primitives, evidence, the immutable evidence DAG, findings and
   the canonical report
@@ -15,10 +16,12 @@ runtime dependencies:
 - `internal/probe/tcp` — the TCP probe and connection ownership (Phase 2.2)
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 - `internal/probe/transport` — the generic transport chain (Phase 2.4)
+- `internal/adapter/kafka` — the Kafka adapter boundary and ApiVersions evidence (Phase 3.1)
+- `internal/adapter/kafka/wire` — the only package that imports the Kafka protocol library
 
 No Go code exists in any of the following, and nothing in them may be assumed implemented:
 
-- `internal/adapter`
+- `internal/adapter/postgres`
 - `internal/render`
 - `internal/platform`
 - `internal/app`
@@ -47,8 +50,8 @@ stale and should be corrected against this table.
 |---|---|---|
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
-| 2 | Generic Transport Engine | **In progress** — 2.1 DNS, 2.2 TCP, 2.3 TLS and 2.4 chain complete |
-| 3 | Kafka Vertical Slice | Not started |
+| 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -74,6 +77,7 @@ condition that should reopen it.
 | **Service attribute-key ownership** | Where service-specific key constants live is unsettled, and `internal/domain` must not grow a registry of them | The Kafka adapter demonstrates the real boundary, in Phase 3 |
 | **Contract-package placement** for the adapter contract, the registry, the probe chain contract and CLI orchestration | Concrete structs first; interfaces only at real boundaries. A placement chosen before a real consumer is a guess | Each is forced by the implementation that needs it |
 | **`security.Reveal` restriction** | No adapter wire package exists to confine it to, and inventing a path to point a lint rule at would be worse than waiting | Kafka wire packages exist, in Phase 3 |
+| **A `SKIPPED` protocol node for a transport path that failed** | The adapter receives completed paths only, so it cannot know an address it was never handed exists. Nothing today knows a service step was *requested* for one: the transport chain must not know Kafka, and the layer that would is the orchestration boundary Phase 3.1 did not build. The subject rule does not forbid the node — `ip:port` is known — so this is an open question, not a settled shape (ADR 0025 §9) | Phase 3 orchestration sequences transport and an adapter for one endpoint, or a rule needs to tell "L4 was never reached here" from "no L4 node here" |
 | **Execution mode** in run metadata | No vocabulary is defined, and both plausible meanings already have owners: `vantage` and the summary | A real execution mode exists that neither already expresses |
 | **`affectedResources`, recommendation reference / risk** | Listed as "recommended when relevant"; nothing consumes them and no renderer exists | A renderer or a finding catalog needs them |
 
@@ -658,7 +662,55 @@ Recorded so the move is traceable rather than looking like a loss:
 
 ---
 
-## Phase 3 — Kafka Vertical Slice: NOT STARTED
+## Phase 3 — Kafka Vertical Slice: IN PROGRESS
+
+### Phase 3.1 — Adapter boundary and ApiVersions (complete)
+
+Implemented in `internal/adapter/kafka/` and `internal/adapter/kafka/wire/`, **no new
+interface**, one runtime dependency:
+
+- [x] First service adapter, consuming transport continuations without reopening a connection
+- [x] ApiVersions over **every** transport path, one evidence node each, nothing aggregated and
+      no path chosen (**ADR 0025**)
+- [x] L4 evidence parented to the transport node whose connection carried the exchange
+- [x] franz-go coupling confined to `wire`, using `kmsg` only — never `kgo`, whose retries and
+      reconnects would break the measured-connection invariant (ADR 0008)
+- [x] Three normalized attributes: advertised ranges as a sorted `"<key>:<min>-<max>"` list,
+      the broker's error code, and the requested ApiVersions version
+- [x] Conservative protocol classification using the existing service-neutral vocabulary; **no
+      new FailureClass was needed**. One broker error code is normalized —
+      `UNSUPPORTED_VERSION` to `PROTOCOL_UNSUPPORTED_VERSION`, because the response states that
+      generic fact outright — and every other code stays `PROTOCOL_UNEXPECTED_RESPONSE` with
+      the code itself as an attribute (ADR 0025 §6)
+- [x] Sessions keep their connections open for Phase 3.2, under the ADR 0021 ownership rules
+- [x] Hermetic fake broker over loopback; no container, no cluster, no network
+- [x] Redaction contract test covering the new L2 → L4 parent edge
+- [x] `adapter must not import diagnosis` added to depguard, now that an adapter package exists,
+      and verified against a deliberate violation
+
+**Deliberately not done in 3.1:** no SASL, no Metadata, no topology, no advertised-endpoint
+verification, no diagnosis rules, no findings, no severity, no CLI, no renderer, no registry,
+no `Origin`.
+
+**Decisions taken, with their reopen conditions:**
+
+- [x] **No generic adapter interface, no registry.** One implementation, no CLI, no second
+      service: any method set would encode guesses about PostgreSQL. ADR 0009 governs how
+      registration works when wiring exists, not that it must exist first. **Reopen when** the
+      second adapter or the first composition root arrives.
+- [ ] **No `SKIPPED` protocol node for a failed transport path.** The adapter is handed
+      completed paths, so the absence is a consequence of the input contract rather than a
+      decision that the node should not exist — the subject would be nameable. Recorded with
+      its reopen condition in ADR 0025 §9 and in the open decisions table above, so the
+      current API shape does not become policy by default.
+- [ ] **Kafka attribute keys stay in the adapter.** A future rule in
+      `internal/diagnosis/kafka` will need them and cannot import an adapter, so they will move
+      to a leaf both can import — most likely `internal/service/kafka`. Not created now because
+      it would have one consumer, and a shared vocabulary invented before its second consumer
+      is a guess. Moving constants is mechanical. **Reopen when** the first Kafka diagnosis
+      rule is written.
+
+### Remaining Phase 3 work
 
 The first real adapter. It is what forces the adapter contract, the registry, service
 attribute-key ownership and the topology questions to become concrete, and it must be able to
@@ -666,13 +718,11 @@ consume Phase 2's transport engine without reimplementing any of it.
 
 ### Boundary and contract work
 
-- [ ] Add the Kafka wire dependency with a license and security review. franz-go low-level
-      protocol primitives, not high-level client behaviour, because hidden retry, failover
-      and automatic broker switching destroy the evidence topology findings depend on
-      (ADR 0008)
-- [ ] Adapter contract and explicit composition-root registration boundary. Keep the shared
-      contract as small as the Kafka implementation actually requires; PostgreSQL is the
-      second implementation that validates it. Package placement is still open (ADR 0009)
+- [x] Add the Kafka wire dependency with a license and security review — `kmsg` v1.13.1,
+      BSD-3-Clause, zero transitive dependencies (Phase 3.1, ADR 0025)
+- [ ] Adapter contract and explicit composition-root registration boundary. Phase 3.1
+      established that neither is needed yet; the reopen condition is the second adapter or the
+      first composition root (ADR 0025)
 - [ ] Target normalization for Kafka bootstrap endpoints (L0)
 - [ ] Settle service attribute-key ownership, and per-key sensitivity classification for
       redaction's known limit
@@ -683,7 +733,7 @@ consume Phase 2's transport engine without reimplementing any of it.
 
 ### Protocol and authentication
 
-- [ ] ApiVersions (L4)
+- [x] ApiVersions (L4) — Phase 3.1
 - [ ] SASL mechanism discovery (L5)
 - [ ] PLAIN
 - [ ] SCRAM-SHA-256

@@ -36,6 +36,7 @@ does not overturn it, and both remain authoritative.
 | 0022 | A producer declares which attribute values carry identity | Accepted | Closes the known limit 0018 recorded, and supersedes its per-key framing |
 | 0023 | The TLS probe consumes a connection, verifies an identity, and hands it on | Accepted | Applies 0020 and 0021 at L3; defers mTLS, ALPN and trust-material loading |
 | 0024 | The transport chain inspects every address and chooses no continuation | Accepted | First orchestration layer; applies 0013, 0019, 0020 and 0021 together |
+| 0025 | The Kafka adapter asks every transport path and keeps franz-go behind one package | Accepted | First service adapter; implements 0008. Adds the first runtime dependency |
 
 ## Decisions that govern work not yet written
 
@@ -65,6 +66,12 @@ A deferral is a decision too, and each names the condition that should reopen it
   sweeping. Selection is not merely deferred but placed: it belongs to the layer
   that knows which protocol it is about to speak, because no transport-level
   reason distinguishes one working path from another.
+- **0025** defers the generic adapter contract and the registry until a second
+  adapter or a composition root exists, defers moving the Kafka attribute keys
+  to a shared leaf until the first Kafka diagnosis rule needs them, and defers
+  whether a transport path that failed should carry a `SKIPPED` protocol node
+  until an orchestration layer knows what was requested, or a rule needs the
+  distinction.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

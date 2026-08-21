@@ -245,12 +245,46 @@ Adapters do not render output and should not contain human-oriented root-cause n
 Adapters own normalization: raw protocol responses and error codes become normalized
 observations at the adapter boundary. Diagnosis never receives a raw protocol object.
 
+### 5.1 The Kafka adapter boundary
+
+`internal/adapter/kafka` is the first adapter, and it fixes the shape the next one
+should follow (**ADR 0025**):
+
+- **It never opens a connection.** The transport chain establishes and measures the
+  paths; the adapter speaks over those exact connections and hands them on.
+- **It asks every path and chooses none.** ApiVersions describes the broker at the
+  other end of one connection, so a bootstrap name with several backends produces
+  several facts. Choosing one would hide an inconsistent broker behind a working
+  one.
+- **A completed exchange keeps its connection**, so the next protocol step
+  continues on the measured socket. A broken exchange closes it: only the adapter
+  can tell an unknown socket state from a broker that merely answered with an
+  error code.
+- **The protocol library lives in one subpackage.** `internal/adapter/kafka/wire`
+  is the only place that imports kmsg, and nothing above it sees a library type.
+- **Protocol evidence parents the transport node whose connection it used**, so a
+  reader can follow one address from L1 to L4.
+
+Service-specific error codes are attributes, never `FailureClass` values:
+`internal/domain` stays service neutral. A code is normalized into the generic
+vocabulary only when the protocol response proves that generic fact by itself —
+Kafka's `UNSUPPORTED_VERSION` is `PROTOCOL_UNSUPPORTED_VERSION`, and everything
+else stays conservative, because reading a cause out of a number is diagnosis.
+
+A transport path that failed never reaches the adapter, so it carries no
+`SKIPPED` protocol node. That follows from the input contract rather than from
+section 12, whose subject rule such a node would satisfy; the question is
+deferred with a reopen condition in ADR 0025 §9.
+
 ### Adapter contract sizing
 
 The registration boundary may be defined early. The adapter contract itself must stay minimal.
 
 - Define the registration boundary before the first service lands.
 - Keep the shared contract as small as the Kafka implementation actually requires.
+- Phase 3.1 needed **no** generic adapter interface and **no** registry: one
+  implementation, no CLI and no second service, so any method set would encode
+  guesses about PostgreSQL. See ADR 0025.
 - Let the real Kafka implementation reveal what belongs in the contract.
 - Treat PostgreSQL as the second real implementation that validates any shared abstraction.
 - Do not create speculative generic interfaces for a single implementation.

@@ -4,12 +4,13 @@
 
 ## Project status
 
-**Phase 1 — Core Foundations is complete, and Phase 2 — Generic Transport Engine is complete.
-The tool is not usable yet**: it can sweep one endpoint end to end and produce a transport
-evidence graph, and nothing interprets or presents it yet, because no adapter, diagnosis rule
-or CLI exists.
+**Phases 1 and 2 are complete, and Phase 3 — the Kafka vertical slice — has begun. The tool is
+not usable yet**: it can sweep one endpoint end to end, ask every reachable broker for its API
+versions, and produce an evidence graph. Nothing interprets or presents that yet, because no
+diagnosis rule, renderer or CLI exists.
 
-What is implemented, with zero runtime dependencies:
+What is implemented, with one runtime dependency (`github.com/twmb/franz-go/pkg/kmsg`,
+BSD-3-Clause, no transitive dependencies):
 
 - `internal/security` — masked secret and endpoint-bound credential primitives
 - `internal/security/redaction` — structural redaction into a shareable report
@@ -21,9 +22,10 @@ What is implemented, with zero runtime dependencies:
 - `internal/probe/tcp` — the TCP probe and connection ownership transfer (Phase 2.2)
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 - `internal/probe/transport` — the generic transport chain: DNS → TCP per address → TLS (Phase 2.4)
+- `internal/adapter/kafka` — the Kafka adapter boundary and ApiVersions evidence (Phase 3.1)
 
-What is not implemented: service adapters, Kafka, PostgreSQL, topology execution, concrete
-diagnosis rules, renderers and the CLI. Those directories contain no Go code.
+What is not implemented: Kafka SASL, Metadata and topology, PostgreSQL, concrete diagnosis
+rules, renderers and the CLI. Those directories contain no Go code.
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
 > It reconstructs the mental model, the locked invariants, the rejected alternatives and the
@@ -145,7 +147,8 @@ svcdoctor/
 │   │   ├── tls/                   # Generic TLS facts + handshake ownership; phase 2.3
 │   │   └── transport/             # Generic transport chain; phase 2.4
 │   ├── adapter/
-│   │   ├── kafka/                 # Kafka protocol + topology semantics; phase 3
+│   │   ├── kafka/                 # Kafka protocol semantics; phase 3
+│   │   │   └── wire/              # the only importer of the Kafka protocol library
 │   │   └── postgres/              # Reserved for phase 4
 │   ├── diagnosis/
 │   │   ├── transport/             # Cross-service transport-layer correlation
