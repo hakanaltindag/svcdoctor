@@ -383,6 +383,40 @@ same socket:
 > be authenticated over. See ADR 0030 §10.
 
 
+## Discovered endpoints
+
+Metadata is the first step that puts endpoints into a report that nobody typed.
+Three properties keep that safe, and none of them is a promise (**ADR 0031**).
+
+**A credential does not follow a discovery.** A credential authorized for
+`bootstrap.internal:9093` is not authorized for `broker-2.internal:9093` merely
+because the cluster advertised it. "Same cluster" is not credential authority,
+and `ForwardingPolicy`'s zero value still denies. The guarantee is structural:
+the discovery API has no parameter a credential could occupy, and a discovered
+broker exposes neither a credential nor a `security.Endpoint`.
+
+**A discovered endpoint is deliberately not the credential-binding type.** It is
+normalized by the same rules `security.Endpoint` uses — ASCII lowercasing, one
+trailing dot removed, IP literals canonicalized — and is a plain string. Handing
+out a `security.Endpoint` would put forwarding one function call away from a
+caller who merely wanted somewhere to connect. Same rules, different type, no
+conversion offered.
+
+**Nothing advertised is probed in this phase.** Discovery records; reachability
+is a later phase with its own decisions about forwarding policy and recursion.
+
+**An advertised hostname is declared identity.** It is recorded through the
+`host` attribute kind rather than as a plain string, so redaction pseudonymizes
+it structurally rather than by guessing (ADR 0022) — and an advertised broker
+name is exactly the internal name a shared report must not carry. What survives
+redaction is the cluster's shape: node identifiers, the controller relationship,
+the counts, and the parent edges. What does not is every name and address.
+
+**No cluster identifier can appear in any report.** svcdoctor sends Metadata v1,
+where the field is not on the wire. It is structurally absent rather than
+received and filtered, which is a stronger property than a filter and one no
+future edit can weaken.
+
 ## Report output mode
 
 A report is produced unredacted for local use. The shareable, redacted form is a separate

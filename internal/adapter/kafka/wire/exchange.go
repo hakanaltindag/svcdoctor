@@ -40,6 +40,7 @@ const (
 	correlationAPIVersions      uint32 = 1
 	correlationSASLHandshake    uint32 = 2
 	correlationSASLAuthenticate uint32 = 3
+	correlationMetadata         uint32 = 4
 )
 
 // Sentinel errors describing what was observed on the wire.

@@ -42,6 +42,7 @@ does not overturn it, and both remain authoritative.
 | 0028 | Credentialed authentication is singular, policy-gated and channel-aware | Accepted | Answers 0026 §7.1 and §7.3, narrows §7.2. Decides work not yet written |
 | 0029 | A connection carries what it proved, and a fail-closed policy reads it | Accepted | Implements 0028 §6. Sends no credential; changes no report schema |
 | 0030 | PLAIN authentication, and the ordering that governs every credential byte | Accepted | Implements 0028 over 0029's mechanisms, inside 0027's boundary. **The first phase that transmits a credential.** Supplies the blocker carrier 0028 §3 assumed |
+| 0031 | Metadata discovers a topology, records it, and probes none of it | Accepted | First topology discovery. Answers the `Origin` reopen condition of 0013 and the topology-uniqueness case of 0019 |
 
 ## Decisions that govern work not yet written
 
@@ -97,6 +98,15 @@ A deferral is a decision too, and each names the condition that should reopen it
   that would record it, under one shared condition: a layer that can carry an
   explicit per-run decision. Neither is useful without the other, so they arrive
   together or not at all.
+- **0031** answers 0019's topology-uniqueness case — one broker seen by two
+  responses is two observations, never one merged claim — and **leaves `Origin`
+  deferred** after examining it against a real implementation. The distinction it
+  draws is the one `REPORT_SCHEMA.md` insists on: a parent edge records
+  *derivation* and not *provenance*, and discovery needed only the former. It
+  records two limitations rather than solving them: Metadata is reachable only
+  from an authenticated session, which is svcdoctor's scope and not Kafka's
+  protocol, and a second exchange over one path collides, which is 0019's retry
+  case arriving.
 - **0030** defers nothing that blocks work, and names five conditions that would
   extend it: a multi-round-trip mechanism, a distinct authorization identity, an
   identity-bearing attribute kind for principals, a layer that can choose a

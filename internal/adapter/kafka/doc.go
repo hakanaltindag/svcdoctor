@@ -8,10 +8,27 @@
 //	transport.Continuation -> ApiVersions      -> Session              -> domain.Evidence (L4)
 //	Session                -> SaslHandshake    -> HandshakeSession     -> domain.Evidence (L5)
 //	HandshakeSession       -> SaslAuthenticate -> AuthenticatedSession -> domain.Evidence (L5)
+//	AuthenticatedSession   -> Metadata         -> MetadataResult       -> domain.Evidence (L6)
 //
-// Three steps exist: ApiVersions (Phase 3.1), SASL mechanism discovery
-// (Phase 3.2a) and SASL/PLAIN authentication (Phase 3.2c). There is no Metadata,
-// no topology and no finding.
+// Four steps exist: ApiVersions (Phase 3.1), SASL mechanism discovery
+// (Phase 3.2a), SASL/PLAIN authentication (Phase 3.2c) and Metadata topology
+// discovery (Phase 3.3). There is no finding and no diagnosis.
+//
+// # Discovery records; it probes nothing
+//
+// Metadata is where this package first learns of endpoints the operator never
+// named. Each advertisement becomes its own evidence node, parented to the
+// exchange that carried it, and that edge records **derivation**: which response
+// produced this fact. It is not provenance and must not be read as one — how an
+// endpoint entered the run is a separate question the graph does not answer, and
+// `Origin` stays deferred (ADR 0031 section 6).
+//
+// Nothing advertised is resolved, dialled, or spoken to, and no credential goes
+// anywhere near it. A credential authorized for the bootstrap endpoint is not
+// authorized for a broker merely because the cluster advertised one — "same
+// cluster" is not credential authority. Reachability is a later phase that owns
+// the forwarding, deduplication and recursion decisions this one deliberately
+// does not take. See ADR 0031.
 //
 // # Two of the three steps send no credential, and the third is why that matters
 //

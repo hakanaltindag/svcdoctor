@@ -133,6 +133,12 @@ func (p *authPeer) serve(conn net.Conn) {
 			response.SetVersion(1)
 			response.SupportedMechanisms = []string{"PLAIN"}
 			payload = response.AppendTo(correlationBytes(request.correlationID))
+		case 3: // Metadata
+			response := kmsg.NewPtrMetadataResponse()
+			response.SetVersion(1)
+			response.ControllerID = 11
+			response.Brokers = advertisedCanaryBrokers()
+			payload = response.AppendTo(correlationBytes(request.correlationID))
 		case 36: // SaslAuthenticate
 			p.recordAuth(request.body)
 			response := kmsg.NewPtrSASLAuthenticateResponse()
@@ -805,5 +811,312 @@ func TestRefusalBlockedBySurvivesIdentifierRemapping(t *testing.T) {
 	// identifier rather than the original one.
 	if strings.Contains(blockers[0].String(), authCanaryHost) {
 		t.Error("the blocked-by reference still carries the hostname")
+	}
+}
+
+// --- topology redaction -----------------------------------------------------
+
+// Metadata is the first step that puts endpoints svcdoctor was never given into
+// a report. An advertised broker hostname is exactly the kind of internal name a
+// shared report must not carry, and unlike a bootstrap host nobody typed it —
+// which makes it easy to forget.
+
+const (
+	metadataCanaryBroker1 = "broker-one.canary.internal"
+	metadataCanaryBroker2 = "broker-two.canary.internal"
+	metadataCanaryIP      = "10.71.72.73"
+)
+
+func advertisedCanaryBrokers() []kmsg.MetadataResponseBroker {
+	first := kmsg.NewMetadataResponseBroker()
+	first.NodeID, first.Host, first.Port = 1, metadataCanaryBroker1, 9093
+
+	second := kmsg.NewMetadataResponseBroker()
+	second.NodeID, second.Host, second.Port = 2, metadataCanaryBroker2, 9093
+
+	// An advertised IP literal takes a different route through redaction than a
+	// name, so both are exercised.
+	third := kmsg.NewMetadataResponseBroker()
+	third.NodeID, third.Host, third.Port = 3, metadataCanaryIP, 9093
+
+	return []kmsg.MetadataResponseBroker{first, second, third}
+}
+
+func topologyCanaries() []string {
+	return []string{metadataCanaryBroker1, metadataCanaryBroker2, metadataCanaryIP}
+}
+
+// topologyRun performs the whole chain and then discovers the cluster topology.
+func topologyRun(t *testing.T) domain.Report {
+	t.Helper()
+
+	peer := newAuthPeer(t, false)
+	builder := domain.NewGraphBuilder()
+
+	paths, err := transport.Run(context.Background(), builder, transport.Params{
+		Host:     authCanaryHost,
+		Port:     9092,
+		Resolver: authResolver{},
+		Dialer:   authDialer{target: peer.addr},
+		TLS:      &transport.TLSOptions{RootCAs: peer.pool},
+	})
+	if err != nil {
+		t.Fatalf("transport.Run: %v", err)
+	}
+	t.Cleanup(func() { _ = paths.Close() })
+
+	protocol, err := kafka.Run(context.Background(), builder, paths.Continuations(), kafka.Params{})
+	if err != nil {
+		t.Fatalf("kafka.Run: %v", err)
+	}
+	t.Cleanup(func() { _ = protocol.Close() })
+
+	handshake, err := kafka.SASLHandshake(
+		context.Background(), builder, protocol.Sessions(), kafka.SASLParams{Mechanism: "PLAIN"})
+	if err != nil {
+		t.Fatalf("kafka.SASLHandshake: %v", err)
+	}
+	t.Cleanup(func() { _ = handshake.Close() })
+
+	sessions := handshake.Sessions()
+	if len(sessions) != 1 {
+		t.Fatalf("handshake sessions = %d, want 1", len(sessions))
+	}
+
+	endpoint, err := security.NewEndpoint(authCanaryHost, 9092)
+	if err != nil {
+		t.Fatalf("security.NewEndpoint: %v", err)
+	}
+	credential, err := security.NewCredential(
+		endpoint, authCanaryIdentity, security.NewSecret(authCanarySecret))
+	if err != nil {
+		t.Fatalf("security.NewCredential: %v", err)
+	}
+
+	auth, err := kafka.Authenticate(
+		context.Background(), builder, sessions[0], credential, kafka.AuthParams{})
+	if err != nil {
+		t.Fatalf("kafka.Authenticate: %v", err)
+	}
+	t.Cleanup(func() { _ = auth.Close() })
+
+	session, ok := auth.Session()
+	if !ok {
+		t.Fatal("the fixture credential was not accepted")
+	}
+
+	topology, err := kafka.Metadata(context.Background(), builder, session, kafka.MetadataParams{})
+	if err != nil {
+		t.Fatalf("kafka.Metadata: %v", err)
+	}
+	t.Cleanup(func() { _ = topology.Close() })
+
+	if got := len(topology.Brokers()); got != 3 {
+		t.Fatalf("brokers = %d, want 3: the fixture topology did not arrive", got)
+	}
+
+	return assembleReport(t, builder)
+}
+
+// TestLocalTopologyReportContainsTheAdvertisedCanaries is the precondition: the
+// values redaction must remove have to be present before it runs.
+func TestLocalTopologyReportContainsTheAdvertisedCanaries(t *testing.T) {
+	encoded := canonicalJSON(t, topologyRun(t))
+
+	for _, canary := range topologyCanaries() {
+		if !strings.Contains(encoded, canary) {
+			t.Errorf("the local report does not contain %q, so the leak test proves nothing", canary)
+		}
+	}
+}
+
+// TestShareableTopologyReportRemovesAdvertisedIdentity is the leak matrix for
+// endpoints the operator never named.
+func TestShareableTopologyReportRemovesAdvertisedIdentity(t *testing.T) {
+	shareable, err := redaction.Redact(topologyRun(t))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+	encoded := canonicalJSON(t, shareable)
+
+	forbidden := append(topologyCanaries(),
+		authCanaryHost, authCanaryAddr, authCanaryVantage)
+	forbidden = append(forbidden, credentialCanaries()...)
+
+	for _, canary := range forbidden {
+		if strings.Contains(encoded, canary) {
+			t.Errorf("the shareable report leaks %q:\n%s", canary, encoded)
+		}
+	}
+}
+
+// TestTopologyStructureSurvivesRedaction is the other half: a shared report must
+// still describe the cluster's shape, because that is the reason to share it.
+func TestTopologyStructureSurvivesRedaction(t *testing.T) {
+	shareable, err := redaction.Redact(topologyRun(t))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+	graph := shareable.Graph()
+
+	var exchange domain.Evidence
+	advertisements := map[int64]domain.Evidence{}
+	for _, evidence := range graph.Nodes() {
+		switch evidence.Step() {
+		case kafka.StepMetadata:
+			exchange = evidence
+		case kafka.StepBrokerAdvertised:
+			id, ok := evidence.Attribute(kafka.AttrBrokerNodeID)
+			if !ok {
+				t.Fatalf("%s lost its node identifier", evidence.ID())
+			}
+			value, _ := id.Int()
+			advertisements[value] = evidence
+		}
+	}
+
+	if exchange.IsZero() {
+		t.Fatal("no metadata exchange survived redaction")
+	}
+	if exchange.Layer() != domain.LayerTopology {
+		t.Errorf("exchange layer = %s, want L6", exchange.Layer())
+	}
+
+	// Node identifiers are cluster-internal integers, not deployment identity,
+	// and they are what makes a redacted topology readable at all.
+	for _, want := range []int64{1, 2, 3} {
+		if _, ok := advertisements[want]; !ok {
+			t.Errorf("node identifier %d did not survive redaction", want)
+		}
+	}
+
+	// The controller relationship survives.
+	controller, ok := exchange.Attribute(kafka.AttrMetadataControllerID)
+	if !ok {
+		t.Fatal("the controller identifier did not survive redaction")
+	}
+	if value, _ := controller.Int(); value != 11 {
+		t.Errorf("controller id = %d, want 11 intact", value)
+	}
+
+	// And the counts, which are what make a collapse visible.
+	count, ok := exchange.Attribute(kafka.AttrMetadataBrokerCount)
+	if !ok {
+		t.Fatal("the broker count did not survive redaction")
+	}
+	if value, _ := count.Int(); value != 3 {
+		t.Errorf("broker count = %d, want 3 intact", value)
+	}
+}
+
+// TestAdvertisedHostsArePseudonymizedNotDeleted: correlation must survive
+// identity removal, so two nodes advertised at one host still share a pseudonym.
+func TestAdvertisedHostsArePseudonymizedNotDeleted(t *testing.T) {
+	shareable, err := redaction.Redact(topologyRun(t))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+
+	for _, evidence := range shareable.Graph().Nodes() {
+		if evidence.Step() != kafka.StepBrokerAdvertised {
+			continue
+		}
+
+		host, ok := evidence.Attribute(kafka.AttrBrokerAdvertisedHost)
+		if !ok {
+			t.Errorf("%s lost its advertised host entirely; a pseudonym was expected",
+				evidence.ID())
+			continue
+		}
+		value, _ := host.Host()
+		if value == "" {
+			t.Errorf("%s has an empty advertised host after redaction", evidence.ID())
+		}
+		for _, canary := range topologyCanaries() {
+			if value == canary {
+				t.Errorf("%s still carries the advertised identity %q", evidence.ID(), canary)
+			}
+		}
+
+		// The subject is rewritten too, and keeps its port.
+		if !strings.HasSuffix(evidence.Subject().Ref(), ":9093") {
+			t.Errorf("%s subject = %q, want the port preserved",
+				evidence.ID(), evidence.Subject().Ref())
+		}
+	}
+}
+
+// TestTopologyProvenanceSurvivesIdentifierRemapping: the edges that carry
+// provenance must still resolve after every identifier is rewritten. Since
+// nothing stores provenance, losing these edges would lose it entirely.
+func TestTopologyProvenanceSurvivesIdentifierRemapping(t *testing.T) {
+	shareable, err := redaction.Redact(topologyRun(t))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+	graph := shareable.Graph()
+
+	var exchangeID domain.EvidenceID
+	for _, evidence := range graph.Nodes() {
+		if evidence.Step() == kafka.StepMetadata {
+			exchangeID = evidence.ID()
+		}
+	}
+	if exchangeID == "" {
+		t.Fatal("no metadata exchange in the shareable report")
+	}
+
+	advertisements := 0
+	for _, evidence := range graph.Nodes() {
+		if evidence.Step() != kafka.StepBrokerAdvertised {
+			continue
+		}
+		advertisements++
+
+		parents := graph.Parents(evidence.ID())
+		if len(parents) != 1 || parents[0] != exchangeID {
+			t.Errorf("%s parents to %v, want the redacted exchange %s",
+				evidence.ID(), parents, exchangeID)
+		}
+		for _, canary := range topologyCanaries() {
+			if strings.Contains(evidence.ID().String(), canary) {
+				t.Errorf("the advertisement identifier still carries %q", canary)
+			}
+		}
+	}
+	if advertisements != 3 {
+		t.Errorf("advertisement nodes = %d, want 3", advertisements)
+	}
+
+	// The exchange still reaches the authentication that produced it.
+	parents := graph.Parents(exchangeID)
+	if len(parents) != 1 {
+		t.Fatalf("exchange parents = %v, want one", parents)
+	}
+	parent, ok := graph.Node(parents[0])
+	if !ok {
+		t.Fatalf("%s is not in the shareable graph", parents[0])
+	}
+	if parent.Step() != kafka.StepSASLAuthenticate {
+		t.Errorf("exchange parent step = %s, want the authentication", parent.Step())
+	}
+}
+
+// TestNoClusterIDInEitherReport: the version svcdoctor sends does not carry one,
+// so neither report can contain one whatever the cluster is called.
+func TestNoClusterIDInEitherReport(t *testing.T) {
+	local := topologyRun(t)
+	shareable, err := redaction.Redact(local)
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+
+	for name, report := range map[string]domain.Report{"local": local, "shareable": shareable} {
+		encoded := canonicalJSON(t, report)
+		for _, marker := range []string{"cluster_id", "clusterId", "ClusterID"} {
+			if strings.Contains(encoded, marker) {
+				t.Errorf("the %s report mentions %q", name, marker)
+			}
+		}
 	}
 }

@@ -420,3 +420,168 @@ func (r *AuthResult) authenticated(
 		channelEvidence: channelEvidence,
 	}
 }
+
+// DiscoveredBroker is one broker a Metadata response advertised, normalized.
+//
+// # Two identities, deliberately not merged
+//
+// Kafka gives a broker a node identifier and an advertised address, and they are
+// different kinds of thing:
+//
+//	NodeID     the broker identity this Metadata response reported. An integer
+//	           the service chose; nothing a client connects to.
+//	Endpoint   a network target somebody could connect to. It is configuration,
+//	           and configuration is what a diagnostic tool is usually called in
+//	           to examine.
+//
+// Neither is assumed unique or stable. One response cannot prove that a node
+// identifier is unique across the cluster or survives a restart, and this
+// package deliberately records responses where it is neither.
+//
+// Collapsing them into one key would erase exactly the facts this phase exists
+// to surface. One node identifier at two addresses is a rolling reconfiguration
+// or a listener mistake; two node identifiers at one address is a
+// misconfiguration that will route clients to the wrong broker. Both stay
+// visible, as separate evidence nodes. See ADR 0031.
+//
+// # An advertisement is not a reachability claim
+//
+// Nothing here has been probed. This value says the cluster *said* a broker
+// exists at an address, and no more. Whether that address resolves, accepts a
+// connection or speaks Kafka is a later phase's question, and this phase
+// deliberately does not ask it.
+type DiscoveredBroker struct {
+	nodeID     int32
+	host       string
+	port       uint16
+	usable     bool
+	evidenceID domain.EvidenceID
+}
+
+// NodeID returns the broker identity this Metadata response reported.
+//
+// It is never an execution target. A caller that wants somewhere to connect
+// wants Endpoint, and the two are separate methods so that using the wrong one
+// is a visible mistake rather than a field access.
+//
+// It carries no uniqueness or stability guarantee: it is what one broker said,
+// and two brokers claiming one identifier is a fact this package preserves
+// rather than resolves.
+func (b DiscoveredBroker) NodeID() int32 { return b.nodeID }
+
+// Endpoint returns the advertised network target as "host:port", and whether the
+// advertisement named a usable one.
+//
+// It reports false when the advertised host was empty or the port was outside
+// the range a port can occupy. In that case there is no endpoint string to
+// return, because a usable endpoint was never advertised and synthesizing one
+// would invent a target the cluster never named. The advertisement is still in
+// the graph as a FAIL node carrying what did arrive.
+func (b DiscoveredBroker) Endpoint() (string, bool) {
+	if !b.usable {
+		return "", false
+	}
+	return joinHostPort(b.host, b.port), true
+}
+
+// Host returns the normalized advertised host, which may be empty when the
+// advertisement was unusable.
+func (b DiscoveredBroker) Host() string { return b.host }
+
+// Port returns the advertised port, which is zero when the advertisement was
+// unusable.
+func (b DiscoveredBroker) Port() uint16 { return b.port }
+
+// Evidence returns the identifier of the node recording this advertisement.
+//
+// It is what makes "which Metadata response caused svcdoctor to look at broker
+// X?" answerable by walking the graph rather than by parsing an attribute: this
+// node's parent is the exact Metadata exchange that carried it.
+func (b DiscoveredBroker) Evidence() domain.EvidenceID { return b.evidenceID }
+
+// MetadataResult is what one Metadata exchange leaves the caller holding: the
+// topology the cluster described, and the connection it was described over.
+//
+// # It records, and it probes nothing
+//
+// Every broker here is an advertisement. This phase does not resolve, dial, or
+// speak to any of them, and it sends no credential anywhere. Doing so would drag
+// credential-forwarding policy, execution deduplication, recursion bounds and a
+// severity decision about unreachable brokers into the phase that was supposed
+// to produce their input. See ADR 0031.
+//
+// A MetadataResult is not safe for concurrent use.
+type MetadataResult struct {
+	evidenceID domain.EvidenceID
+	brokers    []DiscoveredBroker
+	session    *AuthenticatedSession
+}
+
+// Evidence returns the identifier of the Metadata exchange node. It is present
+// in every outcome, including one where the exchange failed.
+func (r *MetadataResult) Evidence() domain.EvidenceID { return r.evidenceID }
+
+// Brokers returns every advertisement the response carried, in the order the
+// broker sent them, with exact duplicates collapsed.
+//
+// **Contradictions are not collapsed.** Two entries naming one node identifier
+// at two addresses are two brokers here, as are two node identifiers at one
+// address. Only a byte-identical repetition of the same advertisement becomes
+// one entry, and the exchange node records how many raw entries arrived so that
+// even that collapse is visible rather than silent.
+//
+// The order is the broker's own. It is evidence ordering, not a ranking: nothing
+// here selects a broker, and a caller that takes the first is making its own
+// choice.
+func (r *MetadataResult) Brokers() []DiscoveredBroker {
+	if len(r.brokers) == 0 {
+		return nil
+	}
+	out := make([]DiscoveredBroker, len(r.brokers))
+	copy(out, r.brokers)
+	return out
+}
+
+// Session returns the still-authenticated session, and whether there is one.
+//
+// A completed Metadata exchange leaves the connection exactly as it found it:
+// authenticated, and able to carry any request the broker offers. Metadata reads
+// the cluster's description and changes no protocol state, which is why this is
+// the first Kafka step whose success hands back the same kind of session it
+// consumed rather than a stronger one.
+func (r *MetadataResult) Session() (*AuthenticatedSession, bool) {
+	if r.session == nil {
+		return nil, false
+	}
+	return r.session, true
+}
+
+// Close releases the connection the result still owns. It is idempotent, safe
+// when the exchange failed, and does nothing once the connection has been taken.
+func (r *MetadataResult) Close() error {
+	if r.session == nil {
+		return nil
+	}
+	return r.session.Close()
+}
+
+// continued records a completed exchange and takes ownership of its connection.
+//
+// The session is rebuilt from the one being continued rather than assembled from
+// parameters, for the reason every constructor in this file gives: a caller
+// cannot supply a channel, so it cannot supply a stronger one. The evidence
+// identifier stays the authentication node's, because that is still what this
+// connection proved — Metadata added a fact about the cluster, not about the
+// connection.
+func (r *MetadataResult) continued(conn net.Conn, session *AuthenticatedSession) {
+	channelEvidence, _ := session.ChannelEvidence()
+	r.session = &AuthenticatedSession{
+		ownedConn:       ownedConn{conn: conn},
+		endpoint:        session.Endpoint(),
+		address:         session.Address(),
+		mechanism:       session.Mechanism(),
+		evidenceID:      session.Evidence(),
+		channel:         session.Channel(),
+		channelEvidence: channelEvidence,
+	}
+}

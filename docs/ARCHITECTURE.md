@@ -61,6 +61,7 @@ Kafka:
 
 ```text
 DNS -> TCP -> TLS -> ApiVersions -> SASL mechanism discovery / authentication
+    -> Metadata topology discovery
     -> Metadata -> topology verification
 ```
 
@@ -330,6 +331,40 @@ handshake proved, on the node that observed it, so a second copy would be one fa
 with two representations that can disagree (ADR 0013, ADR 0016). What eventually
 reaches a report is not the channel but its consequence — a `SKIPPED` node with
 `EXEC_SKIPPED_BY_POLICY` when policy refused an attempt.
+
+### 5.3 Topology discovery records endpoints and probes none of them
+
+Phase 3.3 is where svcdoctor first learns of endpoints the operator never named.
+The boundary it draws generalizes past Kafka (**ADR 0031**):
+
+- **Discovery and reachability are separate phases.** A Metadata response is
+  recorded as evidence; nothing it advertises is resolved, dialled or spoken to.
+  Probing discovered endpoints in the same phase would force credential
+  forwarding, execution deduplication, a recursion bound and a severity view
+  about unreachable brokers into the step that was supposed to produce their
+  input.
+- **Derivation is structural; provenance is not.** A discovered endpoint's node
+  parents to the exact exchange that carried it, and that edge records
+  *derivation* — this fact came from that response. It does **not** record how the
+  endpoint entered the run, and section 12's rule stands unchanged: nothing may
+  read `Origin` out of graph shape. The two come apart whenever a cluster
+  advertises the bootstrap endpoint back, which is routine: one `host:port` then
+  has a discovery-derived node *and* a lookup-derived transport path, both true
+  and neither ranked. `Origin` therefore stays deferred until an execution or
+  topology planner has a real consumer for it (**ADR 0031 §6**).
+- **A service identity is not a network target.** A broker has an identity the
+  service reports and an advertised address it can be reached at, and they are
+  different fields answering different questions. They are recorded separately,
+  and an evidence identifier carries both, so one identity at two addresses and
+  two identities at one address both stay two facts. Neither is assumed unique or
+  stable: preserving those conflicts is the point.
+- **Contradictions are preserved; only identical facts collapse.** A diagnostic
+  tool that merged conflicting topology would be hiding the finding somebody ran
+  it to get. The one collapse performed — a byte-identical repetition — is
+  reported as a count so it is visible rather than silent.
+- **Discovery is not credential authority.** "Same cluster" does not authorize a
+  credential. The discovery API has no parameter a credential could occupy, and
+  a discovered endpoint is deliberately not the type that binds one.
 
 **Connection lifetime follows the protocol, not the evidence state.** ApiVersions
 keeps a connection whose broker answered with an error code, because any request

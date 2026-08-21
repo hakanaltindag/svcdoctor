@@ -111,6 +111,7 @@ const (
 	apiKeyAPIVersions      int16 = 18
 	apiKeySASLHandshake    int16 = 17
 	apiKeySASLAuthenticate int16 = 36
+	apiKeyMetadata         int16 = 3
 
 	// saslHandshakeFixtureVersion is the response version the fixture encodes.
 	// It matches what the adapter asks for, and a test pins that they agree.
@@ -118,6 +119,10 @@ const (
 
 	// saslAuthenticateFixtureVersion is the same for authentication.
 	saslAuthenticateFixtureVersion int16 = 1
+
+	// metadataFixtureVersion is the response version the fixture encodes. It
+	// matches what the adapter asks for, and a test pins that they agree.
+	metadataFixtureVersion int16 = 1
 
 	// errorCodeSASLAuthenticationFailedFixture is what a broker answers when it
 	// evaluated a credential and refused it.
@@ -140,6 +145,10 @@ type broker struct {
 	saslErrorCode  int16
 	saslMechanisms []string
 
+	metadata             peerBehaviour
+	metadataBrokers      []kmsg.MetadataResponseBroker
+	metadataControllerID int32
+
 	auth                peerBehaviour
 	authErrorCode       int16
 	authErrorMessage    string
@@ -160,6 +169,11 @@ type broker struct {
 	authRequests     int
 	authPayloads     [][]byte
 	authVersionsSeen []int16
+
+	metadataRequests     int
+	metadataTopicsSeen   [][]string
+	metadataTopicsIsNull []bool
+	metadataVersionsSeen []int16
 
 	// appBytes counts the request bytes this peer has consumed, above TLS.
 	//
@@ -265,6 +279,10 @@ func newBroker(t *testing.T, behaviour peerBehaviour, options ...brokerOption) *
 		saslMechanisms: defaultMechanisms(),
 		auth:           peerAnswers,
 		authErrorCode:  errorCodeSASLAuthenticationFailedFixture,
+		metadata:       peerAnswers,
+		// -1 is Kafka's own default and means "no controller known".
+		metadataControllerID: -1,
+		metadataBrokers:      defaultAdvertisedBrokers(),
 	}
 	for _, option := range options {
 		option(b)
@@ -391,6 +409,10 @@ func (b *broker) answer(conn net.Conn, request brokerRequest) bool {
 		b.count(&b.authRequests)
 		b.recordAuthPayload(request)
 		return b.react(conn, b.auth, request, b.saslAuthenticateResponse)
+	case apiKeyMetadata:
+		b.count(&b.metadataRequests)
+		b.recordMetadataRequest(request)
+		return b.react(conn, b.metadata, request, b.metadataResponse)
 	default:
 		return false
 	}
@@ -1029,6 +1051,164 @@ func authenticate(
 		context.Background(), target.builder, target.session(t), credential, params)
 	if err != nil {
 		t.Fatalf("Authenticate: unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = result.Close() })
+	return result
+}
+
+// --- metadata ---------------------------------------------------------------
+
+// advertisedBroker builds one broker entry for the fixture to advertise.
+func advertisedBroker(nodeID int32, host string, port int32) kmsg.MetadataResponseBroker {
+	broker := kmsg.NewMetadataResponseBroker()
+	broker.NodeID, broker.Host, broker.Port = nodeID, host, port
+	return broker
+}
+
+// defaultAdvertisedBrokers is what the fake cluster describes unless a test says
+// otherwise: three brokers, deliberately out of node-identifier order so that
+// any ordering in a report can be shown to be svcdoctor's doing or the broker's.
+func defaultAdvertisedBrokers() []kmsg.MetadataResponseBroker {
+	return []kmsg.MetadataResponseBroker{
+		advertisedBroker(2, "broker-2.internal", 9093),
+		advertisedBroker(1, "broker-1.internal", 9093),
+		advertisedBroker(3, "broker-3.internal", 9093),
+	}
+}
+
+// withMetadata sets how the broker reacts to a Metadata request.
+func withMetadata(behaviour peerBehaviour) brokerOption {
+	return func(b *broker) { b.metadata = behaviour }
+}
+
+// withAdvertisedBrokers replaces the topology the cluster describes.
+func withAdvertisedBrokers(brokers ...kmsg.MetadataResponseBroker) brokerOption {
+	return func(b *broker) { b.metadataBrokers = brokers }
+}
+
+// withControllerID sets the node the cluster names as its controller.
+func withControllerID(nodeID int32) brokerOption {
+	return func(b *broker) { b.metadataControllerID = nodeID }
+}
+
+// metadataResponse encodes a Metadata response.
+func (b *broker) metadataResponse(correlationID uint32) []byte {
+	response := kmsg.NewPtrMetadataResponse()
+	response.SetVersion(metadataFixtureVersion)
+	response.ControllerID = b.metadataControllerID
+	response.Brokers = b.metadataBrokers
+
+	out := correlationBytes(correlationID)
+	return response.AppendTo(out)
+}
+
+// recordMetadataRequest decodes what svcdoctor asked for.
+//
+// It keeps the topic list *and* whether that list was null, because those are
+// two different questions at this version: an empty array means "no topics" and
+// null means "every topic". A fixture that only counted entries could not tell
+// the difference, and the difference is the whole point of the request.
+func (b *broker) recordMetadataRequest(request brokerRequest) {
+	decoded := kmsg.NewPtrMetadataRequest()
+	decoded.SetVersion(request.version)
+	if err := decoded.ReadFrom(request.payload); err != nil {
+		return
+	}
+
+	topics := make([]string, 0, len(decoded.Topics))
+	for _, topic := range decoded.Topics {
+		if topic.Topic != nil {
+			topics = append(topics, *topic.Topic)
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.metadataTopicsSeen = append(b.metadataTopicsSeen, topics)
+	b.metadataTopicsIsNull = append(b.metadataTopicsIsNull, decoded.Topics == nil)
+	b.metadataVersionsSeen = append(b.metadataVersionsSeen, request.version)
+}
+
+func (b *broker) metadataRequestCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.metadataRequests
+}
+
+// metadataTopics returns the topic list of every Metadata request received.
+func (b *broker) metadataTopics() [][]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([][]string(nil), b.metadataTopicsSeen...)
+}
+
+// metadataTopicsWereNull reports, per request, whether the topic list was null —
+// which at this version would mean "describe every topic".
+func (b *broker) metadataTopicsWereNull() []bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]bool(nil), b.metadataTopicsIsNull...)
+}
+
+func (b *broker) metadataVersions() []int16 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]int16(nil), b.metadataVersionsSeen...)
+}
+
+// --- authenticated targets --------------------------------------------------
+
+// topologyTarget is one prepared path that has completed the whole chain — DNS,
+// TCP, TLS, ApiVersions, SaslHandshake, SaslAuthenticate — and is ready for
+// Metadata on the exact socket all of that was measured over.
+type topologyTarget struct {
+	broker   *broker
+	builder  *domain.GraphBuilder
+	session  *AuthenticatedSession
+	registry *connRegistry
+}
+
+// authenticatedTarget runs the real chain to an authenticated session.
+//
+// Nothing is hand-made. A hand-built AuthenticatedSession would let a test
+// assert against a connection nobody measured, which is the one thing these
+// tests exist to prevent.
+func authenticatedTarget(t *testing.T, options ...brokerOption) *topologyTarget {
+	t.Helper()
+
+	auth := verifiedTarget(t, options...)
+	result := authenticate(t, auth, credentialFor(t, authHost, 9092), AuthParams{})
+
+	session, ok := result.Session()
+	if !ok {
+		t.Fatal("the fixture credential was not accepted, so there is no session for Metadata")
+	}
+	return &topologyTarget{
+		broker:   auth.broker,
+		builder:  auth.builder,
+		session:  session,
+		registry: auth.registry,
+	}
+}
+
+// conn returns the single socket the transport chain established.
+func (a *topologyTarget) conn(t *testing.T) *countingConn {
+	t.Helper()
+
+	established := a.registry.all()
+	if len(established) != 1 {
+		t.Fatalf("transport established %d connections, want 1", len(established))
+	}
+	return established[0]
+}
+
+// discover runs Metadata over the prepared session.
+func discover(t *testing.T, target *topologyTarget, params MetadataParams) *MetadataResult {
+	t.Helper()
+
+	result, err := Metadata(t.Context(), target.builder, target.session, params)
+	if err != nil {
+		t.Fatalf("Metadata: unexpected error: %v", err)
 	}
 	t.Cleanup(func() { _ = result.Close() })
 	return result

@@ -55,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -75,7 +75,7 @@ condition that should reopen it.
 | Decision | Why deferred | Reopen when |
 |---|---|---|
 | **Transport severity policy** | Severity is impact, and whether a failed lookup or refused connection prevents correct use depends on whether the endpoint was user-supplied or discovered — that distinction is `Origin` | Phase 2 has produced real transport evidence (ADR 0017) |
-| **`Origin` / provenance** | No consumer; topology discovery does not exist. Adding it now creates a second record of how a subject entered the run, with no implementation to say which is authoritative | Topology orchestration exists, in Phase 3 (ADR 0013) |
+| **`Origin` / provenance** | **Examined in Phase 3.3 and left deferred.** Discovery now exists and needed only *derivation* — which parent edges already record — not provenance. The two are distinct: when a cluster advertises the bootstrap endpoint back, one `host:port` has both a discovery-derived node and a lookup-derived transport path, so origin is not a function of the subject and cannot be read off graph shape (`REPORT_SCHEMA.md`) | An execution or topology planner has a real consumer for provenance (ADR 0031 §6) |
 | **Generic vs service finding overlap** | Nothing says how a generic `TCP_CONNECTION_REFUSED` and a service `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` avoid describing one fact twice | The first service rules are written, in Phase 3 (ADR 0017) |
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
 | **Service attribute-key ownership** | Where service-specific key constants live is unsettled, and `internal/domain` must not grow a registry of them | The Kafka adapter demonstrates the real boundary, in Phase 3 |
@@ -869,6 +869,70 @@ to discovered brokers, no unsafe transport override, no new dependency, no repor
       records "no TLS was attempted", and the TCP node proves nothing about encryption.
       **Reopen when** such a node exists
 
+### Phase 3.3 — Metadata topology discovery (complete)
+
+**The first phase that records endpoints the operator never named.** See **ADR 0031**.
+
+- [x] `Metadata` over the exact authenticated connection — one socket carries DNS, TCP,
+      TLS, ApiVersions, SaslHandshake, SaslAuthenticate and Metadata, proven by socket
+      identity and a connection count that stays at 1
+- [x] **Metadata v1 with an empty topic list**, which at that version means *no topics*.
+      v0 cannot express it (empty means every topic); v2+ would receive a cluster
+      identifier with no redaction classification; v9+ is flexible and the framing refuses it
+- [x] One `kafka.metadata` exchange node (L6) plus one `kafka.broker_advertised` node
+      per advertisement (L6), so a later reachability probe has a precise parent
+- [x] Broker identity (node ID) and network endpoint identity kept separate, with the
+      evidence identifier carrying both so neither conflict case can merge
+- [x] Advertised host normalized by the `security.Endpoint` rules and deliberately **not**
+      by that type; nothing resolved
+- [x] Unusable advertisements — empty host, port 0, negative, out of range — recorded as
+      FAIL nodes carrying what arrived, never turned into a usable endpoint
+- [x] Identical entries collapse; the collapse is counted so it is visible. Contradictions
+      never collapse
+- [x] Advertised hosts recorded as declared identity values, pseudonymized in shareable
+      reports while node identifiers, controller relationship, counts and edges survive
+- [x] No probing, no recursion, no depth limit, no retry, no credential anywhere near a
+      discovered endpoint — each asserted by reflection over the API surface
+
+**Deliberately not done in 3.3:** no reachability probing of discovered brokers, no
+credential forwarding, no recursion, no execution dedup, no `Origin` field, no diagnosis,
+no severity, no findings, no topic/partition/ISR/consumer-group analysis, no retry, no
+registry, no CLI, no new dependency, no report-schema change.
+
+**Decisions taken, with their reopen conditions:**
+
+- [x] **`Origin` examined and left deferred.** This phase needed *derivation* — "which
+      response produced this fact?" — which the parent edge already records. It did not
+      need *provenance* — "how did this endpoint enter the run?" — which a parent edge
+      does not encode and `REPORT_SCHEMA.md` forbids inferring from graph shape. The two
+      come apart whenever a cluster advertises the bootstrap endpoint back, so origin is
+      not a function of the subject. **Reopen when** an execution or topology planner has a
+      real consumer for provenance
+- [x] **Fact dedup collapses only identical advertisements**, and reports the collapse.
+      **Execution dedup does not exist yet** and will be keyed by normalized endpoint, never
+      by node identifier
+- [x] **Attribute keys stay in the adapter.** `internal/diagnosis/kafka` is still empty, so
+      the "second real consumer" condition is unmet and `internal/service/kafka` is not
+      created
+- [ ] **Metadata is reachable only from an authenticated session.** Kafka serves it on
+      PLAINTEXT and SSL listeners too; this is svcdoctor's scope, not the protocol's.
+      **Reopen when** a non-SASL Kafka path exists
+- [ ] **Two Metadata exchanges over one path collide**, and the second is rejected rather
+      than merged. This is ADR 0019's retry case arriving for the first time. **Reopen when**
+      a layer owns retry policy
+
+### Phase 3.4 — Advertised endpoint reachability (not started)
+
+The consumer Phase 3.3 was built to feed. It probes discovered endpoints with the generic
+transport chain, credential-free, and owns the decisions 3.3 deliberately did not take:
+execution deduplication keyed by normalized endpoint, a recursion bound if expansion is ever
+recursive, and what an unreachable advertised broker means.
+
+- [ ] Credential-free DNS/TCP/TLS against each discovered endpoint
+- [ ] Execution dedup keyed by the normalized endpoint, never by node identifier
+- [ ] Transport evidence parented to the advertisement node that named the endpoint
+- [ ] Explicit one-hop boundary, or an explicit bound if it is ever more
+
 ### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
 
 - [ ] SCRAM-SHA-256 / SCRAM-SHA-512, with the dependency route decided first (ADR 0026 §7.4)
@@ -910,8 +974,9 @@ changes scope.
 
 ### Topology
 
-- [ ] Metadata discovery (L6)
-- [ ] Normalize broker endpoints
+- [x] Metadata discovery (L6) — Phase 3.3, ADR 0031
+- [x] Normalize broker endpoints — Phase 3.3, by the `security.Endpoint` rules and
+      deliberately not by that type
 - [ ] Probe every advertised endpoint from the current vantage, credential-free by default
 - [ ] Endpoint deduplication and topology depth policy — orchestration, never the graph
 - [ ] Credential-forwarding wiring into topology discovery, with `deny` as the default policy
