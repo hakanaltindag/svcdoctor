@@ -40,6 +40,7 @@ does not overturn it, and both remain authoritative.
 | 0026 | Kafka SASL enters as mechanism discovery, and authentication waits for an owner | Accepted | Extends 0025 to L5. Defers authentication with four named blockers |
 | 0027 | `security.Reveal` is confined to adapter wire packages, mechanically | Accepted | Closes the Phase 1 deferral its own backlog entry named. Adds no call sites |
 | 0028 | Credentialed authentication is singular, policy-gated and channel-aware | Accepted | Answers 0026 §7.1 and §7.3, narrows §7.2. Decides work not yet written |
+| 0029 | A connection carries what it proved, and a fail-closed policy reads it | Accepted | Implements 0028 §6. Sends no credential; changes no report schema |
 
 ## Decisions that govern work not yet written
 
@@ -85,7 +86,11 @@ A deferral is a decision too, and each names the condition that should reopen it
   legitimate caller that cannot live in a wire package.
 - **0028** defers nothing of its own, but it is binding on work not yet written:
   authentication may not be implemented until the channel fact and the
-  credential-transport policy of its section 6 exist.
+  credential-transport policy of its section 6 exist. **0029 built both.**
+- **0029** defers the unsafe transport override and the `ReportSecurity` field
+  that would record it, under one shared condition: a layer that can carry an
+  explicit per-run decision. Neither is useful without the other, so they arrive
+  together or not at all.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

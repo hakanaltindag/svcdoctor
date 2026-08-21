@@ -304,13 +304,22 @@ there. The boundary it draws generalizes past Kafka (**ADR 0026**):
   `ForwardingPolicy` — and records a refusal as `SKIPPED` with
   `EXEC_SKIPPED_BY_POLICY`. Obeying a declared policy is not owning one, and a
   recorded refusal is neither silence nor a finding.
-- **A layer cannot enforce a policy about a fact it cannot see.** The adapter
-  observes no channel security today: `transport.Continuation` carries no such
-  value and `tls.verified` lives only on the L3 node it never reads. The fact must
+- **A layer cannot enforce a policy about a fact it cannot see.** The fact must
   be **declared by the transport that established it**, not inferred by
   type-asserting a connection — the same declaration-over-inference rule ADR 0022
-  fixed for identity-bearing attributes. That mechanism is a prerequisite for any
-  credential byte (ADR 0028 §6).
+  fixed for identity-bearing attributes. Phase 3.2b built it (**ADR 0029**):
+  `security.Channel` travels with the connection from `tls.Result.Verified()`
+  through `transport.Continuation`, `kafka.Session` and `kafka.HandshakeSession`,
+  and `security.CredentialTransportPolicy` reads it. Both zero values fail closed,
+  and an adapter has no way to strengthen the claim.
+
+**A runtime ownership fact is not a diagnostic observation.** The channel is the
+first fact this project carries beside a connection without also recording it as
+evidence, and the distinction is deliberate: `tls.verified` already states what a
+handshake proved, on the node that observed it, so a second copy would be one fact
+with two representations that can disagree (ADR 0013, ADR 0016). What eventually
+reaches a report is not the channel but its consequence — a `SKIPPED` node with
+`EXEC_SKIPPED_BY_POLICY` when policy refused an attempt.
 
 **Connection lifetime follows the protocol, not the evidence state.** ApiVersions
 keeps a connection whose broker answered with an error code, because any request

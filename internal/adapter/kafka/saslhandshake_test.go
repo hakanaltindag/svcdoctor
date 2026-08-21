@@ -450,8 +450,8 @@ func TestOneRejectingBrokerDoesNotHideAnother(t *testing.T) {
 	rejecting := newBroker(t, peerAnswers, withSASLError(33), withMechanisms("SCRAM-SHA-512"))
 
 	builder := domain.NewGraphBuilder()
-	first := apiVersionsSessionsAt(t, builder, accepting, "primary.internal", "10.0.0.1")
-	second := apiVersionsSessionsAt(t, builder, rejecting, "secondary.internal", "10.0.0.2")
+	first := apiVersionsSessionsAt(t, builder, accepting, "primary.internal", "10.0.0.1", nil)
+	second := apiVersionsSessionsAt(t, builder, rejecting, "secondary.internal", "10.0.0.2", nil)
 
 	combined := append(first.Sessions(), second.Sessions()...)
 	result, err := SASLHandshake(context.Background(), builder, combined, SASLParams{Mechanism: "PLAIN"})

@@ -68,6 +68,11 @@ linters:
             security.Reveal turns a masked secret into plaintext. Only a service
             adapter's wire package may call it, immediately before the value goes
             on the socket. See docs/SECURITY.md and ADR 0026.
+        - pattern: '^security\.Channel[A-Z]'
+          msg: >-
+            a security.Channel constant states what a connection proved, and only
+            the transport chain that established the connection may state it.
+            Every other layer propagates the value it was given. See ADR 0029.
     depguard:
       rules:
         # Diagnosis is a pure function over frozen evidence.
@@ -230,6 +235,21 @@ linters:
       # written as security.Reveal, but the exclusion is explicit rather than
       # incidental.
       - path: internal/security/
+        linters:
+          - forbidigo
+
+      # The transport chain is the authority on what a connection proved: it
+      # performed the handshake, so it is the one layer entitled to name a
+      # security.Channel constant. Everywhere else the value is copied from the
+      # connection it describes (ADR 0029).
+      - path: internal/probe/transport/
+        linters:
+          - forbidigo
+
+      # Tests may name a channel to assert one. Asserting a value is not
+      # producing it, and the production paths are covered by mutation checks
+      # that fail when a channel is forged or downgraded.
+      - path: _test\.go$
         linters:
           - forbidigo
 

@@ -175,7 +175,9 @@ func newResult(o observation) (*Result, error) {
 		_ = o.conn.Close()
 		return &Result{evidence: evidence}, nil
 	}
-	return &Result{evidence: evidence, conn: o.conn}, nil
+	// verified comes from the same observation that produced the evidence's
+	// tls.verified attribute, so the two cannot disagree about one handshake.
+	return &Result{evidence: evidence, verified: o.verified(), conn: o.conn}, nil
 }
 
 // evidence normalizes the observation into the canonical model.

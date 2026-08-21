@@ -346,10 +346,10 @@ func TestNoSkippedNodesAreInvented(t *testing.T) {
 	silent := newBroker(t, peerHangsUp)
 
 	builder := domain.NewGraphBuilder()
-	good := apiVersionsSessionsAt(t, builder, answering, "primary.internal", "10.0.0.1")
+	good := apiVersionsSessionsAt(t, builder, answering, "primary.internal", "10.0.0.1", nil)
 	// The second endpoint's ApiVersions exchange breaks, so it yields no
 	// session and the handshake never learns the address existed.
-	_ = apiVersionsSessionsAt(t, builder, silent, "secondary.internal", "10.0.0.2")
+	_ = apiVersionsSessionsAt(t, builder, silent, "secondary.internal", "10.0.0.2", nil)
 
 	result, err := SASLHandshake(
 		context.Background(), builder, good.Sessions(), SASLParams{Mechanism: "PLAIN"})

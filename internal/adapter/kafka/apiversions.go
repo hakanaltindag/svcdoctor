@@ -197,7 +197,7 @@ func exchange(
 		return nil
 	}
 
-	result.add(conn, path.Endpoint(), path.Address(), evidence.ID())
+	result.add(conn, path, evidence.ID())
 	return nil
 }
 

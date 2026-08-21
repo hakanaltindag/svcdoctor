@@ -5,6 +5,8 @@ import (
 	"net/netip"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // Session is one transport path whose ApiVersions exchange completed, together
@@ -25,6 +27,7 @@ type Session struct {
 	endpoint   string
 	address    netip.AddrPort
 	evidenceID domain.EvidenceID
+	channel    security.Channel
 }
 
 // Endpoint returns the logical label this path belongs to, such as
@@ -40,6 +43,21 @@ func (s *Session) Endpoint() string { return s.endpoint }
 
 // Address returns the broker this session speaks to.
 func (s *Session) Address() netip.AddrPort { return s.address }
+
+// Channel reports what the connection under this session proved about its peer,
+// carried through unchanged from the transport path it continues.
+//
+// The adapter neither computes nor adjusts it, and must not: it never performed
+// a handshake, so the only honest source of the fact is the layer that did.
+//
+// That is a contract this package keeps rather than a property Go enforces on
+// it — a package owns its own fields, so nothing in the language stops this one
+// from writing whatever it likes here. What does the work instead: the
+// constructors below copy the value from the object being continued rather than
+// taking it as a parameter, a lint forbids naming a security.Channel constant in
+// this package, and the tests fail if a channel is forged or downgraded. See
+// ADR 0029.
+func (s *Session) Channel() security.Channel { return s.channel }
 
 // Evidence returns the identifier of the ApiVersions node for this session.
 //
@@ -109,14 +127,20 @@ func (r *Result) Close() error {
 }
 
 // add records a completed session and takes ownership of its connection.
-func (r *Result) add(
-	conn net.Conn, endpoint string, address netip.AddrPort, evidenceID domain.EvidenceID,
-) {
+//
+// Everything that describes the path — its endpoint, its address and what its
+// connection proved — is copied from the transport path itself rather than
+// passed alongside it. A caller therefore cannot supply a channel at all, so it
+// cannot supply the wrong one: substituting a stronger value would mean editing
+// this function, which is a visible change to a security-carrying constructor
+// rather than a wrong argument at a call site. See ADR 0029.
+func (r *Result) add(conn net.Conn, path *transport.Continuation, evidenceID domain.EvidenceID) {
 	r.sessions = append(r.sessions, &Session{
 		ownedConn:  ownedConn{conn: conn},
-		endpoint:   endpoint,
-		address:    address,
+		endpoint:   path.Endpoint(),
+		address:    path.Address(),
 		evidenceID: evidenceID,
+		channel:    path.Channel(),
 	})
 }
 
@@ -138,6 +162,7 @@ type HandshakeSession struct {
 	address    netip.AddrPort
 	mechanism  string
 	evidenceID domain.EvidenceID
+	channel    security.Channel
 }
 
 // Endpoint returns the logical label this path belongs to, carried through from
@@ -146,6 +171,15 @@ func (s *HandshakeSession) Endpoint() string { return s.endpoint }
 
 // Address returns the broker this session speaks to.
 func (s *HandshakeSession) Address() netip.AddrPort { return s.address }
+
+// Channel reports what the connection under this session proved about its peer.
+//
+// This is the accessor authentication will consult, because a HandshakeSession
+// is what authentication consumes. The fact has travelled from the handshake
+// that established it, through the transport chain and both adapter steps,
+// copied at each hop from the object being continued and unchanged by any of
+// them. See Session.Channel for what enforces that.
+func (s *HandshakeSession) Channel() security.Channel { return s.channel }
 
 // Mechanism returns the SASL mechanism the broker accepted.
 //
@@ -206,18 +240,19 @@ func (r *HandshakeResult) Close() error {
 }
 
 // add records an accepted handshake and takes ownership of its connection.
+//
+// As above, the path's identity and channel are copied from the session being
+// continued rather than passed in. The mechanism is a parameter because it is
+// the one thing this step established and the previous one did not.
 func (r *HandshakeResult) add(
-	conn net.Conn,
-	endpoint string,
-	address netip.AddrPort,
-	mechanism string,
-	evidenceID domain.EvidenceID,
+	conn net.Conn, session *Session, mechanism string, evidenceID domain.EvidenceID,
 ) {
 	r.sessions = append(r.sessions, &HandshakeSession{
 		ownedConn:  ownedConn{conn: conn},
-		endpoint:   endpoint,
-		address:    address,
+		endpoint:   session.Endpoint(),
+		address:    session.Address(),
 		mechanism:  mechanism,
 		evidenceID: evidenceID,
+		channel:    session.Channel(),
 	})
 }

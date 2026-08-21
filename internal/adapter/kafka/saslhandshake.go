@@ -178,7 +178,7 @@ func handshake(
 		return nil
 	}
 
-	result.add(conn, session.Endpoint(), session.Address(), params.Mechanism, evidence.ID())
+	result.add(conn, session, params.Mechanism, evidence.ID())
 	return nil
 }
 

@@ -2,14 +2,22 @@ package kafka
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	cryptotls "crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
 	"errors"
 	"io"
 	"math"
+	"math/big"
 	"net"
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 
@@ -117,6 +125,11 @@ type broker struct {
 	saslErrorCode  int16
 	saslMechanisms []string
 
+	// serverTLS is nil for a plaintext broker. When set, every accepted
+	// connection is wrapped before any Kafka byte is read, so a path through
+	// this broker is a real TLS path.
+	serverTLS *cryptotls.Config
+
 	mu                 sync.Mutex
 	requests           int
 	saslRequests       int
@@ -193,10 +206,81 @@ func newBroker(t *testing.T, behaviour peerBehaviour, options ...brokerOption) *
 			if acceptErr != nil {
 				return
 			}
+			if b.serverTLS != nil {
+				conn = cryptotls.Server(conn, b.serverTLS)
+			}
 			go b.serve(conn)
 		}
 	}()
 	return b
+}
+
+// newTLSBroker is a fake Kafka peer that speaks TLS first.
+//
+// It exists so that a test can prove the channel fact travels from a real
+// handshake all the way to a HandshakeSession. The certificate is generated in
+// memory for serverName and the returned pool is the only trust source that
+// verifies it, so a run that verifies is verifying something real.
+func newTLSBroker(t *testing.T, serverName string, options ...brokerOption) (*broker, *x509.CertPool) {
+	t.Helper()
+
+	cert, pool := brokerCertificate(t, serverName)
+	options = append(options, func(b *broker) {
+		b.serverTLS = &cryptotls.Config{
+			Certificates: []cryptotls.Certificate{cert},
+			MinVersion:   cryptotls.VersionTLS12,
+		}
+	})
+	return newBroker(t, peerAnswers, options...), pool
+}
+
+// brokerCertificate generates a throwaway CA and leaf for serverName. Nothing
+// touches disk: a fixture key on disk is a key somebody eventually trusts.
+func brokerCertificate(t *testing.T, serverName string) (cryptotls.Certificate, *x509.CertPool) {
+	t.Helper()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating CA key: %v", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "svcdoctor kafka test ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, caKey.Public(), caKey)
+	if err != nil {
+		t.Fatalf("creating CA certificate: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parsing CA certificate: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating leaf key: %v", err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: serverName},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     []string{serverName},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, leafKey.Public(), caKey)
+	if err != nil {
+		t.Fatalf("creating leaf certificate: %v", err)
+	}
+	return cryptotls.Certificate{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}, pool
 }
 
 // serve answers requests until the peer stops asking.
@@ -540,8 +624,16 @@ func apiVersionsSessions(
 // apiVersionsSessionsAt does the same for one named endpoint against one
 // broker, so a test can build a graph holding two endpoints with different
 // answers.
+//
+// tlsOptions is nil for a plaintext path. When it is set the chain performs a
+// real handshake against the broker, which is what lets one graph hold paths
+// whose channels genuinely differ.
 func apiVersionsSessionsAt(
-	t *testing.T, builder *domain.GraphBuilder, b *broker, host, address string,
+	t *testing.T,
+	builder *domain.GraphBuilder,
+	b *broker,
+	host, address string,
+	tlsOptions *transport.TLSOptions,
 ) *Result {
 	t.Helper()
 
@@ -549,6 +641,7 @@ func apiVersionsSessionsAt(
 		Host: host, Port: 9092,
 		Resolver: fixedResolver{addresses: parseAddrs(t, []string{address})},
 		Dialer:   brokerDialer{target: b.addr, conns: &connRegistry{}},
+		TLS:      tlsOptions,
 	})
 	if err != nil {
 		t.Fatalf("transport.Run: %v", err)

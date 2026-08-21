@@ -5,6 +5,7 @@ import (
 	"net/netip"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // Continuation is one transport path that completed everything the caller asked
@@ -18,6 +19,7 @@ type Continuation struct {
 	endpoint   string
 	address    netip.AddrPort
 	evidenceID domain.EvidenceID
+	channel    security.Channel
 
 	conn   net.Conn
 	taken  bool
@@ -39,6 +41,25 @@ func (c *Continuation) Endpoint() string { return c.endpoint }
 // address is not always the address the evidence was recorded against — a proxy
 // or a test double may say otherwise — and the two must agree.
 func (c *Continuation) Address() netip.AddrPort { return c.address }
+
+// Channel reports what this connection proved about the peer at the other end
+// of it.
+//
+// It exists so that a layer about to write a secret does not have to work the
+// answer out for itself. Every other way of asking is worse: inspecting the
+// net.Conn re-derives a fact this layer already had and puts TLS semantics in a
+// package that should have none, reading the graph makes an adapter depend on
+// evidence structure, and looking at the run's configuration reports what was
+// *asked for* rather than what happened.
+//
+// The value describes this connection and no other. It is set once, next to the
+// connection, at the moment the chain decides to keep it, so a Continuation
+// whose channel describes a different socket cannot be constructed from outside
+// this package.
+//
+// It is a mechanism fact. Whether it is good enough to carry a credential is
+// security.CredentialTransportPolicy's question. See ADR 0029.
+func (c *Continuation) Channel() security.Channel { return c.channel }
 
 // Evidence returns the identifier of the deepest node recorded for this path:
 // the TLS node when TLS ran, otherwise the TCP node.
@@ -156,13 +177,22 @@ func (r *Result) Close() error {
 }
 
 // add records a completed path and takes ownership of its connection.
+//
+// The channel is supplied here rather than derived later, so the connection and
+// the fact describing it enter the Result in one statement and cannot be paired
+// up wrongly afterwards.
 func (r *Result) add(
-	conn net.Conn, endpoint string, address netip.AddrPort, evidenceID domain.EvidenceID,
+	conn net.Conn,
+	endpoint string,
+	address netip.AddrPort,
+	evidenceID domain.EvidenceID,
+	channel security.Channel,
 ) {
 	r.continuations = append(r.continuations, &Continuation{
 		endpoint:   endpoint,
 		address:    address,
 		evidenceID: evidenceID,
+		channel:    channel,
 		conn:       conn,
 	})
 }

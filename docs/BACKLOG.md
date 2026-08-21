@@ -8,7 +8,8 @@ has exactly one runtime dependency, added in Phase 3.1: `github.com/twmb/franz-g
 
 - `internal/domain` — domain primitives, evidence, the immutable evidence DAG, findings and
   the canonical report
-- `internal/security` — masked secret and endpoint-bound credential primitives
+- `internal/security` — masked secret and endpoint-bound credential primitives, plus the
+  channel-security fact and the fail-closed credential-transport policy (Phase 3.2b)
 - `internal/security/redaction` — structural redaction into a shareable report
 - `internal/diagnosis` — the `Rule` contract and the deterministic `Engine`
 - `internal/probe` — the evidence identifier encoding every probe shares
@@ -16,8 +17,8 @@ has exactly one runtime dependency, added in Phase 3.1: `github.com/twmb/franz-g
 - `internal/probe/tcp` — the TCP probe and connection ownership (Phase 2.2)
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 - `internal/probe/transport` — the generic transport chain (Phase 2.4)
-- `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1) and
-  SASL mechanism discovery (Phase 3.2a)
+- `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1),
+  SASL mechanism discovery (Phase 3.2a) and channel propagation (Phase 3.2b)
 - `internal/adapter/kafka/wire` — the only package that imports the Kafka protocol library
 
 No Go code exists in any of the following, and nothing in them may be assumed implemented:
@@ -52,7 +53,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -93,8 +94,8 @@ move is traceable rather than looking like a loss:
 | Which transport paths may receive credentials | Caller-selected, and **structurally singular**: the authentication API takes one session, never a list, so no ordering or index inside the adapter can become a selection | ADR 0028 §1 |
 | Whether credentials may cross an unverified channel | Verified TLS only; anything weaker is an explicit, per-run, recorded opt-in. A refusal is recorded as `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, never silence | ADR 0028 §3 |
 
-Neither is implemented. What they now need is mechanism rather than policy, and that is
-Phase 3.2b below. **Secret source resolution was also re-classified**: ADR 0026 §7.2 called it
+Both mechanisms now exist: Phase 3.2b built them (ADR 0029). Neither *authentication* is
+implemented. **Secret source resolution was also re-classified**: ADR 0026 §7.2 called it
 a blocker for authentication, and ADR 0028 §7 narrows that — a `security.Credential` is
 constructible by any caller, so resolution is a Phase 5 usability item at the CLI boundary,
 not a Phase 3 contract blocker.
@@ -770,35 +771,52 @@ the same file is rejected in `internal/adapter/kafka` and accepted in
 new test code, all fixed rather than suppressed except one narrow, explained `nolint` on a
 signed-int16 wire decode. `noctx` clean. `bodyclose` still off: no `net/http`.
 
-### Phase 3.2b — Credential transport safety (not started, decided)
+### Phase 3.2b — Credential transport safety (complete)
 
-**Sends no credential.** It builds the two mechanisms that must exist before any credential
-byte, and nothing else. Decided in **ADR 0028**; the decision pass that produced it changed no
-code.
+**Sends no credential, and contains no authentication code.** It builds the two mechanisms
+ADR 0028 required before any credential byte, and nothing else. See **ADR 0029**.
 
-The reason it is its own phase is the `ForwardingPolicy` precedent: Phase 1 built that
-fail-closed type *before* topology existed, so the discovery code could not be written without
-confronting the decision. A safety mechanism that arrives in the same change as its first
-consumer is never reviewed on its own.
+- [x] **`security.Channel`** — one ordered fact per connection: `unknown`, `plaintext`,
+      `tls-unverified`, `tls-verified`. The zero value is `unknown` rather than `plaintext`,
+      because a connection nobody classified and one known to be in the clear are different
+      facts; both are refused, only one is a claim
+- [x] **`security.CredentialTransportPolicy`** — fail-closed, modelled on `ForwardingPolicy`.
+      One value, `RequireVerifiedTLS`, which is also the zero value. Every undefined channel
+      *and* every undefined policy integer denies
+- [x] **`tls.Result.Verified()`** — the fact exposed on the value that owns the connection,
+      computed from the same observation that produces the `tls.verified` attribute, so the
+      runtime and recorded facts cannot disagree about one handshake
+- [x] Propagation `Continuation` → `Session` → `HandshakeSession`, each hop passing the
+      channel in the same statement as the connection, through an unexported constructor
+- [x] **`tcp.Result` gained nothing.** TCP cannot classify a connection whose TLS status is
+      decided one layer later
+- [x] Real-TLS Kafka fixture, so a verified channel is proven end to end through DNS, TCP,
+      TLS, ApiVersions and SaslHandshake, and mixed channels are proven not to contaminate
+- [x] Mutation-checked: forging a verified channel in the adapter, or calling every TLS path
+      verified in the chain, both fail the suite
 
-- [ ] **A channel fact, declared by transport.** The adapter cannot evaluate a policy about a
-      channel it cannot see: `transport.Continuation` exposes no such value, and `tls.verified`
-      lives only on the L3 node the adapter never reads. A small ordered value, carried through
-      `Continuation` → `Session` → `HandshakeSession` unchanged, whose zero value is the least
-      trusted state. Declared by the layer that established it, never inferred by
-      type-asserting `*tls.Conn` (ADR 0028 §6.1)
-- [ ] **A credential-transport policy, fail-closed.** A value type in `internal/security`
-      modelled on `ForwardingPolicy`: no engine, no I/O, zero value = require verified TLS,
-      with a `String()` for the report's security section (ADR 0028 §6.2)
-- [ ] Record the policy in force in `ReportSecurity`, beside `tlsVerificationDisabled` and
-      `credentialForwardingEnabled`, when a layer exists that chooses it — Phase 5
+**Deliberately not done in 3.2b:** no authentication, no PLAIN, no `SaslAuthenticate`, no
+`security.Reveal` call site, no evidence attribute, no report-schema change, no
+`ReportSecurity` field, no unsafe override, no path selection, no CLI, no diagnosis.
 
-**Touches a sealed Phase 2 contract.** Adding the channel fact to `transport.Continuation`
-extends ADR 0024's result shape, which is why it is listed rather than assumed.
+**Decisions taken, with their reopen conditions:**
 
-### Phase 3.2c — PLAIN authentication (not started, blocked on 3.2b)
+- [x] **The channel is not recorded as evidence.** `tls.verified` already states what a
+      handshake proved on the node that observed it; a second copy would be one fact with two
+      representations that can disagree. A runtime ownership fact and a diagnostic observation
+      are not the same thing. **Reopen when** a diagnosis rule needs a channel fact that the
+      TLS node cannot supply — which would mean the TLS node is incomplete, not that the
+      channel belongs in evidence
+- [ ] **No `ReportSecurity` field, and no unsafe override.** Both were anticipated by ADR 0028
+      and both are deferred under one shared condition, because neither is useful alone: the
+      three things a report could record are per-connection (already in the TLS evidence), a
+      constant (one policy value, unchoosable), or absent (no override). **Reopen when** a CLI
+      or application layer can carry an explicit per-run decision into the report
 
-Contract fixed by ADR 0028; only the mechanisms are missing.
+### Phase 3.2c — PLAIN authentication (not started, unblocked)
+
+Contract fixed by ADR 0028; the mechanisms it required exist as of 3.2b (ADR 0029). What
+remains is the authentication implementation itself.
 
 - [ ] `Authenticate` taking **exactly one** `HandshakeSession` and one `security.Credential`
 - [ ] `SecretFor` called with the **logical endpoint**, recovered from the session label by
@@ -807,6 +825,8 @@ Contract fixed by ADR 0028; only the mechanisms are missing.
       call `security.Reveal` (ADR 0027)
 - [ ] `SaslAuthenticate` v1, non-flexible, so the wire framing guard accepts it and a rejection
       arrives as an error code rather than a closed socket
+- [ ] `security.CredentialTransportPolicy.PermitsCredentials(session.Channel())` consulted
+      before anything is written, using the fact 3.2b propagated
 - [ ] Policy refusal recorded as `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, blocked by the TLS node
       when one exists
 - [ ] Broker-supplied `ErrorMessage` kept out of evidence, exactly as socket error text is

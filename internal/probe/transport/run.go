@@ -12,6 +12,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tls"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // Run inspects one endpoint and records what happened at every layer it reached.
@@ -162,7 +163,10 @@ func sweepAddress(
 
 	if params.TLS == nil {
 		conn, _ := connection.TakeConn()
-		result.add(conn, params.endpoint(), addr, tcpEvidence.ID())
+		// Plaintext is a positive fact here, not an inference: this branch runs
+		// because the caller asked for no TLS, so nothing was encrypted and
+		// nobody was identified. It is never concluded from a missing TLS node.
+		result.add(conn, params.endpoint(), addr, tcpEvidence.ID(), security.ChannelPlaintext)
 		return nil
 	}
 
@@ -205,8 +209,25 @@ func handshake(
 	}
 
 	wrapped, _ := session.TakeConn()
-	result.add(wrapped, params.endpoint(), addr, tlsEvidence.ID())
+	result.add(wrapped, params.endpoint(), addr, tlsEvidence.ID(), channelOf(session))
 	return nil
+}
+
+// channelOf classifies the connection a completed handshake produced.
+//
+// The fact comes from the handshake observation itself, through the Result that
+// owns the connection, so it describes this socket and no other. A handshake
+// that failed never reaches here — it produces no connection to classify — so
+// the two states below are the only ones a retained TLS path can be in.
+//
+// The distinction is the one docs/SECURITY.md draws: a completed handshake
+// proves the channel is encrypted, and only a verified one proves who is on the
+// other end of it.
+func channelOf(session *tls.Result) security.Channel {
+	if session.Verified() {
+		return security.ChannelTLSVerified
+	}
+	return security.ChannelTLSUnverified
 }
 
 // recordUnattempted records that an address was never tried because the caller's

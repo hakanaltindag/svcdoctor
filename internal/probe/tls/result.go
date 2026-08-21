@@ -49,6 +49,12 @@ import (
 type Result struct {
 	evidence domain.Evidence
 
+	// verified is whether this handshake established the peer's identity. It
+	// travels with the connection rather than only in the evidence, because the
+	// caller that owns the socket is the one that must decide what may be
+	// written to it. See Verified.
+	verified bool
+
 	// conn is nil unless the handshake completed. taken and closed are what make
 	// ownership single and terminal rather than advisory.
 	conn   *cryptotls.Conn
@@ -63,6 +69,22 @@ type Result struct {
 // connection resource: that a socket is still open is a property of this Result,
 // not a diagnostic fact about the peer.
 func (r *Result) Evidence() domain.Evidence { return r.evidence }
+
+// Verified reports whether this handshake established the peer's identity.
+//
+// It is the same fact the evidence records as tls.verified, computed once from
+// the same observation, and it is exposed here for one reason: a caller that is
+// about to decide what may be written to this connection needs the fact attached
+// to *this* value, which is the thing that owns the connection. Reading it back
+// out of the evidence instead would associate the fact with the socket by
+// convention rather than by construction, and a security fact that travels
+// beside its subject rather than with it is one refactor away from describing a
+// different connection.
+//
+// It is false for a failed handshake and false when verification was disabled.
+// Those two are different diagnostic facts — the evidence distinguishes them —
+// but neither established who the peer is, and this method answers only that.
+func (r *Result) Verified() bool { return r.verified }
 
 // Connected reports whether a live TLS connection is available to take.
 //

@@ -149,6 +149,71 @@ disabled, and yes over verified TLS.** This is the same shape item 6 already fix
 for `--insecure` and that `ForwardingPolicy` already implements for credential
 forwarding; it is applied, not invented.
 
+### The connection says what it proved
+
+As of Phase 3.2b the rule above is enforceable rather than merely written
+(**ADR 0029**). A live connection carries one fact describing itself:
+
+```text
+security.Channel   unknown | plaintext | tls-unverified | tls-verified
+```
+
+It travels beside the connection from the handshake that established it, through
+the transport chain and both Kafka steps, to the session a future authentication
+step would consume:
+
+```text
+tls.Result.Verified() -> transport.Continuation.Channel()
+                      -> kafka.Session.Channel()
+                      -> kafka.HandshakeSession.Channel()
+```
+
+The policy reads it and nothing else:
+
+```go
+var policy security.CredentialTransportPolicy      // zero value: require verified TLS
+if !policy.PermitsCredentials(session.Channel()) {
+    // nothing is sent, and the channel is why
+}
+```
+
+Four properties make this worth relying on:
+
+- **The zero value of the channel is `unknown`, not `plaintext`.** A connection
+  nobody classified and a connection known to be in the clear are different
+  facts. Both are refused; only one is a claim.
+- **The zero value of the policy is the strictest one.** A policy never set,
+  never parsed or never threaded through a call chain requires verified TLS —
+  the same choice `ForwardingPolicy` makes, for the same reason.
+- **Every unknown denies**, in both directions: an unclassified channel, an
+  undefined channel value and an undefined policy value all return false.
+- **The transport ownership path produces the fact; every other layer propagates
+  it unchanged and must not manufacture a stronger value.** That is the contract,
+  and it is enforced at three levels rather than claimed at one. No package
+  outside the one defining a carrier can forge a channel: the fields are
+  unexported, there is no setter, and the zero value it *can* construct is
+  `unknown`, which is refused. Inside a defining package the type system cannot
+  help — a package owns its own fields — so the adapter's constructors copy the
+  fact from the object being continued instead of accepting it as a parameter,
+  `forbidigo` forbids naming a `security.Channel` constant outside the transport
+  chain, and mutation-checked tests fail when a channel is forged or downgraded.
+  See ADR 0029 for what each level does and does not guarantee.
+
+**Encryption is not identity.** A completed handshake with verification disabled
+is `tls-unverified`, and it is refused. Encryption to an unidentified peer is
+encryption to whoever answered.
+
+The channel is deliberately **not** recorded as evidence. `tls.verified` already
+states what a handshake proved, on the node that observed it; a second copy would
+be one fact with two representations that can disagree. When a refusal needs to
+appear in a report it appears as a `SKIPPED` node with `EXEC_SKIPPED_BY_POLICY`,
+which is a different statement from the channel itself.
+
+**There is no unsafe override, and that is deliberate.** An explicit per-run
+opt-in needs an input surface, run configuration and a place in the report to be
+recorded, and none exists. A weaker policy value added now would be a bypass with
+no owner. See ADR 0029 for the condition that reopens it.
+
 **A refusal is recorded, not silent.** When policy forbids the attempt, the
 authentication node is `SKIPPED` with `EXEC_SKIPPED_BY_POLICY`, blocked by the TLS
 node whose `tls.verified` is false when one exists. A reader can then tell "not
