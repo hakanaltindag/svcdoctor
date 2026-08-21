@@ -1,0 +1,98 @@
+# golangci-lint configuration for svcdoctor.
+#
+# Strategy: high signal, low noise, predictable CI.
+# Only linters that earn their place are enabled. See docs/BACKLOG.md for the
+# architecture rules that are intentionally deferred until the packages they
+# govern actually contain Go code.
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard      # architecture boundary enforcement (see settings below)
+    - errcheck      # unhandled errors hide transport/protocol failures
+    - govet         # standard correctness checks
+    - ineffassign   # assignments that are never used
+    - staticcheck   # correctness, simplification, style (absorbs gosimple/stylecheck)
+    - unused        # dead code
+
+  settings:
+    depguard:
+      rules:
+        # Diagnosis is a pure function over frozen evidence.
+        # docs/ARCHITECTURE.md section 6, ADR 0002.
+        diagnosis-is-pure:
+          files:
+            - "**/internal/diagnosis/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/probe
+              desc: diagnosis must not import probes; it consumes normalized evidence only
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter
+              desc: diagnosis must not import adapters; it consumes normalized evidence only
+            - pkg: net
+              desc: diagnosis must not perform network I/O
+            - pkg: net/http
+              desc: diagnosis must not perform network I/O
+            - pkg: crypto/tls
+              desc: diagnosis must not perform TLS operations
+
+        # Probes are service-agnostic and produce observations, not diagnosis.
+        # docs/ARCHITECTURE.md section 3.
+        probe-is-service-agnostic:
+          files:
+            - "**/internal/probe/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter
+              desc: probes must not know about service adapters
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
+              desc: probes produce observations; they must not diagnose
+
+        # Adapters own protocol semantics; they never render.
+        # docs/ARCHITECTURE.md section 5.
+        adapter-does-not-render:
+          files:
+            - "**/internal/adapter/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/render
+              desc: adapters must not render output
+
+        # Renderers explain an existing report and discover nothing.
+        # docs/ARCHITECTURE.md section 7.
+        render-explains-only:
+          files:
+            - "**/internal/render/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/probe
+              desc: renderers must not execute probes
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter
+              desc: renderers must not execute adapters
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
+              desc: renderers must not produce findings
+
+        # Platform collects environment context, not diagnosis.
+        # docs/ARCHITECTURE.md section 15.
+        platform-collects-context:
+          files:
+            - "**/internal/platform/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter
+              desc: platform packages must not contain adapter logic
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/probe
+              desc: platform packages must not drive probes
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
+              desc: platform packages must not produce diagnosis
+
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+    rules:
+      # Test helpers legitimately ignore errors while asserting.
+      - path: _test\.go$
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

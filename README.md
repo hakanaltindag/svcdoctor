@@ -4,15 +4,36 @@
 
 ## Project status
 
-This repository is currently **scaffold and design stage**. No Go implementation exists yet.
+Repository and tooling bootstrap exists. **No svcdoctor runtime, domain, or protocol
+implementation has been written yet**, and the tool is not usable.
+
+Concretely:
+
+- The Go module, license, quality gates, and CI are in place.
+- There are zero Go source files. Nothing diagnoses anything yet.
 
 The first implementation target will be Kafka. PostgreSQL follows after the Kafka vertical slice is complete and validated.
 
 | | |
 |---|---|
 | Repository | `github.com/hakanaltindag/svcdoctor` |
-| Future Go module path | `github.com/hakanaltindag/svcdoctor` |
-| License | Apache-2.0 (ADR 0006; `LICENSE` file added during bootstrap) |
+| Go module path | `github.com/hakanaltindag/svcdoctor` |
+| Go version | 1.26 |
+| License | Apache-2.0 (ADR 0006) |
+
+## Development
+
+```sh
+make check     # full local quality gate: fmt-check, test, vet, lint, build
+make fmt       # format sources in place
+make help      # list targets
+```
+
+`make check` mirrors CI. Gates that require Go packages report `SKIPPED` until the first
+package exists; they activate automatically at that point. No placeholder Go code exists to
+make them artificially green.
+
+Linting uses [golangci-lint](https://golangci-lint.run) `v2.13.1` (v2 config format).
 
 ## Architectural invariant
 
@@ -84,10 +105,13 @@ long-term monitoring, LLM-based core diagnosis, and generic rule scripting DSLs.
 
 ## Repository layout
 
-Directories below are scaffold only. They contain no Go code.
+The `internal/`, `cmd/`, and `test/` directories below are scaffold only. They contain no Go code.
 
 ```text
 svcdoctor/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 ├── cmd/
 │   └── svcdoctor/                 # CLI entrypoint boundary; intentionally empty
 ├── internal/
@@ -122,6 +146,10 @@ svcdoctor/
 │   ├── SECURITY.md
 │   ├── BACKLOG.md
 │   └── decisions/
+├── .golangci.yml
+├── Makefile
+├── go.mod
+├── LICENSE
 └── .gitignore
 ```
 

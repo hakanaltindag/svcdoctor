@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only by default. No job in this workflow writes to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      # The repository may legitimately contain zero Go packages before Phase 1.
+      # Gates that require packages are skipped explicitly rather than faked.
+      - name: Detect Go packages
+        id: pkgs
+        run: echo "count=$(go list ./... 2>/dev/null | wc -l | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Format check
+        run: make fmt-check
+
+      - name: Test
+        run: make test
+
+      - name: Vet
+        run: make vet
+
+      - name: Build
+        run: make build
+
+      - name: Lint
+        if: steps.pkgs.outputs.count != '0'
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1

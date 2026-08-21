@@ -2,11 +2,12 @@
 
 ## Repository state
 
-No Go implementation exists yet. The repository contains directory scaffold, architecture
-documentation, and decision records only.
+Repository and tooling bootstrap exists. **No Go implementation exists yet** — there are zero
+Go source files.
 
-A checked box in the documentation section below means a decision was recorded, not that code
-exists. Nothing may be assumed implemented unless a corresponding Go package actually exists.
+A checked box below means the item exists and validates. A checked box in the documentation
+or bootstrap sections does **not** mean any architecture is implemented. Nothing may be
+assumed implemented unless a corresponding Go package actually exists.
 
 ## Open decisions
 
@@ -35,10 +36,27 @@ See `docs/ARCHITECTURE.md` section 18.
 
 The items above are documentation decisions only. No code exists for any of them.
 
-### Bootstrap and implementation (not started)
+### Repository bootstrap (complete)
 
-- [ ] `LICENSE` file (Apache-2.0)
-- [ ] `go.mod` for `github.com/hakanaltindag/svcdoctor`
+- [x] Apache-2.0 `LICENSE`
+- [x] Go module initialization (`github.com/hakanaltindag/svcdoctor`, Go 1.26)
+- [x] Local quality-gate `Makefile` (`fmt`, `fmt-check`, `test`, `vet`, `lint`, `build`, `check`)
+- [x] golangci-lint configuration (v2 format, pinned `v2.13.1`)
+- [x] GitHub Actions CI workflow
+
+Tooling only. No architecture is implemented by any of the above.
+
+Deferred architecture lint rules, to activate as the packages gain Go code:
+
+- [ ] depguard rule for the adapter contract / registry package (placement still open)
+- [ ] depguard rule for CLI orchestration (placement still open)
+- [ ] Kafka adapter must not implement generic DNS/TCP/TLS transport (needs an import-level
+      expression once `internal/adapter/kafka/` exists; not expressible as a package deny today)
+- [ ] `noctx` / `bodyclose` once network-facing code exists
+- [ ] `gosec` once there is code with meaningful signal
+
+### Implementation (not started)
+
 - [ ] Adapter registration boundary
 - [ ] Domain primitives for observations/evidence/findings/reports
 - [ ] Report schema v1 implementation
