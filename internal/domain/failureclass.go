@@ -20,9 +20,9 @@ import (
 //
 //   - DNS, TCP, and TLS failures stay distinct, because first-broken-layer
 //     accuracy depends on knowing which one actually broke.
-//   - Authentication and authorization stay distinct, because "your credentials
-//     are wrong" and "your credentials are fine but you lack permission" lead to
-//     different actions.
+//   - Authentication and authorization stay distinct, because "the peer refused
+//     the material you presented" and "you authenticated and lack permission"
+//     lead to different actions.
 //   - A local execution timeout is not a remote failure. An exhausted local
 //     budget means nothing was learned about the target.
 //   - A capability svcdoctor does not support, and a privilege svcdoctor does
@@ -134,7 +134,20 @@ const (
 	FailureAuthMechanismUnsupported
 	// FailureAuthMechanismNotOffered means the peer does not offer the requested mechanism.
 	FailureAuthMechanismNotOffered
-	// FailureAuthCredentialsRejected means the peer rejected the credentials.
+	// FailureAuthCredentialsRejected means the peer refused the authentication
+	// material it was presented.
+	//
+	// That is the whole of the claim, and the boundary is deliberate. It does
+	// **not** state that the secret was wrong, that the principal does not
+	// exist, that an account is disabled or locked, or that the peer's own
+	// authentication backend was working when it answered. A refusal is
+	// routinely returned for all of those, and services in scope deliberately
+	// collapse them into one response so that a client cannot probe which is
+	// true. A producer that could distinguish them would be recording a
+	// service-specific fact as an attribute, not reaching for a narrower class.
+	//
+	// The root cause is therefore unknown at this layer. Naming a likely one is
+	// a hypothesis, and a hypothesis is diagnosis work over frozen evidence.
 	FailureAuthCredentialsRejected
 
 	// Authorization.

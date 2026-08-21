@@ -227,3 +227,63 @@ func TestCredentialAuthorityIgnoresTheResolvedAddressEntirely(t *testing.T) {
 		t.Errorf("broker received %d authentications from address-bound credentials, want 0", got)
 	}
 }
+
+// TestEndpointMismatchConsumesTheSessionDeliberately pins the ownership decision
+// that a mismatch shares with a policy refusal, and the reason it is a decision
+// rather than a consequence.
+//
+// The socket is *not* broken here. Nothing was written, so the broker is still
+// waiting for the SaslAuthenticate the handshake promised it, and a corrected
+// credential would be a legal next message on this very connection. Kafka
+// neither requires nor expects a close.
+//
+// svcdoctor closes it anyway, because Authenticate consumes what it is given.
+// Handing the pre-authenticated session back would give ownership two exits and
+// make trying several credentials against one broker the cheapest thing to
+// write. See ADR 0030 section 10.
+func TestEndpointMismatchConsumesTheSessionDeliberately(t *testing.T) {
+	target := verifiedTarget(t)
+	conn := target.conn(t)
+	session := target.session(t)
+
+	// Precondition: the handshake completed, so the peer is mid-SASL and the
+	// socket is in the one state where a SaslAuthenticate is expected.
+	before := target.broker.appBytesRead()
+	if target.broker.saslRequestCount() != 1 {
+		t.Fatalf("broker saw %d handshakes, want 1", target.broker.saslRequestCount())
+	}
+
+	_, err := Authenticate(t.Context(), target.builder, session,
+		credentialFor(t, "secondary.internal", 9092), AuthParams{})
+	if !errors.Is(err, security.ErrEndpointMismatch) {
+		t.Fatalf("error = %v, want one wrapping ErrEndpointMismatch", err)
+	}
+
+	// Nothing reached the peer: the protocol state is untouched, not broken.
+	target.broker.awaitIdle()
+	if after := target.broker.appBytesRead(); after != before {
+		t.Errorf("%d protocol bytes reached the peer, want 0", after-before)
+	}
+
+	// And the session is consumed regardless, which is the ownership decision.
+	if got := conn.closeCount(); got == 0 {
+		t.Error("the connection survived a mismatch; Authenticate must consume the session")
+	}
+	if session.Available() {
+		t.Error("the session still offers its connection after a mismatch")
+	}
+	if _, ok := session.TakeConn(); ok {
+		t.Error("a consumed session handed its connection to a second caller")
+	}
+
+	// Retrying with the right credential therefore cannot reuse this session,
+	// which is the property that keeps a credential sweep from being cheap.
+	_, retry := Authenticate(t.Context(), target.builder, session,
+		credentialFor(t, authHost, 9092), AuthParams{})
+	if !errors.Is(retry, ErrInvalidInput) {
+		t.Errorf("retry error = %v, want ErrInvalidInput: the session is spent", retry)
+	}
+	if got := target.broker.authRequestCount(); got != 0 {
+		t.Errorf("broker received %d authentications, want 0", got)
+	}
+}

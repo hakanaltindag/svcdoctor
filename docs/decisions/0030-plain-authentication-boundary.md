@@ -209,9 +209,23 @@ requires svcdoctor to avoid, resolved by the protocol itself.
 
 **It is authentication, never authorization.** `AUTHZ_DENIED` means an identity
 authenticated and was then refused an operation, and this exchange performs no
-operation to be refused. Nothing the response carries distinguishes "wrong
-password" from "unknown user", and neither does the class — which is correct,
-because the response does not prove which.
+operation to be refused.
+
+**And it is a refusal, not a cause.** `AUTH_CREDENTIALS_REJECTED` means exactly
+*the peer refused the authentication material it was presented*, and carries none
+of the readings it invites:
+
+- not "the secret is wrong";
+- not "the principal does not exist";
+- not "the account is disabled or locked";
+- not "the peer's authentication backend was healthy when it answered";
+- not "the root cause is known".
+
+Kafka answers with this one code for all of those, and its error message is
+deliberately generic for the first two so that a client cannot probe which is
+true — svcdoctor does not read that message anyway (§5). The class is therefore
+as narrow as the evidence. Naming a likely cause is a hypothesis over frozen
+evidence, and belongs to diagnosis.
 
 No Kafka-specific class enters `internal/domain`, and no error text is parsed.
 
@@ -267,25 +281,73 @@ and a transposition would compile.
 | Policy refused to send | SKIPPED | closed |
 | Credential bound elsewhere | none | closed |
 
-The criterion is unchanged from ADR 0026 and it is the protocol's, not the
-recorded state's: **does this socket have a defined next message?** A test holds
-the two apart by showing the same broker-error-code shape keeping its socket at
-L4 and losing it at L5.
+**The rows do not all close for the same reason, and conflating them would make
+this record claim something untrue.** Three of them are protocol-driven and three
+are svcdoctor's own ownership decision:
 
-The UNKNOWN row deserves its own sentence, because nothing is known to be wrong
-with the peer. A request may be in flight and a response unread, so the next
-reader on that socket would decode the wrong bytes. The connection is closed
-because its *state* is unknown, not because the *result* is.
+| Row | Why the socket goes |
+|---|---|
+| Credentials rejected | **protocol** — Kafka fails the connection after answering `SASL_AUTHENTICATION_FAILED` (KIP-152 sends the code, then closes) |
+| Exchange broke, peer closed, malformed | **protocol** — the socket's protocol state is unknown |
+| Budget expired or cancelled | **protocol state** — a request may be in flight and a response unread, so the next reader would decode the wrong bytes |
+| Policy refused to send | **svcdoctor** — see below |
+| Credential bound elsewhere | **svcdoctor** — see below |
 
-**The refusal row was the one genuine open question, and both options were
-analysed.** A non-consuming API would hand the still-live session back, since a
-refusal writes nothing and the socket is untouched. It is rejected: after a
-SaslHandshake the broker accepts only that mechanism's SaslAuthenticate, so a
-session whose authentication is refused has **no other legal operation on that
-socket**. There is no reusable connection being discarded — there is a connection
-whose only continuation svcdoctor has just declined to send. A consuming API also
-gives ownership one path instead of two, at the one step that handles a
-credential.
+The ADR 0026 criterion — *does this socket have a defined next message?* — governs
+the first three, and a test holds the distinction against L4 by showing the same
+broker-error-code shape keeping its socket at ApiVersions and losing it here. The
+UNKNOWN row deserves its own sentence because nothing is known to be wrong with
+the peer: the connection is closed because its *state* is unknown, not because
+the *result* is.
+
+**It does not govern the last two, and applying it to them would be false.** Both
+are caught before a single SaslAuthenticate byte is written, so the socket is
+exactly as the handshake left it: the broker is waiting for that mechanism's
+SaslAuthenticate, which is a perfectly defined next message. Kafka neither
+requires nor expects these connections to close. svcdoctor closes them.
+
+#### Policy refusal
+
+The one message this socket accepts is the one the policy forbids, and the
+prohibition cannot lift: the channel is a property of this connection and does not
+change. So nothing usable is discarded, and closing is the obvious disposal of a
+resource with no remaining purpose. **Still svcdoctor's decision rather than
+Kafka's** — the protocol would happily take the request.
+
+#### Credential endpoint mismatch
+
+This one genuinely discards a reusable socket, and the record says so plainly
+rather than borrowing the protocol argument above.
+
+> Endpoint mismatch occurs before authentication I/O. The connection is not
+> closed because Kafka made it unusable — the broker is still waiting for a
+> SaslAuthenticate and a corrected credential would be a legal next message.
+> svcdoctor deliberately discards it because `Authenticate` is a consuming
+> ownership boundary, and returning the pre-authenticated session would
+> complicate ownership and retry semantics.
+
+Three options were compared:
+
+| | **A. Close (chosen)** | **B. Return the original `HandshakeSession`** | **C. A richer result carrying a live pre-auth session** |
+|---|---|---|---|
+| Ownership clarity | One rule: `Authenticate` consumes, always | Two rules, split by which error was returned | Two rules, plus a result type with two possible live sessions |
+| Double-owner risk | None — the connection is taken once and closed on every non-success path | Real: `TakeConn` already succeeded, so the session must be re-armed or a second handle minted | Higher: the result and the caller's original session both reference one socket |
+| Retry semantics | Retry means re-running the chain, which re-measures what is about to be authenticated over | Retry is cheap and silent, and the evidence still describes the *first* measurement | Same as B, with the reusable socket made prominent by the API |
+| Accidental credential reuse | Impossible — there is no live session to present a second credential to | A loop over credentials on one socket becomes the easy thing to write, which is credential spraying with a tidy API | Same as B, actively encouraged |
+| API complexity | One error path, no new type | A `HandshakeSession` in a post-`Authenticate` state that is neither fresh nor consumed | A new result type whose meaning depends on which failure occurred |
+| Future Metadata use | None lost: Metadata on a SASL listener needs an authenticated session, which a mismatch never produced | None gained | None gained |
+| Protocol-mandated? | **No.** svcdoctor policy | No | No |
+
+B and C are rejected on the third and fourth rows together. A caller holding a
+live post-handshake socket and a rejected credential is one loop away from trying
+several credentials against one broker — the lockout-relevant act ADR 0028 §1
+built the singular signature to keep visible. Making the retry *cheap* is the
+problem; making it *possible* was never in question, and it stays possible by
+re-running the chain, which is also the honest thing to do because the evidence
+then describes the connection that was actually used.
+
+The socket being technically reusable is therefore acknowledged and deliberately
+not exploited.
 
 ### 11. `AuthenticatedSession` is a third type, on the same grounds as the second
 

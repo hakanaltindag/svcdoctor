@@ -48,8 +48,13 @@ const (
 //
 // It is the one code this step normalizes beyond the shared mapping, under the
 // test the two steps before it use: **the response must prove the generic fact
-// by itself.** On a SaslAuthenticate response it means the broker evaluated the
-// credential and refused it, which is what AUTH_CREDENTIALS_REJECTED says.
+// by itself.** On a SaslAuthenticate response it means the broker refused the
+// authentication material it was presented, which is what
+// AUTH_CREDENTIALS_REJECTED says — and it means nothing further. Kafka returns
+// this one code for an unknown principal, a wrong secret, a disabled account and
+// a failing authentication backend alike, and its own error message is
+// deliberately generic so that a client cannot tell which. So the code proves a
+// refusal happened; it proves nothing about why.
 //
 // It exists because of KIP-152, which added it so that a rejected credential
 // arrives as an error code instead of a closed socket — the same ambiguity ADR
@@ -132,6 +137,23 @@ func (p AuthParams) validate() error {
 // defect in whoever wired the call, not a fact about the target, and an evidence
 // node saying "the wrong credential was offered" would be svcdoctor reporting on
 // its own caller. See ADR 0028 section 2.
+//
+// # Ownership on a local invocation failure
+//
+// Authenticate consumes the session in every outcome, including the ones that
+// send nothing. A mismatch is caught before any SaslAuthenticate byte is
+// written, so the socket is left exactly as the handshake left it: the broker is
+// waiting for that mechanism's SaslAuthenticate, and a corrected credential
+// would be a legal next message on it.
+//
+// **The connection is closed anyway, and Kafka is not the reason.** It is closed
+// because this function is a consuming ownership boundary: it takes the
+// connection before it validates, so returning the pre-authenticated session on
+// one error path would give ownership two exits, make retry semantics depend on
+// which error was returned, and hand back a live socket already bound to a
+// credential the caller got wrong. A caller that wants to retry re-runs the
+// chain, which re-measures what it is about to authenticate over. See ADR 0030
+// section 10.
 func Authenticate(
 	ctx context.Context,
 	builder *domain.GraphBuilder,
@@ -476,14 +498,22 @@ func (o authObservation) classify() (domain.State, domain.FailureClass) {
 // response.
 //
 // One code more than the handshake's mapping is translated, under the same test:
-// SASL_AUTHENTICATION_FAILED means the broker evaluated the credential and
-// refused it, which is what AUTH_CREDENTIALS_REJECTED says and nothing more.
+// SASL_AUTHENTICATION_FAILED means the broker refused the authentication
+// material it was presented, which is what AUTH_CREDENTIALS_REJECTED says and
+// nothing more.
 //
 // **It is authentication, never authorization.** AUTHZ_DENIED means an identity
 // authenticated and was then refused an operation, and this exchange performs no
-// operation to be refused. Nothing a SaslAuthenticate response carries
-// distinguishes "wrong password" from "unknown user" either, and neither does
-// this class — which is correct, because the response does not prove which.
+// operation to be refused.
+//
+// **And it is a refusal, not a cause.** Kafka answers with this one code for a
+// wrong secret, an unknown principal, a disabled or locked account, and an
+// authentication backend that failed while answering. Its error message is
+// deliberately generic for the first two so that a client cannot probe which,
+// and svcdoctor does not read that message anyway. The class therefore carries
+// no claim that the secret was wrong, that the principal exists or does not, or
+// that the peer's authentication backend was healthy. Which of those is true is
+// a hypothesis over frozen evidence, and belongs to diagnosis.
 //
 // Everything else delegates to the handshake's mapping, so UNSUPPORTED_VERSION
 // stays PROTOCOL_UNSUPPORTED_VERSION and UNSUPPORTED_SASL_MECHANISM stays the

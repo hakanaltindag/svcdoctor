@@ -359,12 +359,28 @@ apart — which needs a declared identity-bearing kind first.
 | Policy refused to send | `SKIPPED` | closed |
 | Credential bound elsewhere | none | closed |
 
-The criterion is the protocol's, not the recorded state's: **does this socket have
-a defined next message?** After a SaslHandshake a broker accepts only that
-mechanism's SaslAuthenticate, so a refused session has no other legal operation on
-that socket — nothing reusable is being discarded. An expired budget closes for a
-different reason: a request may be in flight and a response unread, so the socket's
-*state* is unknown even though nothing is known to be wrong with the peer.
+**The rows do not all close for the same reason.** The first three are the
+protocol's doing: Kafka fails the connection itself after a rejected credential,
+a broken exchange leaves a socket whose protocol state nobody knows, and an
+expired budget may leave a request in flight and a response unread, so the next
+reader would decode the wrong bytes. The criterion there is *does this socket have
+a defined next message?*
+
+**The last two are svcdoctor's own decision, and the distinction is worth being
+exact about.** Both are caught before any SaslAuthenticate byte is written, so the
+broker is still waiting for one and Kafka neither requires nor expects a close.
+For a policy refusal the one message the socket accepts is the one the policy
+forbids, and the channel cannot change, so nothing usable is discarded. For an
+endpoint mismatch a corrected credential *would* be a legal next message on that
+same socket:
+
+> Endpoint mismatch occurs before authentication I/O. The connection is not closed
+> because Kafka made it unusable; svcdoctor deliberately discards it because
+> `Authenticate` is a consuming ownership boundary, and returning the
+> pre-authenticated session would complicate ownership and retry semantics — and
+> would make trying several credentials against one broker the cheapest thing to
+> write. Retrying means re-running the chain, which re-measures what is about to
+> be authenticated over. See ADR 0030 §10.
 
 
 ## Report output mode

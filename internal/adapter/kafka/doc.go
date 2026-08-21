@@ -81,6 +81,14 @@
 // point the socket is more usable than the one it consumed, which is why
 // success produces a distinct AuthenticatedSession.
 //
+// Two outcomes close a socket the protocol left perfectly usable, and they are
+// ownership decisions rather than protocol facts: a policy refusal, and a
+// credential whose endpoint binding failed. Both are caught before any
+// authentication byte is written, so the broker is still waiting for the
+// SaslAuthenticate it was promised. svcdoctor discards the connection because
+// Authenticate consumes what it is given, not because Kafka made it unusable.
+// See ADR 0030 section 10.
+//
 // # What it refuses to decide
 //
 // It records what the broker advertised. It does not decide that a version is
