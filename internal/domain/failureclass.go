@@ -71,6 +71,20 @@ const (
 	FailureTCPNetworkUnreachable
 	// FailureTCPHostUnreachable means the host could not be reached.
 	FailureTCPHostUnreachable
+	// FailureTCPConnectionFailed means the connection attempt failed in a way
+	// svcdoctor could not classify further.
+	//
+	// It is the conservative floor of the TCP vocabulary, not a catch-all to
+	// reach for: a producer uses it only after the specific classes above have
+	// been ruled out. The failure is still positively evidenced — the attempt was
+	// made and did not connect — so it remains a FAIL. What is unknown is why,
+	// and a precise-sounding wrong class would be worse than an honest vague one.
+	//
+	// The case exists because error classification is platform-dependent. A
+	// refused connection surfaces as a recognizable error on the platforms
+	// svcdoctor inspects today, but a producer that cannot recognize one must
+	// still record what it saw rather than guess.
+	FailureTCPConnectionFailed
 
 	// TLS.
 
@@ -158,6 +172,7 @@ var failureClassNames = [...]string{
 	FailureTCPConnectionReset:    "TCP_CONNECTION_RESET",
 	FailureTCPNetworkUnreachable: "TCP_NETWORK_UNREACHABLE",
 	FailureTCPHostUnreachable:    "TCP_HOST_UNREACHABLE",
+	FailureTCPConnectionFailed:   "TCP_CONNECTION_FAILED",
 
 	FailureTLSHandshakeFailure:          "TLS_HANDSHAKE_FAILURE",
 	FailureTLSCertificateExpired:        "TLS_CERTIFICATE_EXPIRED",

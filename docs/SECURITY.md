@@ -121,6 +121,22 @@ is covered.
 Non-identifying values are untouched by redaction and stay readable, which is what keeps a
 shareable report diagnostically useful. See ADR 0020.
 
+### Identity inside evidence identifiers
+
+Evidence identifiers embed the things they identify — a hostname for a DNS lookup, an endpoint
+and an address for a TCP attempt (ADR 0019). That is safe, but for a different reason than
+everything else: identifiers are **replaced wholesale** with `evidence-NNN` rather than
+rewritten in place, so a hostname reachable only through an identifier still disappears.
+
+The distinction matters because the two mechanisms have different failure modes. A value in a
+subject or attribute is removed only if redaction recognizes its shape; a value inside an
+identifier is removed because the entire string is discarded. A probe therefore may put
+identity in an identifier freely, and must still keep any identity it puts in an *attribute*
+in a recognizable shape.
+
+`test/security/tcp_evidence_redaction_test.go` proves the identifier path with a hostname that
+appears in no subject, no attribute and no prose.
+
 ## Redaction boundary
 
 Redaction is:

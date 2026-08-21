@@ -45,6 +45,20 @@ record something the lookup did not observe. A layer that does know a port uses
 `SubjectKindTarget` is wrong here: the lookup is about one host the run is trying
 to reach, not about the diagnostic request as a whole.
 
+TCP evidence follows the same rule to a different answer: its subject is the
+**concrete `ip:port` that was dialed**, because that is what the attempt observed.
+A TCP connection never uses a name. Which endpoint the attempt belonged to is
+scope, and it lives in the identifier (ADR 0019), not in a claim on the node.
+
+Stated generally, and this is the part later probes should copy:
+
+> **A subject names what its layer actually touched — not what the run is
+> ultimately about, and not what a neighbouring layer touched.**
+
+The consequence is that one endpoint produces subjects that differ by layer: a
+name at L1, an address at L2. That is correct rather than inconsistent. They are
+connected by the graph, which is where relationships belong (ADR 0013).
+
 `security.Endpoint` is not reused as the subject. It exists to bind a credential
 to a place and requires a port; a subject is a label on a fact. Keeping them
 separate also keeps `internal/domain` a leaf.
@@ -66,6 +80,12 @@ prose. Redaction recognizes an identifying attribute only when it parses as an I
 address or a host-port reference (ADR 0018), so any other shape survives into a
 shareable report. This is a security requirement on every future probe and
 adapter, not a style preference.
+
+Phase 2.2 tested the rule from the other direction: the TCP probe records **no
+attributes at all**. Its subject, state, failure class and duration say everything
+it observed, and a peer-address attribute would restate the subject while a family
+attribute would restate the address. The discipline is not "add the obvious
+attributes" — it is that an attribute must carry a fact nothing else carries.
 
 ### Classification is conservative, and the order of the checks is the contract
 
@@ -106,6 +126,17 @@ There is deliberately **no generic `Probe` interface**. DNS, TCP and TLS take
 different inputs and produce different facts; a shared shape imposed before the
 transport chain exists would be a guess. Concrete functions first.
 
+### Classification uses structured errors, never text
+
+Phase 2.1 read `*net.DNSError` fields; Phase 2.2 reads error numbers through
+`errors.Is`. Neither matches on error text, and no probe may. Error strings differ
+by platform and by Go release, so a probe that matched them would make confident
+claims that quietly stop being true — the exact failure mode svcdoctor exists to
+avoid producing in others.
+
+Where a platform reports a condition in a form the mapping does not recognize, the
+probe records a conservative class rather than guessing a precise one.
+
 ## Context
 
 Phase 1 built the whole evidence model with no producer, so every question about
@@ -113,6 +144,12 @@ Phase 1 built the whole evidence model with no producer, so every question about
 answers it gives will be copied by every probe and adapter after it. Writing them
 down now is cheaper than discovering in Phase 3 that two probes disagree about
 what a subject means.
+
+Phase 2.2 was the first test of that. The TCP probe adopted the contract without
+changing it, and the two places it had to extend rather than follow — a subject
+that is an address rather than a name, and a produced resource — are recorded here
+and in ADR 0021. Nothing in the contract had to be walked back, which is the
+strongest evidence available that it was not overfitted to DNS.
 
 ## Rejected alternatives
 

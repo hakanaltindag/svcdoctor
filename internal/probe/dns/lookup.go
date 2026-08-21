@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 )
 
 // StepLookup names the operation this probe performs.
@@ -28,10 +29,6 @@ const StepLookup domain.Step = "dns.lookup"
 // breakdowns are derivable from the list, and a derived attribute is a second
 // copy of a fact that can drift from the first.
 const AttrAnswers domain.AttributeKey = "dns.answers"
-
-// idSeparator joins the step and the subject in an evidence identifier. A
-// hostname cannot contain it, which is what keeps the identifier unambiguous.
-const idSeparator = "/"
 
 // ErrInvalidInput reports that the probe was called with something it cannot
 // use, such as an empty hostname or a nil resolver.
@@ -75,24 +72,16 @@ func Lookup(ctx context.Context, r Resolver, host string) (domain.Evidence, erro
 // It also performs no normalization. Lowercasing, trailing-dot handling and IDNA
 // conversion all change what was queried, and evidence must record the question
 // that was actually asked.
+//
+// A host containing the identifier separator is accepted. Phase 2.1 refused one,
+// which was a bookkeeping constraint leaking into what svcdoctor would look at;
+// the identifier encoding now escapes it instead (ADR 0019).
 func validateHost(host string) error {
 	switch {
 	case host == "":
 		return fmt.Errorf("%w: host must not be empty", ErrInvalidInput)
 	case strings.TrimSpace(host) != host:
 		return fmt.Errorf("%w: host must not have leading or trailing whitespace", ErrInvalidInput)
-	case strings.Contains(host, idSeparator):
-		// The evidence identifier is "<step>/<host>", so a host containing the
-		// separator would produce an identifier that cannot be read back
-		// unambiguously.
-		//
-		// This rejection is acceptable here only because no resolvable name
-		// contains a slash, so nothing legitimate is refused. It is not a
-		// precedent: a probe whose input can legitimately contain the separator
-		// must change how identifiers encode the subject rather than reject
-		// input the layer would otherwise accept. Identifier encoding is an open
-		// Phase 2.2 decision; see ADR 0019.
-		return fmt.Errorf("%w: host must not contain %q", ErrInvalidInput, idSeparator)
 	}
 	for _, r := range host {
 		if unicode.IsControl(r) {
@@ -178,7 +167,7 @@ func (o observation) evidence() (domain.Evidence, error) {
 	}
 
 	return domain.NewEvidence(domain.EvidenceInput{
-		ID:           evidenceID(StepLookup, o.host),
+		ID:           evidenceID(o.host),
 		Subject:      subject,
 		Layer:        domain.LayerDNS,
 		Step:         StepLookup,
@@ -292,10 +281,10 @@ func classifyResolverError(err error) domain.FailureClass {
 
 // evidenceID derives the identifier of one evidence node.
 //
-// The scheme is "<step>/<subject reference>": derived from what the node is
-// about, so the same step against the same subject yields the same identifier on
-// every run, with no clock, no counter and no random source involved. See
-// ADR 0019.
-func evidenceID(step domain.Step, ref string) domain.EvidenceID {
-	return domain.EvidenceID(step.String() + idSeparator + ref)
+// A lookup is about a name and nothing else, so the queried name is the only
+// component. The encoding, including what happens to a name containing the
+// separator, belongs to internal/probe so that every probe agrees on it.
+// See ADR 0019.
+func evidenceID(host string) domain.EvidenceID {
+	return probe.EvidenceID(StepLookup, host)
 }

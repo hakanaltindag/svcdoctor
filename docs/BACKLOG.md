@@ -43,7 +43,7 @@ stale and should be corrected against this table.
 |---|---|---|
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
-| 2 | Generic Transport Engine | **In progress** — 2.1 DNS complete |
+| 2 | Generic Transport Engine | **In progress** — 2.1 DNS and 2.2 TCP complete |
 | 3 | Kafka Vertical Slice | Not started |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
@@ -332,7 +332,7 @@ Phase 2 delivers a **reusable generic transport engine**: the facts a client can
 reaching an endpoint, and a live connection the first adapter can take over in Phase 3. It
 delivers no product.
 
-Phase 2.1 is complete. Everything else below is not started.
+Phases 2.1 and 2.2 are complete. Everything else below is not started.
 
 ### Phase 2.1 — Generic probe contracts and DNS (complete)
 
@@ -373,39 +373,71 @@ Questions 2.1 surfaced:
       today, and `TestNXDomainStaysReserved` keeps it that way. A third class was rejected: it
       would split one diagnostic outcome for a distinction no available resolver reports. See
       ADR 0020.
-- [ ] **Evidence identifier scoping and encoding — open, Phase 2.2.** The Phase 2.1 scheme
-      `<step>/<subject reference>` stands and is not being redesigned before a second probe
-      exists. Two parts stay open: *scoping*, because one identifier means one node per
-      `(step, subject)` per run and topology may legitimately probe one endpoint twice — the
-      same question as `Origin`; and *encoding*, how the subject is embedded and which
-      separator is used. **Binding rule either way:** a delimiter choice must never decide what
-      input a layer accepts. The DNS probe rejects a host containing `/` only because no
-      resolvable name has one; a probe whose input can legitimately contain the separator must
-      change the encoding, never reject input the layer would otherwise accept. See ADR 0019.
-- [ ] **Where generic transport attribute keys live.** `dns.answers` is owned by the probe
-      package, which is correct while the probe is its only consumer. A future rule in
-      `internal/diagnosis/transport/` cannot import it — depguard forbids diagnosis importing
-      probes — so it would have to duplicate the string or the key would have to move
-      somewhere both can import. `internal/domain` is the candidate and already owns
-      service-neutral DNS vocabulary in `FailureClass`. **Reopen when** the first transport
-      rule needs the key. This is the generic half of the open attribute-key question and does
-      **not** settle the service-specific half.
+- [x] **Evidence identifier scoping and encoding — settled in Phase 2.2.** The scheme is now
+      `<step>[/<component>...]` with each component escaped (`%` → `%25`, `/` → `%2F`), built
+      by `probe.EvidenceID` so both probes share one implementation. TCP forced it: one name
+      resolves to several addresses, and two names can share an address, so an identifier
+      needs both the endpoint and the address. The delimiter rule is now honoured rather than
+      merely stated — the DNS probe no longer refuses a host containing `/`. See ADR 0019.
+- [ ] **Where generic transport attribute keys live — revisited in Phase 2.2, still open, and
+      no longer urgent.** The TCP probe records **no attributes**, so the second producer
+      created no duplication and no shared vocabulary is justified yet; `internal/probe` holds
+      only the identifier encoding. The original problem is unchanged: a future rule in
+      `internal/diagnosis/transport/` cannot import `dns.AttrAnswers`, because depguard forbids
+      diagnosis importing probes. **Reopen when** the first transport rule needs a key, or when
+      two probes need the same one. This is the generic half of the attribute-key question and
+      does **not** settle the service-specific half.
+
+### Phase 2.2 — Generic TCP probe and connection ownership (complete)
+
+Implemented in `internal/probe/tcp/` and `internal/probe/`, standard library plus
+`internal/domain` only, one new interface:
+
+- [x] TCP probe attempting one concrete address per call, so multiple resolved addresses
+      become multiple independently identifiable evidence nodes
+- [x] **Connection ownership transfer** — `Result` owns a successful connection, `TakeConn`
+      transfers it exactly once, `Close` releases it only while still owned (**ADR 0021**)
+- [x] `Dialer` hermetic test seam taking a `netip.AddrPort`, so a probe cannot resolve a name,
+      and a standard-library `SystemDialer`
+- [x] Structured error classification through `errors.Is` on error numbers, never error text
+- [x] Conservative timeout attribution: the network stack's `ETIMEDOUT` is a remote fact, any
+      other timeout is svcdoctor's own budget and stays `UNKNOWN`
+- [x] `domain.FailureTCPConnectionFailed`, the conservative floor for a dial failure that
+      cannot be classified further
+- [x] Shared identifier encoding in `internal/probe`, with escaping so no input is refused
+      (**ADR 0019**, amended)
+- [x] Cross-package redaction contract test covering a hostname reachable only through an
+      evidence identifier
+- [x] `noctx` activated; `probe-is-service-agnostic` and `noctx` both verified empirically
+      against deliberate violations
+
+**Deliberately not done in 2.2:** no TLS, no transport chain, no `GraphBuilder`
+orchestration, no `BlockedBy`, no short-circuit logic, no address selection or racing, no
+findings, no service knowledge, no `Origin`.
+
+**Lint reassessment, decided from evidence rather than from the plan:**
+
+- **`noctx` — enabled.** It flags network calls that take no context, which is the mechanism
+  the execution-budget contract depends on: an uncancellable dial makes a local budget
+  unenforceable. Run against the new code it immediately caught a real `net.Listen` in this
+  repository's own test, which was fixed rather than suppressed.
+- **`bodyclose` — still off.** It checks HTTP response bodies. Run against the current tree it
+  reports nothing because no code uses `net/http`. **Reopen when** something does.
+- **`gosec` — still off.** Run against the current tree its only finding is a G602 false
+  positive in a sealed Phase 1 test helper. Enabling it now would mean either editing Phase 1
+  code or adding a suppression, for no security signal on a probe with no crypto, no file
+  access and no privilege handling. **Reopen in Phase 2.3**, where G402 and the `--insecure`
+  path give it something real to check — and where the G602 false positive must be dealt with.
 
 ### What the rest of Phase 2 may implement
 
-- [ ] TCP probe per resolved address
-- [ ] TLS handshake probe with chain, SAN and expiry observations
+- [ ] TLS handshake probe with chain, SAN and expiry observations, taking ownership of a
+      connection the TCP probe established
 - [ ] Generic transport chain, orchestrating DNS → TCP → TLS execution inside the probe
-      boundary
+      boundary, including address iteration order and whether to stop at the first success
 - [ ] Transport-local timeout and budget handling for the chain as a whole
 - [ ] Short-circuit execution producing `SKIPPED` evidence and `BlockedBy` relationships
-- [ ] **Connection ownership transfer** — a successfully established live connection handed to
-      a protocol adapter, so an adapter never opens its own
-- [ ] Remaining hermetic test seams: `Dialer`, `Handshaker`
-- [ ] Reassess `noctx`, `bodyclose` and `gosec`. None was activated in 2.1: `noctx` and
-      `bodyclose` target `net/http`, which no code uses, and `gosec` has little to read in a
-      probe with no dialing, no crypto and no file access. `noctx` earns its place with TCP
-      dialing and `gosec` with TLS
+- [ ] Remaining hermetic test seam: `Handshaker`
 
 **Watch this boundary.** Connection ownership transfer is the invariant most easily lost by
 accident: if a probe is written as "connect, measure, close", the adapter is forced to open
@@ -475,7 +507,14 @@ is not to invent.
 Phase 2.1 produced the first real transport evidence and deliberately answered none of these.
 A DNS failure alone does not settle severity: whether a failed lookup prevents correct use
 still depends on whether the name was user-supplied or discovered, which is `Origin`, and
-topology is what makes that concrete. All three remain open.
+topology is what makes that concrete.
+
+Phase 2.2 added evidence that sharpens the first question without answering it. One endpoint
+now produces several TCP nodes, so a rule will have to say what "the endpoint is unreachable"
+means when one address of three refused — a question about aggregation that did not exist
+before, and that still needs a severity policy it cannot invent for itself. The endpoint scope
+component in an identifier is **not** `Origin`: it is caller-supplied bookkeeping in an opaque
+string, not a claim recorded on a node. All three remain open.
 
 ### Items that used to be listed here
 

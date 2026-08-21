@@ -403,12 +403,11 @@ func TestCompletedLookupSurvivesLaterContextExpiry(t *testing.T) {
 
 func TestLookupRejectsUnusableInput(t *testing.T) {
 	hosts := map[string]string{
-		"empty":                "",
-		"leading whitespace":   " host.internal",
-		"trailing whitespace":  "host.internal ",
-		"inner whitespace":     "host internal",
-		"control character":    "host.internal\n",
-		"identifier separator": "host/internal",
+		"empty":               "",
+		"leading whitespace":  " host.internal",
+		"trailing whitespace": "host.internal ",
+		"inner whitespace":    "host internal",
+		"control character":   "host.internal\n",
 	}
 
 	for name, host := range hosts {
@@ -421,6 +420,38 @@ func TestLookupRejectsUnusableInput(t *testing.T) {
 				t.Error("evidence was produced for unusable input")
 			}
 		})
+	}
+}
+
+// TestIdentifierSeparatorDoesNotRestrictInput pins the rule that a bookkeeping
+// choice may not narrow what svcdoctor will look at. Phase 2.1 refused a host
+// containing the identifier separator; the encoding escapes it instead, so the
+// query still happens and the identifier stays unambiguous.
+//
+// A name with a slash is not resolvable, but this probe deliberately enforces no
+// hostname grammar: it asks the resolver what the caller asked about and records
+// the answer.
+func TestIdentifierSeparatorDoesNotRestrictInput(t *testing.T) {
+	const host = "weird/name.internal"
+
+	r := &fakeResolver{addrs: addrs(t, "10.0.0.1")}
+	e := lookup(t, r, host)
+
+	if r.gotHost != host {
+		t.Errorf("resolver received %q, want %q", r.gotHost, host)
+	}
+	if got, want := e.Subject().Ref(), host; got != want {
+		t.Errorf("subject ref = %q, want %q", got, want)
+	}
+	if got, want := e.ID(), domain.EvidenceID("dns.lookup/weird%2Fname.internal"); got != want {
+		t.Errorf("id = %q, want %q", got, want)
+	}
+
+	// The escape is what keeps the encoding injective: a host literally named
+	// with the escape sequence must not collide with the one containing a slash.
+	escaped := lookup(t, &fakeResolver{addrs: addrs(t, "10.0.0.1")}, "weird%2Fname.internal")
+	if escaped.ID() == e.ID() {
+		t.Errorf("hosts %q and %q share the identifier %q", host, "weird%2Fname.internal", e.ID())
 	}
 }
 

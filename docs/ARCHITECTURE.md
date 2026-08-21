@@ -105,8 +105,12 @@ observe (the only I/O)  ->  observation (producer-local)  ->  domain.Evidence
   so classification is testable without a network. This is the first layer where
   clock access is legitimate: latency is a fact a probe exists to measure.
 - **The subject names what the layer observed**, and nothing more. L1 evidence
-  carries a host with no port, because no port has been chosen yet.
-- **Identifiers are derived** as `<step>/<subject reference>` (ADR 0019).
+  carries a host with no port, because no port has been chosen yet; L2 evidence
+  carries the concrete `ip:port` that was dialed, because a TCP connection never
+  uses a name. One endpoint therefore has different subjects at different layers,
+  connected by the graph rather than by repeating a value.
+- **Identifiers are derived** as `<step>[/<component>...]`, escaped so that no
+  input has to be refused to keep them unambiguous (ADR 0019).
 - **Attributes carry facts, not derivations**, and identity-bearing values use
   shapes structural redaction recognizes — one address or one `host[:port]`
   reference per value, never embedded in prose.
@@ -165,6 +169,36 @@ transport layer hands one over; the adapter does not open a second one.
 Opening a second connection is not only a layering violation. It also breaks measurement
 fidelity, because the protocol step would then be attributed to a connection that was
 never the one measured.
+
+### 4.1 The ownership contract
+
+As of Phase 2.2 this is an API rather than a principle. A probe that establishes a
+connection returns it alongside the evidence, in a value that owns it until somebody
+takes it (**ADR 0021**):
+
+```go
+r, err := tcp.Connect(ctx, dialer, endpoint, addr)
+if err != nil { return err }
+defer r.Close()                  // safe in every path, including after a transfer
+
+if conn, ok := r.TakeConn(); ok {
+    defer conn.Close()           // the caller owns it now
+}
+```
+
+- The probe never closes a successful connection; it hands it over.
+- `TakeConn` transfers ownership exactly once.
+- `Close` releases the connection only while the result still owns it, so it is safe
+  to defer unconditionally and safe to call twice.
+- A failed attempt owns nothing.
+
+**Evidence never owns a connection.** `domain.Evidence` has no field one could occupy,
+and the graph and the report hold evidence, so no live resource can reach anything that
+is serialized. The two have different lifetimes on purpose: closing the connection does
+not make the attempt stop having succeeded.
+
+There is no registry, no map keyed by evidence identifier and no package-level state
+holding sockets. The connection is reachable only through the value the caller was handed.
 
 ## 5. Adapters
 

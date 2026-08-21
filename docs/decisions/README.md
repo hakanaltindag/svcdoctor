@@ -30,8 +30,9 @@ does not overturn it, and both remain authoritative.
 | 0016 | The report owns canonical serialization | Accepted | Refines 0004 |
 | 0017 | The diagnosis rule contract | Accepted | Defers transport severity policy and finding identity |
 | 0018 | Structural redaction produces the shareable report | Accepted | |
-| 0019 | Evidence identifiers are derived from the step and the subject | Accepted | Implements the scheme 0013 left to producers. Defers identifier scoping and encoding to Phase 2.2 |
-| 0020 | Generic transport probes normalize at their own boundary | Accepted | Implements 0002 and 0010 for the first real producer. Widened the `DNS_NO_ADDRESS` contract |
+| 0019 | Evidence identifiers are derived from the step and a scope path | Accepted | Implements the scheme 0013 left to producers. Amended in Phase 2.2, which settled encoding and scoping |
+| 0020 | Generic transport probes normalize at their own boundary | Accepted | Implements 0002 and 0010 for the first real producer. Widened the `DNS_NO_ADDRESS` contract. Confirmed unchanged by the second producer |
+| 0021 | A successful connection is owned, transferred and closed explicitly | Accepted | Turns the ownership requirement in 0002 and ARCHITECTURE §4 into an API contract |
 
 ## Decisions that govern work not yet written
 
@@ -49,9 +50,9 @@ A deferral is a decision too, and each names the condition that should reopen it
   finding identity until real rules and real evidence exist.
 - **0018** records the attribute-sensitivity limit, which is tied to the open
   question of where service attribute keys live.
-- **0019** defers identifier scoping and encoding to Phase 2.2, when a second
-  probe and the transport chain make both concrete. Identifier scoping is also
-  the `Origin` question in another form.
+- **0019** settled encoding and endpoint scoping in Phase 2.2 and still defers
+  identifier scoping for **retries** and for **one endpoint discovered twice**.
+  The latter is the `Origin` question in another form and belongs to topology.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

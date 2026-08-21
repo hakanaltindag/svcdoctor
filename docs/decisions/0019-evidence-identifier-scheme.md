@@ -1,8 +1,9 @@
-# ADR 0019: Evidence identifiers are derived from the step and the subject
+# ADR 0019: Evidence identifiers are derived from the step and a scope path
 
 ## Status
 
-Accepted.
+Accepted. Amended in Phase 2.2, which was the reopen condition this record set
+for its own encoding and scoping questions.
 
 ## Decision
 
@@ -10,16 +11,22 @@ The producer of a piece of evidence mints its identifier, and the identifier is
 **derived from what the node is about**:
 
 ```text
-<step>/<subject reference>
+<step>[/<component>...]
 ```
 
-For the DNS probe that is `dns.lookup/kafka.internal`. For a later transport probe
-it will be `tcp.connect/10.0.0.1:9092`.
+Components run from the widest scope to the narrowest, so identifiers for one
+endpoint sort together:
+
+```text
+dns.lookup/primary.internal
+tcp.connect/primary.internal:9092/10.0.0.1
+tcp.connect/primary.internal:9092/2001:db8::1
+```
 
 The scheme has three properties, and each one is load-bearing:
 
-- **Derived, not generated.** The same step against the same subject produces the
-  same identifier on every run. Nothing about it depends on a clock, a counter, a
+- **Derived, not generated.** The same step and components produce the same
+  identifier on every run. Nothing about it depends on a clock, a counter, a
   random source or the order in which probes executed.
 - **Readable.** A local report can be read, diffed and grepped without a lookup
   table, and an identifier says what its node is.
@@ -27,18 +34,33 @@ The scheme has three properties, and each one is load-bearing:
   has no clock and no random source and could not produce anything stable. The
   code that knows the shape of the run is the only code that can.
 
-`/` is the separator. No resolvable name contains one, so the DNS probe rejects a
-host containing it rather than emitting an identifier that cannot be read back
-unambiguously.
+The encoding lives in `internal/probe`, which exists for exactly this: a rule that
+would be wrong if two probes implemented it differently.
 
-> **A delimiter choice must never decide what input a layer accepts.** The DNS
-> rejection is acceptable only because nothing legitimate is refused by it. A
-> probe whose input can legitimately contain the separator must change how the
-> identifier encodes the subject — escaping it, or choosing a different
-> encoding — and must not reject input the layer would otherwise accept. An
-> identifier is a bookkeeping detail; what svcdoctor is willing to diagnose is
-> not, and letting the first constrain the second would narrow the product to
-> suit its own record-keeping.
+### Escaping, and why input is never restricted
+
+Each component is escaped before joining: `%` becomes `%25` and `/` becomes
+`%2F`. Escaping `%` first is the whole correctness argument — without it the
+components `a/b` and `a%2Fb` would produce one identifier, and two facts would
+silently become one node.
+
+> **A delimiter choice must never decide what input a layer accepts.** A probe
+> must not reject input a layer would otherwise accept merely because a character
+> is awkward in an identifier. The encoding absorbs it instead. An identifier is
+> bookkeeping, and bookkeeping does not get to narrow what svcdoctor is willing to
+> diagnose.
+
+Phase 2.1 violated that rule: the DNS probe refused a hostname containing `/`.
+Phase 2.2 removed the restriction and escapes instead, which also made the DNS
+probe consistent with its own documented stance of enforcing no hostname grammar.
+
+### Nothing decodes an identifier
+
+There is deliberately no decoder. `domain` treats an identifier as opaque, and
+structural redaction replaces identifiers wholesale rather than parsing them
+(ADR 0018). Escaping exists to guarantee uniqueness, not to serve a reader that
+does not exist. A decoder would be a parser whose correctness nobody depends on
+until the day it is wrong.
 
 ## Context
 
@@ -51,37 +73,49 @@ Identifiers are not an internal detail. They appear in the canonical JSON, they
 are what findings reference (ADR 0014), and structural redaction rewrites them
 (ADR 0018). Choosing badly is expensive to undo.
 
-## Scoping and encoding stay open, deliberately
+## What Phase 2.2 settled, and why it took a second probe
 
-The scheme above is Phase 2.1's and is **not** being redesigned before a second
-probe exists. Two questions are left open and belong to Phase 2.2, when the TCP
-probe and the transport chain make them concrete:
+Phase 2.1 left encoding and scoping open because a single probe could not reveal
+what they had to solve. TCP revealed both immediately:
 
-- **Scoping.** What distinguishes two legitimate nodes for the same step and
-  subject in one run — see the section below.
-- **Encoding.** How the subject reference is embedded, including which separator
-  is used and what happens when a subject can contain it. The delimiter rule above
-  binds whatever answer Phase 2.2 reaches.
+**Scoping.** One name resolves to several addresses, and each connection attempt
+is its own fact. `<step>/<subject>` cannot express that — the subject of a TCP
+attempt is the concrete address, and two *different* names resolving to one shared
+address would then collide on a single identifier. The graph would reject the
+second node, and it would be right to: the identifiers really were the same. So an
+identifier needs the endpoint the attempt belongs to as well as the address it
+dialed, and a single-component scheme could not carry both.
 
-Deciding either now would mean designing for a caller that does not exist. The
-DNS probe's scheme is a working instance of the convention, not the final grammar,
-and a Phase 2.2 change to the encoding is expected rather than a reversal.
+**Encoding.** Once components are joined, the join has to be unambiguous without
+restricting what a component may contain. Escaping answers both.
 
-## Uniqueness, and what it deliberately does not solve
+### The scope component is not `Origin`
 
-One identifier means one node per `(step, subject)` per run. `GraphBuilder`
-rejects a duplicate identifier outright rather than merging, so a second lookup of
-the same name in one run is refused.
+The endpoint in a TCP identifier is a **caller-supplied scope label**, not
+recorded provenance. It says which attempt this is, so that two attempts stay two
+nodes; it does not say how the endpoint entered the run, and nothing reads it back.
 
-That is the correct behaviour today and it is not a complete answer. Topology
-discovery may legitimately probe one endpoint twice — once as a bootstrap target
-and once as an advertised broker — and those are two facts, not one. Resolving it
-needs a scope or provenance component in the identifier, which is the same
-question as `Origin`, deferred by ADR 0013 until topology orchestration exists.
+`Origin` remains deferred (ADR 0013). It is a claim on the node about the shape of
+the run, which is a different thing from a bookkeeping component in an opaque
+string, and topology is still what will make it concrete. Phase 2.2 deliberately
+did not resolve it.
 
-Adding a scope now would be inventing a shape for a caller that does not exist.
-The gap is recorded in `docs/BACKLOG.md`, and it should be reopened by the phase
-that first probes one endpoint twice.
+## Uniqueness, and what it still does not solve
+
+One identifier means one node per `(step, components)` per run, and `GraphBuilder`
+rejects a duplicate outright rather than merging.
+
+Two cases remain open, and both belong to the phase that produces them:
+
+- **Retries.** Two attempts on the same endpoint and address in one run would
+  collide. Retry policy is execution policy and does not exist yet.
+- **Topology.** One endpoint discovered twice by different paths may be two facts.
+  That is the `Origin` question, deferred by ADR 0013 until topology orchestration
+  exists.
+
+Neither is invented now, because a scope shape designed for a caller that does not
+exist would be a guess. `GraphBuilder` failing loudly on a duplicate is the correct
+interim behaviour: it surfaces the question at the moment something first needs it.
 
 ## Redaction
 
@@ -102,14 +136,19 @@ and would make a local one harder to work with.
 | A hash of the step and subject | Costs readability and buys nothing. It hides an identifier that redaction already removes, and a local report is where the readable form earns its keep | A subject can be too long or too structured to embed directly |
 | A sequence counter | Depends on execution order, which becomes nondeterministic as soon as endpoints are probed concurrently. The canonical report must be byte-stable for the same facts | Never; ordering must not reach identity |
 | Subject alone, without the step | Collides immediately: DNS, TCP and TLS all describe the same endpoint | — |
-| Caller-supplied identifiers | Every caller would invent its own grammar, and no two probes would agree. The producer knows the step and the subject; that is the whole input | A caller has scope information the probe cannot know — which is the deferred topology case above |
+| Caller-supplied identifiers | Every caller would invent its own grammar, and no two probes would agree. The producer knows the step and the components; that is the whole input | A caller has scope information the probe cannot know — the deferred topology case above |
+| Rejecting input that is awkward to encode | Phase 2.1 did this and it was wrong: bookkeeping narrowed what svcdoctor would look at. Escaping costs a dozen lines and removes the constraint entirely | Never |
+| A decoder for identifiers | Nothing reads them back. Redaction replaces them wholesale and the domain treats them as opaque, so a parser would exist only to rot | A consumer genuinely needs to recover components — and even then, carrying the parts separately would beat parsing a string |
+| Percent-encoding every reserved URL character | Only two characters need escaping to keep the join injective. Encoding more would make identifiers harder to read for no additional guarantee | — |
 
 ## Consequences
 
 - Two runs against an unchanged environment produce byte-identical identifiers,
   so reports diff cleanly.
 - A probe needs no identifier service, no counter and no injected generator.
-- The same `(step, subject)` cannot be recorded twice in one graph, which surfaces
-  the topology scoping question as a loud failure rather than a silent overwrite.
-- Every later probe follows the same scheme, so identifiers stay predictable
-  across layers without a shared registry.
+- The same `(step, components)` cannot be recorded twice in one graph, which
+  surfaces the retry and topology scoping questions as loud failures rather than
+  silent overwrites.
+- Every later probe uses `probe.EvidenceID`, so identifiers stay predictable
+  across layers without a registry and without a second copy of the encoding.
+- A probe may accept any input its layer accepts. The identifier absorbs it.

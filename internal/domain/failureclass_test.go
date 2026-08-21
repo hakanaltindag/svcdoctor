@@ -103,7 +103,7 @@ func TestTransportCategoriesStayDistinct(t *testing.T) {
 		"DNS_": {FailureDNSNXDomain, FailureDNSNoAddress, FailureDNSTimeout, FailureDNSResolverFailure},
 		"TCP_": {
 			FailureTCPConnectionRefused, FailureTCPConnectionTimeout, FailureTCPConnectionReset,
-			FailureTCPNetworkUnreachable, FailureTCPHostUnreachable,
+			FailureTCPNetworkUnreachable, FailureTCPHostUnreachable, FailureTCPConnectionFailed,
 		},
 		"TLS_": {
 			FailureTLSHandshakeFailure, FailureTLSCertificateExpired, FailureTLSCertificateNotYetValid,
@@ -190,7 +190,11 @@ func TestToolGapsAreNotTargetFailures(t *testing.T) {
 // TestFailureClassNamesCoverAllClasses fails if a class is added without a name
 // and catches duplicated strings.
 func TestFailureClassNamesCoverAllClasses(t *testing.T) {
-	const wantCount = 35 // FailureNone plus 34 classes
+	// FailureNone plus 35 classes. Updating this number is meant to be a
+	// deliberate act: the count exists so that adding a class without a name, or
+	// adding one at all, is a decision somebody made on purpose. Phase 2.2 added
+	// FailureTCPConnectionFailed.
+	const wantCount = 36
 
 	if len(failureClassNames) != wantCount {
 		t.Fatalf("failureClassNames has %d entries, want %d", len(failureClassNames), wantCount)

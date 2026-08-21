@@ -18,8 +18,16 @@ linters:
     - errcheck      # unhandled errors hide transport/protocol failures
     - govet         # standard correctness checks
     - ineffassign   # assignments that are never used
+    - noctx         # network calls must accept a context (see below)
     - staticcheck   # correctness, simplification, style (absorbs gosimple/stylecheck)
     - unused        # dead code
+
+  # noctx was activated in Phase 2.2, when the first dialing code arrived. It
+  # enforces the mechanism the execution-budget contract depends on: a network
+  # call that takes no context cannot be cancelled, so svcdoctor's local budget
+  # would be unenforceable and a hung dial would outlive the run that started it.
+  # It caught a real net.Listen in this repository's own test the day it was
+  # enabled. See docs/BACKLOG.md for why bodyclose and gosec are still off.
 
   settings:
     depguard:
