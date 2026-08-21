@@ -1,5 +1,9 @@
 # golangci-lint configuration for svcdoctor.
 #
+# Pinned tool version: v2.13.1 (v2 config schema).
+# Keep this in sync with GOLANGCI_LINT_VERSION in the Makefile and the version
+# pinned in .github/workflows/ci.yml.
+#
 # Strategy: high signal, low noise, predictable CI.
 # Only linters that earn their place are enabled. See docs/BACKLOG.md for the
 # architecture rules that are intentionally deferred until the packages they
