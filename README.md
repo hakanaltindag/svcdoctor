@@ -4,8 +4,9 @@
 
 ## Project status
 
-**Phase 1 — Core Foundations is complete. The tool is not usable yet**: it cannot connect to
-anything, because no probe, adapter or CLI exists.
+**Phase 1 — Core Foundations is complete, and Phase 2 has begun. The tool is not usable
+yet**: it can resolve a name and record what it saw, and nothing consumes that yet, because
+no chain, adapter or CLI exists.
 
 What is implemented, with zero runtime dependencies:
 
@@ -14,10 +15,11 @@ What is implemented, with zero runtime dependencies:
 - `internal/domain` — domain primitives, evidence, the immutable evidence DAG, findings and
   the canonical report
 - `internal/diagnosis` — the rule contract and a deterministic diagnosis engine
+- `internal/probe/dns` — the DNS probe, the first real I/O producer (Phase 2.1)
 
-What is not implemented: DNS/TCP/TLS probes, connection ownership transfer, the short-circuit
-execution engine, service adapters, Kafka, PostgreSQL, topology execution, renderers and the
-CLI. Those directories contain no Go code.
+What is not implemented: TCP and TLS probes, the transport chain, connection ownership
+transfer, the short-circuit execution engine, service adapters, Kafka, PostgreSQL, topology
+execution, renderers and the CLI. Those directories contain no Go code.
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
 > It reconstructs the mental model, the locked invariants, the rejected alternatives and the
@@ -118,9 +120,9 @@ long-term monitoring, LLM-based core diagnosis, and generic rule scripting DSLs.
 
 ## Repository layout
 
-Only `internal/domain`, `internal/security`, `internal/security/redaction` and
-`internal/diagnosis` contain Go code. Every other `internal/`, `cmd/` and `test/` directory
-below is scaffold and is empty.
+Only `internal/domain`, `internal/security`, `internal/security/redaction`,
+`internal/diagnosis`, `internal/probe/dns` and `test/security` contain Go code. Every other
+`internal/`, `cmd/` and `test/` directory below is scaffold and is empty.
 
 ```text
 svcdoctor/
@@ -133,9 +135,9 @@ svcdoctor/
 │   ├── app/                       # Application orchestration
 │   ├── domain/                    # Shared normalized domain/evidence model
 │   ├── probe/
-│   │   ├── dns/                   # Generic DNS facts
-│   │   ├── tcp/                   # Generic TCP facts
-│   │   └── tls/                   # Generic TLS facts
+│   │   ├── dns/                   # Generic DNS facts; phase 2.1
+│   │   ├── tcp/                   # Generic TCP facts; phase 2.2
+│   │   └── tls/                   # Generic TLS facts; phase 2.3
 │   ├── adapter/
 │   │   ├── kafka/                 # Kafka protocol + topology semantics; phase 3
 │   │   └── postgres/              # Reserved for phase 4

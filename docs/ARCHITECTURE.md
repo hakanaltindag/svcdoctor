@@ -89,7 +89,39 @@ Generic does not mean parameterless. A TLS probe may accept SNI, ALPN, protocol 
 bounds, trust source, and client certificate material, because those are generic TLS
 concepts. The caller supplies them; the probe does not know which service asked.
 
-### 3.1 Transport orchestration is not application orchestration
+### 3.1 How a probe produces evidence
+
+Every generic probe follows the same shape, established by the DNS probe in
+`internal/probe/dns` and fixed by ADR 0020:
+
+```text
+observe (the only I/O)  ->  observation (producer-local)  ->  domain.Evidence
+```
+
+- **The observation stays inside the probe.** It holds the raw error and the raw
+  runtime values; nothing but `domain.Evidence` crosses the package boundary. That
+  is what makes ADR 0010 structural rather than a rule to remember.
+- **One function performs I/O and reads the clock.** Everything after it is pure,
+  so classification is testable without a network. This is the first layer where
+  clock access is legitimate: latency is a fact a probe exists to measure.
+- **The subject names what the layer observed**, and nothing more. L1 evidence
+  carries a host with no port, because no port has been chosen yet.
+- **Identifiers are derived** as `<step>/<subject reference>` (ADR 0019).
+- **Attributes carry facts, not derivations**, and identity-bearing values use
+  shapes structural redaction recognizes — one address or one `host[:port]`
+  reference per value, never embedded in prose.
+- **Classification is conservative.** A completed measurement is a fact; otherwise
+  the caller's context is consulted before the I/O error, so svcdoctor's own
+  deadline expiring is `UNKNOWN`, never a remote failure.
+- **A failure is evidence.** A Go error means the probe was called with unusable
+  input, not that the target is broken.
+
+The only interface a probe introduces is a test seam, such as `Resolver`, because
+no test may depend on an uncontrolled public service. There is deliberately no
+generic `Probe` interface: DNS, TCP and TLS take different inputs and produce
+different facts.
+
+### 3.2 Transport orchestration is not application orchestration
 
 A generic transport chain sequences DNS, TCP and TLS for one endpoint and decides that a
 failed lookup blocks the connection attempt that would have followed. That sequencing is

@@ -463,7 +463,7 @@ what the *process* does is application orchestration, lives in `internal/app` an
 `cmd/svcdoctor`, and is Phase 5. The same split governs timeouts: a per-probe or
 per-chain deadline is Phase 2, while the whole-run execution budget and cancellation of
 §13 in `docs/ARCHITECTURE.md` belong to the application boundary. See
-`docs/ARCHITECTURE.md` section 3.1.
+`docs/ARCHITECTURE.md` section 3.2.
 
 **Watch this boundary.** Connection ownership transfer is the invariant most easily
 lost by accident: if a probe is written as "connect, measure, close", the adapter is

@@ -99,6 +99,28 @@ Until that is resolved, treat a shareable report as safe for the identifiers svc
 it collected, not as a guarantee about attribute values a future adapter may add. See
 ADR 0018 and `docs/BACKLOG.md`.
 
+### Producer obligation: identity-bearing attribute shapes
+
+The limit above is a requirement on every probe and adapter, not only a caveat for readers.
+
+Redaction recognizes an identifying attribute value when it parses as an IP address or as a
+`host[:port]` reference. So a producer that records identity must record it as **one value
+per attribute or per list entry, in canonical form**:
+
+```text
+good    dns.answers = ["10.11.12.13", "2001:db8::1"]
+bad     dns.summary = "resolved kafka.prod.internal to 10.11.12.13"
+```
+
+The second shape survives redaction into a shareable report. Nothing rejects it at compile
+time, so the guard is a test: `test/security/dns_evidence_redaction_test.go` builds a report
+from real probe evidence, redacts it, and asserts that every canary identity is gone. A new
+probe or adapter that records identity should extend that contract test rather than assume it
+is covered.
+
+Non-identifying values are untouched by redaction and stay readable, which is what keeps a
+shareable report diagnostically useful. See ADR 0020.
+
 ## Redaction boundary
 
 Redaction is:

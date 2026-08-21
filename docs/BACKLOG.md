@@ -10,19 +10,21 @@ runtime dependencies:
 - `internal/security` — masked secret and endpoint-bound credential primitives
 - `internal/security/redaction` — structural redaction into a shareable report
 - `internal/diagnosis` — the `Rule` contract and the deterministic `Engine`
+- `internal/probe/dns` — the DNS probe, the first real I/O producer (Phase 2.1)
 
 No Go code exists in any of the following, and nothing in them may be assumed implemented:
 
-- `internal/probe`
+- `internal/probe/tcp`, `internal/probe/tls`
 - `internal/adapter`
 - `internal/render`
 - `internal/platform`
 - `internal/app`
 - `cmd/svcdoctor`
 
-So there are no probes, no DNS/TCP/TLS execution, no connection ownership transfer, no
-short-circuit execution engine, no adapters, no Kafka, no PostgreSQL, no topology execution,
-no renderers and no CLI. **The tool cannot connect to anything yet.**
+So there is one probe and no TCP or TLS execution, no connection ownership transfer, no
+transport chain, no short-circuit execution engine, no adapters, no Kafka, no PostgreSQL, no
+topology execution, no renderers and no CLI. **The tool still cannot connect to anything**:
+it can resolve a name and record what it saw, and nothing consumes that yet.
 
 `internal/diagnosis` ships the rule contract and the engine and **no concrete rules**. That
 is a deliberate deferral with a recorded reason, not missing work; see Phase 1.5 and Phase 2
@@ -41,7 +43,7 @@ stale and should be corrected against this table.
 |---|---|---|
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
-| 2 | Generic Transport Engine | **Not started** |
+| 2 | Generic Transport Engine | **In progress** — 2.1 DNS complete |
 | 3 | Kafka Vertical Slice | Not started |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
@@ -324,35 +326,86 @@ prior context.
 
 ---
 
-## Phase 2 — Generic Transport Engine: NOT STARTED
-
-No Go code exists for any item below. Phase 2 is the first code in the repository to import
-`net` and `crypto/tls`, and the first real exercise of the `probe-is-service-agnostic`
-depguard rule.
+## Phase 2 — Generic Transport Engine: IN PROGRESS
 
 Phase 2 delivers a **reusable generic transport engine**: the facts a client can gather about
 reaching an endpoint, and a live connection the first adapter can take over in Phase 3. It
 delivers no product.
 
-### What Phase 2 may implement
+Phase 2.1 is complete. Everything else below is not started.
 
-- [ ] DNS probe with latency and multi-address observations
+### Phase 2.1 — Generic probe contracts and DNS (complete)
+
+Implemented in `internal/probe/dns/`, standard library plus `internal/domain` only, one
+interface:
+
+- [x] DNS probe with latency and multi-address observations
+- [x] Producer-local observation type, unexported, holding the raw resolver error and address
+      values so neither can leave the package
+- [x] Normalization into `domain.Evidence` at the probe boundary
+- [x] Deterministic evidence identifier scheme, `<step>/<subject reference>` (**ADR 0019**)
+- [x] Conservative local-deadline and cancellation semantics: `UNKNOWN` with
+      `EXEC_LOCAL_TIMEOUT` or `EXEC_CANCELLED`, never a remote `FAIL` (**ADR 0020**)
+- [x] `Resolver` hermetic test seam and a standard-library `SystemResolver`
+- [x] Deterministic multi-address handling: sorted, deduplicated, IPv4-mapped forms unmapped,
+      both families kept
+- [x] Hermetic tests only — no test resolves a real name
+- [x] Cross-package redaction contract test in `test/security/`
+- [x] `probe-is-service-agnostic` depguard rule verified empirically against a deliberate
+      violation
+
+The evidence contract, the rejected alternatives and the reasoning are in **ADR 0020**,
+summarized in `docs/ARCHITECTURE.md` section 3.1, with the package documentation in
+`internal/probe/dns/doc.go` as the local record.
+
+**Deliberately not done in 2.1:** no TCP, no TLS, no transport chain, no `GraphBuilder`
+orchestration, no `BlockedBy`, no short-circuit logic, no findings, no service knowledge.
+
+Questions 2.1 surfaced:
+
+- [x] **`DNS_NO_ADDRESS` semantics — settled.** The class was documented as "the name exists
+      but yielded no usable address" while the probe also used it for the undistinguished
+      not-found case, where existence is unknown. The contract is now widened to **"the lookup
+      yielded no usable address"**, which claims nothing about existence and is therefore true
+      for a name with no address record, a name that does not exist, and a resolver that does
+      not separate them. `DNS_NXDOMAIN` keeps its meaning as the stronger claim and stays
+      **reserved** for a resolver that positively evidences non-existence; nothing produces it
+      today, and `TestNXDomainStaysReserved` keeps it that way. A third class was rejected: it
+      would split one diagnostic outcome for a distinction no available resolver reports. See
+      ADR 0020.
+- [ ] **Evidence identifier scoping and encoding — open, Phase 2.2.** The Phase 2.1 scheme
+      `<step>/<subject reference>` stands and is not being redesigned before a second probe
+      exists. Two parts stay open: *scoping*, because one identifier means one node per
+      `(step, subject)` per run and topology may legitimately probe one endpoint twice — the
+      same question as `Origin`; and *encoding*, how the subject is embedded and which
+      separator is used. **Binding rule either way:** a delimiter choice must never decide what
+      input a layer accepts. The DNS probe rejects a host containing `/` only because no
+      resolvable name has one; a probe whose input can legitimately contain the separator must
+      change the encoding, never reject input the layer would otherwise accept. See ADR 0019.
+- [ ] **Where generic transport attribute keys live.** `dns.answers` is owned by the probe
+      package, which is correct while the probe is its only consumer. A future rule in
+      `internal/diagnosis/transport/` cannot import it — depguard forbids diagnosis importing
+      probes — so it would have to duplicate the string or the key would have to move
+      somewhere both can import. `internal/domain` is the candidate and already owns
+      service-neutral DNS vocabulary in `FailureClass`. **Reopen when** the first transport
+      rule needs the key. This is the generic half of the open attribute-key question and does
+      **not** settle the service-specific half.
+
+### What the rest of Phase 2 may implement
+
 - [ ] TCP probe per resolved address
 - [ ] TLS handshake probe with chain, SAN and expiry observations
-- [ ] Producer-local observation types, concrete and probe-shaped, normalized into
-      `domain.Evidence` at the probe boundary
-- [ ] A deterministic evidence identifier scheme for transport nodes, stable within a run.
-      The domain deliberately does not generate identifiers, so the producer must
 - [ ] Generic transport chain, orchestrating DNS → TCP → TLS execution inside the probe
       boundary
-- [ ] Transport-local timeout and budget handling, with an expired local deadline recorded as
-      `UNKNOWN` and `FailureExecLocalTimeout`, never as a remote `FAIL`
+- [ ] Transport-local timeout and budget handling for the chain as a whole
 - [ ] Short-circuit execution producing `SKIPPED` evidence and `BlockedBy` relationships
 - [ ] **Connection ownership transfer** — a successfully established live connection handed to
       a protocol adapter, so an adapter never opens its own
-- [ ] Hermetic test seams: `Resolver`, `Dialer`, `Handshaker`
-- [ ] Deterministic transport fixtures and tests, depending on no uncontrolled public service
-- [ ] Activate `noctx`, `bodyclose` and `gosec` now that network-facing code exists
+- [ ] Remaining hermetic test seams: `Dialer`, `Handshaker`
+- [ ] Reassess `noctx`, `bodyclose` and `gosec`. None was activated in 2.1: `noctx` and
+      `bodyclose` target `net/http`, which no code uses, and `gosec` has little to read in a
+      probe with no dialing, no crypto and no file access. `noctx` earns its place with TCP
+      dialing and `gosec` with TLS
 
 **Watch this boundary.** Connection ownership transfer is the invariant most easily lost by
 accident: if a probe is written as "connect, measure, close", the adapter is forced to open
@@ -418,6 +471,11 @@ Because the first is unresolved, concrete rules under `internal/diagnosis/transp
 **not** Phase 2 implementation work. They are listed in Phase 3, blocked on this answer.
 Writing them earlier would put invented diagnostic policy into the layer whose entire purpose
 is not to invent.
+
+Phase 2.1 produced the first real transport evidence and deliberately answered none of these.
+A DNS failure alone does not settle severity: whether a failed lookup prevents correct use
+still depends on whether the name was user-supplied or discovered, which is `Origin`, and
+topology is what makes that concrete. All three remain open.
 
 ### Items that used to be listed here
 

@@ -39,9 +39,20 @@ const (
 
 	// DNS.
 
-	// FailureDNSNXDomain means the name does not exist.
+	// FailureDNSNXDomain means the resolver positively evidenced that the name
+	// does not exist. It is the stronger claim of the two and requires a
+	// resolver that reports NXDOMAIN distinctly; a resolver that folds
+	// non-existence into a generic not-found answer evidences only
+	// FailureDNSNoAddress.
 	FailureDNSNXDomain
-	// FailureDNSNoAddress means the name exists but yielded no usable address.
+	// FailureDNSNoAddress means the lookup yielded no usable address.
+	//
+	// It says nothing about whether the name exists. That is deliberate: it
+	// covers a name that exists with no address record, a name that does not
+	// exist, and the common case where the resolver does not distinguish the
+	// two. The weaker claim is the one that is true in all three, and a
+	// producer must not upgrade it to FailureDNSNXDomain without evidence of
+	// non-existence.
 	FailureDNSNoAddress
 	// FailureDNSTimeout means the resolver did not answer in time.
 	FailureDNSTimeout
