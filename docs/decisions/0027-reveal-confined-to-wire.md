@@ -72,6 +72,30 @@ for `internal/adapter/[^/]+/wire/`. Verified empirically both ways: the same fil
 is rejected in `internal/adapter/kafka` and accepted in
 `internal/adapter/kafka/wire`.
 
+## Amendment, Phase 3.2b decision pass: the guard failed open on one line
+
+Re-verifying this boundary before authentication was designed found a real hole,
+which is recorded here rather than quietly fixed.
+
+golangci-lint deduplicates issues **by line** by default. A `security.Reveal`
+call that shared a line with any other reported issue therefore lost the race and
+its message never appeared. It was reproduced with a one-line function, where
+`unused` was reported first and the forbidigo finding vanished:
+
+```go
+func wouldSendCredential(s security.Secret) string { return security.Reveal(s) }
+// unused: reported.  forbidigo: silently dropped.
+```
+
+A guard that holds except when it does not is the failure mode this record exists
+to prevent, so `issues.uniq-by-line` is now `false`. The tree still reports zero
+issues, so nothing was traded for it, and the same deliberate violation is now
+caught whichever way it is written.
+
+The lesson generalizes past this rule: a security lint has to be verified against
+the shape an author would actually write, not only against the shape that is
+convenient to test.
+
 ## What this does and does not guarantee
 
 **It does** guarantee that plaintext extraction happens in a package that is one

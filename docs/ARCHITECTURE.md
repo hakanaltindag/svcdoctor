@@ -291,11 +291,26 @@ there. The boundary it draws generalizes past Kafka (**ADR 0026**):
   chain.
 - **Path selection for credentials therefore belongs to the layer that can record
   why it chose**, which is the orchestration boundary that does not exist yet.
+  **ADR 0028 makes that structural**: the authentication API takes exactly one
+  session rather than a list, so no ordering and no index inside the adapter can
+  become a selection. Authenticating several brokers stays possible, as a loop
+  the caller writes deliberately.
 - **Mechanism, policy and diagnosis stay separate.** That the protocol permits
   PLAIN on an unverified channel, that svcdoctor should refuse it, and that using
   it is worth reporting are three statements owned by three layers. An adapter
   that silently refused would invent policy; one that silently sent would break a
-  documented one. Both are deferred rather than guessed.
+  documented one. **ADR 0028 resolves this without merging the three**: the
+  adapter *obeys* a fail-closed policy value it is handed — as it would obey
+  `ForwardingPolicy` — and records a refusal as `SKIPPED` with
+  `EXEC_SKIPPED_BY_POLICY`. Obeying a declared policy is not owning one, and a
+  recorded refusal is neither silence nor a finding.
+- **A layer cannot enforce a policy about a fact it cannot see.** The adapter
+  observes no channel security today: `transport.Continuation` carries no such
+  value and `tls.verified` lives only on the L3 node it never reads. The fact must
+  be **declared by the transport that established it**, not inferred by
+  type-asserting a connection — the same declaration-over-inference rule ADR 0022
+  fixed for identity-bearing attributes. That mechanism is a prerequisite for any
+  credential byte (ADR 0028 §6).
 
 **Connection lifetime follows the protocol, not the evidence state.** ApiVersions
 keeps a connection whose broker answered with an error code, because any request

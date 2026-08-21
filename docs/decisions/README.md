@@ -39,13 +39,14 @@ does not overturn it, and both remain authoritative.
 | 0025 | The Kafka adapter asks every transport path and keeps franz-go behind one package | Accepted | First service adapter; implements 0008. Adds the first runtime dependency |
 | 0026 | Kafka SASL enters as mechanism discovery, and authentication waits for an owner | Accepted | Extends 0025 to L5. Defers authentication with four named blockers |
 | 0027 | `security.Reveal` is confined to adapter wire packages, mechanically | Accepted | Closes the Phase 1 deferral its own backlog entry named. Adds no call sites |
+| 0028 | Credentialed authentication is singular, policy-gated and channel-aware | Accepted | Answers 0026 §7.1 and §7.3, narrows §7.2. Decides work not yet written |
 
 ## Decisions that govern work not yet written
 
 Some accepted records decide how something will be built rather than describe
 something that exists. That is intentional, and they are binding when that work
 starts: **0008** (Kafka wire client), **0009** (service registration), **0011**
-(CLI shape).
+(CLI shape), **0028** (credentialed authentication).
 
 ## Deferrals recorded inside ADRs
 
@@ -74,13 +75,17 @@ A deferral is a decision too, and each names the condition that should reopen it
   whether a transport path that failed should carry a `SKIPPED` protocol node
   until an orchestration layer knows what was requested, or a rule needs the
   distinction.
-- **0026** defers Kafka authentication itself behind four named conditions:
-  a layer that can select which paths receive credentials, secret source
-  resolution, an owner for the credentials-over-unverified-transport policy, and
-  a dependency decision for SCRAM. It also carries the L5 half of 0025's
-  skipped-node question, unsolved on purpose.
+- **0026** deferred Kafka authentication behind four conditions. **0028 answered
+  two and narrowed a third**: selection is fixed by a singular signature, the
+  transport-safety question by a fail-closed declared policy, and the
+  secret-source argument turned out to be a Phase 5 usability item rather than a
+  Phase 3 blocker. What remains from 0026 is the SCRAM dependency route, and the
+  L5 half of 0025's skipped-node question, unsolved on purpose.
 - **0027** names the one condition that would widen the reveal boundary: a
   legitimate caller that cannot live in a wire package.
+- **0028** defers nothing of its own, but it is binding on work not yet written:
+  authentication may not be implemented until the channel fact and the
+  credential-transport policy of its section 6 exist.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

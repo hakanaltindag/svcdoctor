@@ -176,6 +176,11 @@ Authentication is not merely unfinished. Each of these is a decision with no
 layer entitled to make it today, and implementing authentication would mean
 answering them by fiat inside an adapter.
 
+> **Status after ADR 0028.** 7.1 and 7.3 are **answered** there — selection by a
+> singular signature, transport safety by a fail-closed declared policy — and
+> 7.2's argument was **narrowed**, because it proved weaker than stated. 7.4 is
+> unchanged. The text below stands as written; ADR 0028 records what replaced it.
+
 **7.1 Which path receives the credentials.** ApiVersions and the handshake run on
 every measured path and choose none, because neither costs anything. Credentials
 do. The options are: every successful path, one path, or a caller-selected

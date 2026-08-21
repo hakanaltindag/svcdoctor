@@ -77,8 +77,6 @@ condition that should reopen it.
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
 | **Service attribute-key ownership** | Where service-specific key constants live is unsettled, and `internal/domain` must not grow a registry of them | The Kafka adapter demonstrates the real boundary, in Phase 3 |
 | **Contract-package placement** for the adapter contract, the registry, the probe chain contract and CLI orchestration | Concrete structs first; interfaces only at real boundaries. A placement chosen before a real consumer is a guess | Each is forced by the implementation that needs it |
-| **Which transport paths may receive credentials** | Discovery costs the target nothing and runs everywhere; an authentication attempt is logged, counted and lockout-relevant. "Every path" and "the first path" are both policy, and *the first* would silently mean IPv4 — the artifact ADR 0024 removed from the transport chain. No layer can express or record a selection yet | A layer exists that can select paths and record why (ADR 0026 §7.1) |
-| **Whether credentials may cross an unverified channel** | `docs/SECURITY.md` forbids it and the evidence already records `tls.verified` per attempt, but enforcing it is policy and explaining it is diagnosis, and an adapter may do neither. Silently refusing invents policy; silently sending breaks a documented one | An orchestration layer can carry the policy, or a diagnosis rule can state the finding (ADR 0026 §7.3) |
 | **SCRAM's implementation route** | franz-go's SCRAM lives in the main module, alongside `kgo` and three transitive dependencies, which would end this project's one-dependency property. The alternative is hand-rolled crypto. Neither belongs in a phase about SASL generally | SCRAM is its own subphase with its own dependency decision (ADR 0026 §7.4) |
 | **A `SKIPPED` protocol node for a transport path that failed** | The adapter receives completed paths only, so it cannot know an address it was never handed exists. Nothing today knows a service step was *requested* for one: the transport chain must not know Kafka, and the layer that would is the orchestration boundary Phase 3.1 did not build. The subject rule does not forbid the node — `ip:port` is known — so this is an open question, not a settled shape (ADR 0025 §9) | Phase 3 orchestration sequences transport and an adapter for one endpoint, or a rule needs to tell "L4 was never reached here" from "no L4 node here" |
 | **Execution mode** in run metadata | No vocabulary is defined, and both plausible meanings already have owners: `vantage` and the summary | A real execution mode exists that neither already expresses |
@@ -86,6 +84,20 @@ condition that should reopen it.
 
 The first three converge on the same question and will likely be answered together. See
 `docs/ARCHITECTURE.md` section 18 and `docs/PHASE1_HANDOFF.md` sections 13 and 15.
+
+**Two credential questions left this table in Phase 3.2b's decision pass**, recorded so the
+move is traceable rather than looking like a loss:
+
+| Was open | Answer | Where |
+|---|---|---|
+| Which transport paths may receive credentials | Caller-selected, and **structurally singular**: the authentication API takes one session, never a list, so no ordering or index inside the adapter can become a selection | ADR 0028 §1 |
+| Whether credentials may cross an unverified channel | Verified TLS only; anything weaker is an explicit, per-run, recorded opt-in. A refusal is recorded as `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, never silence | ADR 0028 §3 |
+
+Neither is implemented. What they now need is mechanism rather than policy, and that is
+Phase 3.2b below. **Secret source resolution was also re-classified**: ADR 0026 §7.2 called it
+a blocker for authentication, and ADR 0028 §7 narrows that — a `security.Credential` is
+constructible by any caller, so resolution is a Phase 5 usability item at the CLI boundary,
+not a Phase 3 contract blocker.
 
 **Per-key sensitivity classification is no longer part of the attribute-key question.** It was
 listed here as redaction's prerequisite until Phase 2.3, when TLS forced the issue and ADR 0022
@@ -758,17 +770,52 @@ the same file is rejected in `internal/adapter/kafka` and accepted in
 new test code, all fixed rather than suppressed except one narrow, explained `nolint` on a
 signed-int16 wire decode. `noctx` clean. `bodyclose` still off: no `net/http`.
 
-### Phase 3.2b — Kafka authentication (not started, blocked)
+### Phase 3.2b — Credential transport safety (not started, decided)
 
-Blocked on four decisions, not on effort. Each is in the open-decisions table with its
-reopen condition (ADR 0026 §7):
+**Sends no credential.** It builds the two mechanisms that must exist before any credential
+byte, and nothing else. Decided in **ADR 0028**; the decision pass that produced it changed no
+code.
 
-- [ ] Which successful paths receive credentials, and who records that choice
-- [ ] Secret source resolution, so a `security.Credential` can exist outside a test — Phase 5
-- [ ] Whether a credential may cross an unverified or plaintext channel, and which layer
-      enforces or reports it
-- [ ] PLAIN authentication (`SaslAuthenticate`), once the three above are answered
-- [ ] SCRAM-SHA-256 / SCRAM-SHA-512, with an explicit dependency decision first
+The reason it is its own phase is the `ForwardingPolicy` precedent: Phase 1 built that
+fail-closed type *before* topology existed, so the discovery code could not be written without
+confronting the decision. A safety mechanism that arrives in the same change as its first
+consumer is never reviewed on its own.
+
+- [ ] **A channel fact, declared by transport.** The adapter cannot evaluate a policy about a
+      channel it cannot see: `transport.Continuation` exposes no such value, and `tls.verified`
+      lives only on the L3 node the adapter never reads. A small ordered value, carried through
+      `Continuation` → `Session` → `HandshakeSession` unchanged, whose zero value is the least
+      trusted state. Declared by the layer that established it, never inferred by
+      type-asserting `*tls.Conn` (ADR 0028 §6.1)
+- [ ] **A credential-transport policy, fail-closed.** A value type in `internal/security`
+      modelled on `ForwardingPolicy`: no engine, no I/O, zero value = require verified TLS,
+      with a `String()` for the report's security section (ADR 0028 §6.2)
+- [ ] Record the policy in force in `ReportSecurity`, beside `tlsVerificationDisabled` and
+      `credentialForwardingEnabled`, when a layer exists that chooses it — Phase 5
+
+**Touches a sealed Phase 2 contract.** Adding the channel fact to `transport.Continuation`
+extends ADR 0024's result shape, which is why it is listed rather than assumed.
+
+### Phase 3.2c — PLAIN authentication (not started, blocked on 3.2b)
+
+Contract fixed by ADR 0028; only the mechanisms are missing.
+
+- [ ] `Authenticate` taking **exactly one** `HandshakeSession` and one `security.Credential`
+- [ ] `SecretFor` called with the **logical endpoint**, recovered from the session label by
+      `net.SplitHostPort` and normalized by `security.NewEndpoint` — never the resolved address
+- [ ] PLAIN payload built inside `internal/adapter/kafka/wire`, the only package permitted to
+      call `security.Reveal` (ADR 0027)
+- [ ] `SaslAuthenticate` v1, non-flexible, so the wire framing guard accepts it and a rejection
+      arrives as an error code rather than a closed socket
+- [ ] Policy refusal recorded as `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, blocked by the TLS node
+      when one exists
+- [ ] Broker-supplied `ErrorMessage` kept out of evidence, exactly as socket error text is
+- [ ] Two credential-authority tests: one credential authorizes every resolved address of its
+      endpoint, and an address-bound credential is refused for the named endpoint
+
+### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
+
+- [ ] SCRAM-SHA-256 / SCRAM-SHA-512, with the dependency route decided first (ADR 0026 §7.4)
 
 ### Remaining Phase 3 work
 
@@ -794,9 +841,9 @@ consume Phase 2's transport engine without reimplementing any of it.
 
 - [x] ApiVersions (L4) — Phase 3.1
 - [x] SASL mechanism discovery (L5) — Phase 3.2a
-- [ ] PLAIN — blocked, see Phase 3.2b
-- [ ] SCRAM-SHA-256 — blocked, and needs a dependency decision
-- [ ] SCRAM-SHA-512 — blocked, and needs a dependency decision
+- [ ] PLAIN — Phase 3.2c, contract fixed by ADR 0028, blocked on the 3.2b mechanisms
+- [ ] SCRAM-SHA-256 — Phase 3.2d, needs a dependency decision first
+- [ ] SCRAM-SHA-512 — Phase 3.2d, needs a dependency decision first
 - [ ] supplied-token OAUTHBEARER
 - [ ] mTLS
 - [ ] Normalize protocol errors and response codes into evidence at the adapter boundary; no

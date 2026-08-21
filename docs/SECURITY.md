@@ -113,6 +113,12 @@ a secret into bytes", and that is a call-level rule.
 the first credential byte, deliberately: a rule added afterwards has to be argued
 against working code.
 
+Re-verified before authentication was designed, and the re-verification found a
+hole worth knowing about: golangci-lint deduplicates issues by line, so a
+`security.Reveal` call sharing a line with any other finding was silently
+dropped. `issues.uniq-by-line` is now `false` and the violation is caught however
+it is written. See the amendment in ADR 0027.
+
 ### Kafka SASL: what Phase 3.2 does and does not send
 
 `kafka.sasl_handshake` (L5) asks a broker whether it offers a named mechanism. The
@@ -125,10 +131,41 @@ public registry. They are neither secrets nor identity, so they are recorded as
 ordinary string values and survive redaction intact; a shared report that turned
 `PLAIN` into `host-001` would have destroyed the only thing the node is for.
 
-Authentication is deferred, and `docs/BACKLOG.md` carries the four questions that
-block it. Two of them are security questions in their own right: which paths may
-receive credentials, and whether a credential may cross an unverified channel. See
-ADR 0026.
+Authentication is deferred. The two security questions it depended on are now
+answered by **ADR 0028**, and what remains is mechanism rather than policy.
+
+### When a credential may be sent
+
+Three statements, kept separate on purpose:
+
+| | |
+|---|---|
+| **Capability** | The Kafka protocol permits SASL/PLAIN on a plaintext listener |
+| **Policy** | svcdoctor sends a password only over a channel whose peer identity was verified. Anything weaker is an explicit, per-run, recorded opt-in — never automatic |
+| **Diagnosis** | "This cluster accepts PLAIN without verified TLS" is a finding a rule states, not a sentence an adapter writes |
+
+So, concretely: **not over plaintext TCP, not over TLS with verification
+disabled, and yes over verified TLS.** This is the same shape item 6 already fixes
+for `--insecure` and that `ForwardingPolicy` already implements for credential
+forwarding; it is applied, not invented.
+
+**A refusal is recorded, not silent.** When policy forbids the attempt, the
+authentication node is `SKIPPED` with `EXEC_SKIPPED_BY_POLICY`, blocked by the TLS
+node whose `tls.verified` is false when one exists. A reader can then tell "not
+attempted, by policy" from "not attempted, nobody asked" — and nothing was sent.
+
+### One credential, one broker, one call
+
+Authentication is **singular by construction**: the API takes exactly one session,
+never a list. Discovery asks every path because it costs the broker nothing; an
+authentication attempt is logged, counted and, against a directory-backed store, a
+step towards lockout.
+
+A list parameter would have made "authenticate everything" the convenient default
+and `sessions[0]` the next one — and `sessions[0]` is IPv4, by canonical address
+ordering. Selecting which broker receives a credential is the caller's decision,
+and the signature is what makes it impossible for the adapter to make one
+accidentally. See ADR 0028.
 
 ### Credential authority is name-based, and DNS cannot widen it
 

@@ -195,6 +195,17 @@ linters:
                 platform collectors gather environment context; harvesting cloud
                 or Kubernetes tokens is forbidden (docs/SECURITY.md item 9)
 
+  # Report every issue on a line, not just the first.
+  #
+  # golangci-lint deduplicates by line by default, and that default silently
+  # swallowed a security finding: a `security.Reveal` call sharing a line with
+  # any other reported issue lost the race and the forbidigo message vanished.
+  # It was found by re-verifying the ADR 0027 boundary against a deliberate
+  # violation written as a one-line function, and it is exactly the failure mode
+  # that record exists to prevent — a guard that holds except when it does not.
+  #
+  # The tree reports zero issues, so this adds no noise today; it removes a
+  # condition under which the credential boundary could fail open.
   exclusions:
     generated: lax
     presets:
@@ -221,6 +232,11 @@ linters:
       - path: internal/security/
         linters:
           - forbidigo
+
+issues:
+  # See the note above the exclusions block: deduplicating by line can hide a
+  # security finding behind an unrelated one.
+  uniq-by-line: false
 
 formatters:
   enable:
