@@ -20,13 +20,23 @@ import (
 // connection nobody measured describes something the report does not contain
 // (ADR 0021).
 type Session struct {
+	ownedConn
+
+	endpoint   string
 	address    netip.AddrPort
 	evidenceID domain.EvidenceID
-
-	conn   net.Conn
-	taken  bool
-	closed bool
 }
+
+// Endpoint returns the logical label this path belongs to, such as
+// "primary.internal:9092".
+//
+// It is the endpoint the transport chain was asked about, carried through
+// unchanged from transport.Continuation.Endpoint. A later Kafka step needs it
+// twice over: to scope its own evidence identifiers to the same endpoint the
+// transport nodes used, and — once credentials exist — to name the endpoint a
+// credential must be bound to. Both must be the name a human asked about, never
+// the address it resolved to. See ADR 0026.
+func (s *Session) Endpoint() string { return s.endpoint }
 
 // Address returns the broker this session speaks to.
 func (s *Session) Address() netip.AddrPort { return s.address }
@@ -36,33 +46,6 @@ func (s *Session) Address() netip.AddrPort { return s.address }
 // A later Kafka step parents its own evidence to it, so the graph keeps showing
 // which measured path each protocol fact came from.
 func (s *Session) Evidence() domain.EvidenceID { return s.evidenceID }
-
-// Available reports whether the connection is still here to take.
-func (s *Session) Available() bool {
-	return s.conn != nil && !s.taken && !s.closed
-}
-
-// TakeConn transfers ownership of this session's connection to the caller.
-//
-// A caller that receives true owns the connection and must close it; neither
-// this Session nor the Result will.
-func (s *Session) TakeConn() (net.Conn, bool) {
-	if !s.Available() {
-		return nil, false
-	}
-	s.taken = true
-	return s.conn, true
-}
-
-// Close releases this session's connection if it is still owned here. It is
-// idempotent and does nothing after a transfer.
-func (s *Session) Close() error {
-	if s.conn == nil || s.taken || s.closed {
-		return nil
-	}
-	s.closed = true
-	return s.conn.Close()
-}
 
 // Result is what a Kafka run leaves the caller holding: one session per path
 // whose exchange completed.
@@ -126,10 +109,115 @@ func (r *Result) Close() error {
 }
 
 // add records a completed session and takes ownership of its connection.
-func (r *Result) add(conn net.Conn, address netip.AddrPort, evidenceID domain.EvidenceID) {
+func (r *Result) add(
+	conn net.Conn, endpoint string, address netip.AddrPort, evidenceID domain.EvidenceID,
+) {
 	r.sessions = append(r.sessions, &Session{
+		ownedConn:  ownedConn{conn: conn},
+		endpoint:   endpoint,
 		address:    address,
 		evidenceID: evidenceID,
-		conn:       conn,
+	})
+}
+
+// HandshakeSession is one path whose broker accepted a SASL mechanism, together
+// with the connection the handshake ran over.
+//
+// It is a distinct type from Session, and the distinction is the point: a
+// connection that has completed a SaslHandshake is in a state where the only
+// message the broker will accept is the continuation of that mechanism's
+// exchange. Authentication therefore consumes a HandshakeSession and cannot be
+// handed a Session, so "authenticate before the mechanism was agreed" is a
+// compile error rather than a protocol error discovered on the wire.
+//
+// Only an accepted handshake produces one. See ADR 0026.
+type HandshakeSession struct {
+	ownedConn
+
+	endpoint   string
+	address    netip.AddrPort
+	mechanism  string
+	evidenceID domain.EvidenceID
+}
+
+// Endpoint returns the logical label this path belongs to, carried through from
+// the Session it continued.
+func (s *HandshakeSession) Endpoint() string { return s.endpoint }
+
+// Address returns the broker this session speaks to.
+func (s *HandshakeSession) Address() netip.AddrPort { return s.address }
+
+// Mechanism returns the SASL mechanism the broker accepted.
+//
+// It is reported here rather than passed again by a later caller, so that the
+// mechanism authentication continues with cannot disagree with the one the
+// broker actually agreed to.
+func (s *HandshakeSession) Mechanism() string { return s.mechanism }
+
+// Evidence returns the identifier of the SaslHandshake node for this session.
+func (s *HandshakeSession) Evidence() domain.EvidenceID { return s.evidenceID }
+
+// HandshakeResult is what a SASL handshake run leaves the caller holding: one
+// session per path whose broker accepted the mechanism.
+//
+// # What is not here
+//
+// A path whose broker rejected the mechanism, or answered with any other error,
+// is absent — its evidence is in the graph and its connection is closed. The
+// reason is protocol state rather than the recorded state: an accepted handshake
+// is the only outcome with a defined next message on that socket, and svcdoctor
+// does not hold connections whose only continuation does not exist. See ADR 0026.
+//
+// A HandshakeResult is not safe for concurrent use.
+type HandshakeResult struct {
+	sessions []*HandshakeSession
+}
+
+// Sessions returns every session whose handshake was accepted, in the order the
+// input sessions were given.
+//
+// That order is evidence ordering, not a ranking. Nothing here selects a path,
+// which matters more than it did for ApiVersions: the next step after a
+// handshake is the one that sends credentials, and a list that arrived in a
+// meaningful-looking order would be an invitation to treat the first entry as a
+// choice somebody made. Nobody made one. See ADR 0026.
+func (r *HandshakeResult) Sessions() []*HandshakeSession {
+	if len(r.sessions) == 0 {
+		return nil
+	}
+	out := make([]*HandshakeSession, len(r.sessions))
+	copy(out, r.sessions)
+	return out
+}
+
+// Close releases every connection the HandshakeResult still owns.
+//
+// It is idempotent, safe when nothing was accepted, and skips any session whose
+// connection has been taken. The first error is returned; every connection is
+// closed regardless.
+func (r *HandshakeResult) Close() error {
+	var firstErr error
+	for _, session := range r.sessions {
+		if err := session.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// add records an accepted handshake and takes ownership of its connection.
+func (r *HandshakeResult) add(
+	conn net.Conn,
+	endpoint string,
+	address netip.AddrPort,
+	mechanism string,
+	evidenceID domain.EvidenceID,
+) {
+	r.sessions = append(r.sessions, &HandshakeSession{
+		ownedConn:  ownedConn{conn: conn},
+		endpoint:   endpoint,
+		address:    address,
+		mechanism:  mechanism,
+		evidenceID: evidenceID,
 	})
 }

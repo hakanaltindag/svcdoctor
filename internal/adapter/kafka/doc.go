@@ -5,10 +5,28 @@
 // chain establishes and measures the paths, and this package speaks over the
 // exact connections that were measured (ADR 0021).
 //
-//	transport.Continuation -> ApiVersions exchange -> domain.Evidence (L4)
+//	transport.Continuation -> ApiVersions   -> Session          -> domain.Evidence (L4)
+//	Session                -> SaslHandshake -> HandshakeSession -> domain.Evidence (L5)
 //
-// Phase 3.1 performs ApiVersions and nothing else: no SASL, no Metadata, no
-// topology, no findings.
+// Two steps exist: ApiVersions (Phase 3.1) and SASL mechanism discovery
+// (Phase 3.2a). There is no Metadata, no topology and no finding.
+//
+// # No credential is sent, and that is a boundary rather than a gap
+//
+// A SaslHandshake request carries a mechanism name and nothing else — no
+// identity, no password, no token. That is a property of the Kafka protocol, and
+// it is what makes discovery safe to run on every measured path: it costs the
+// broker nothing and appears in no audit log as an authentication attempt.
+//
+// Authentication is a different kind of act. A failed attempt is logged, counted
+// and, in directory-backed deployments, a step towards lockout. So it may not run
+// anywhere until a layer exists that can say *where* and record why — and that
+// layer does not exist yet. Three more questions block it: where a credential
+// comes from, whether it may cross an unverified channel, and how SCRAM is
+// implemented without importing the production client. See ADR 0026 section 7.
+//
+// This package therefore has no parameter a credential could be put into, and
+// security.Reveal is confined by lint to the wire package below it (ADR 0027).
 //
 // # Every transport path is asked, and no path is chosen
 //

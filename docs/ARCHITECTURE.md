@@ -276,6 +276,33 @@ A transport path that failed never reaches the adapter, so it carries no
 section 12, whose subject rule such a node would satisfy; the question is
 deferred with a reopen condition in ADR 0025 §9.
 
+### 5.2 Credential-free discovery comes before credential use
+
+Phase 3.2 added L5 mechanism discovery — `kafka.sasl_handshake` — and stopped
+there. The boundary it draws generalizes past Kafka (**ADR 0026**):
+
+- **A step that sends no credential may run on every measured path**, because it
+  costs the target nothing. ApiVersions and SaslHandshake both qualify: a
+  handshake request carries a mechanism name and no identity or secret.
+- **A step that sends a credential may not run anywhere until a layer can say
+  where.** An authentication attempt is logged, counted and lockout-relevant, so
+  "every path" and "the first path" are policy, not defaults — and *the first*
+  would silently mean IPv4, the artifact ADR 0024 removed from the transport
+  chain.
+- **Path selection for credentials therefore belongs to the layer that can record
+  why it chose**, which is the orchestration boundary that does not exist yet.
+- **Mechanism, policy and diagnosis stay separate.** That the protocol permits
+  PLAIN on an unverified channel, that svcdoctor should refuse it, and that using
+  it is worth reporting are three statements owned by three layers. An adapter
+  that silently refused would invent policy; one that silently sent would break a
+  documented one. Both are deferred rather than guessed.
+
+**Connection lifetime follows the protocol, not the evidence state.** ApiVersions
+keeps a connection whose broker answered with an error code, because any request
+may still follow it; a rejected SaslHandshake closes one, because the broker will
+accept only the agreed mechanism's continuation and there is nothing left to send.
+The criterion is whether the protocol defines a next message on that socket.
+
 ### Adapter contract sizing
 
 The registration boundary may be defined early. The adapter contract itself must stay minimal.

@@ -16,7 +16,8 @@ has exactly one runtime dependency, added in Phase 3.1: `github.com/twmb/franz-g
 - `internal/probe/tcp` — the TCP probe and connection ownership (Phase 2.2)
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 - `internal/probe/transport` — the generic transport chain (Phase 2.4)
-- `internal/adapter/kafka` — the Kafka adapter boundary and ApiVersions evidence (Phase 3.1)
+- `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1) and
+  SASL mechanism discovery (Phase 3.2a)
 - `internal/adapter/kafka/wire` — the only package that imports the Kafka protocol library
 
 No Go code exists in any of the following, and nothing in them may be assumed implemented:
@@ -51,7 +52,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -76,7 +77,9 @@ condition that should reopen it.
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
 | **Service attribute-key ownership** | Where service-specific key constants live is unsettled, and `internal/domain` must not grow a registry of them | The Kafka adapter demonstrates the real boundary, in Phase 3 |
 | **Contract-package placement** for the adapter contract, the registry, the probe chain contract and CLI orchestration | Concrete structs first; interfaces only at real boundaries. A placement chosen before a real consumer is a guess | Each is forced by the implementation that needs it |
-| **`security.Reveal` restriction** | No adapter wire package exists to confine it to, and inventing a path to point a lint rule at would be worse than waiting | Kafka wire packages exist, in Phase 3 |
+| **Which transport paths may receive credentials** | Discovery costs the target nothing and runs everywhere; an authentication attempt is logged, counted and lockout-relevant. "Every path" and "the first path" are both policy, and *the first* would silently mean IPv4 — the artifact ADR 0024 removed from the transport chain. No layer can express or record a selection yet | A layer exists that can select paths and record why (ADR 0026 §7.1) |
+| **Whether credentials may cross an unverified channel** | `docs/SECURITY.md` forbids it and the evidence already records `tls.verified` per attempt, but enforcing it is policy and explaining it is diagnosis, and an adapter may do neither. Silently refusing invents policy; silently sending breaks a documented one | An orchestration layer can carry the policy, or a diagnosis rule can state the finding (ADR 0026 §7.3) |
+| **SCRAM's implementation route** | franz-go's SCRAM lives in the main module, alongside `kgo` and three transitive dependencies, which would end this project's one-dependency property. The alternative is hand-rolled crypto. Neither belongs in a phase about SASL generally | SCRAM is its own subphase with its own dependency decision (ADR 0026 §7.4) |
 | **A `SKIPPED` protocol node for a transport path that failed** | The adapter receives completed paths only, so it cannot know an address it was never handed exists. Nothing today knows a service step was *requested* for one: the transport chain must not know Kafka, and the layer that would is the orchestration boundary Phase 3.1 did not build. The subject rule does not forbid the node — `ip:port` is known — so this is an open question, not a settled shape (ADR 0025 §9) | Phase 3 orchestration sequences transport and an adapter for one endpoint, or a rule needs to tell "L4 was never reached here" from "no L4 node here" |
 | **Execution mode** in run metadata | No vocabulary is defined, and both plausible meanings already have owners: `vantage` and the summary | A real execution mode exists that neither already expresses |
 | **`affectedResources`, recommendation reference / risk** | Listed as "recommended when relevant"; nothing consumes them and no renderer exists | A renderer or a finding catalog needs them |
@@ -127,8 +130,11 @@ expressible, not a promise that it lands automatically.
 - [x] `noctx` once network-facing code exists — activated in **Phase 2.2**
 - [x] `gosec` once there is code with meaningful signal — activated in **Phase 2.3**, when
       crypto/tls arrived
-- [ ] `bodyclose` — evaluated in 2.2 and 2.3 and still off: it checks HTTP response bodies
-      and no code uses `net/http`. **Reopen when** something does
+- [x] `forbidigo` once a wire package existed to confine `security.Reveal` to — activated in
+      **Phase 3.2a** (ADR 0027), with zero call sites, so the guard precedes the first
+      credential rather than following it
+- [ ] `bodyclose` — evaluated in 2.2, 2.3, 3.1 and 3.2 and still off: it checks HTTP response
+      bodies and no code uses `net/http`. **Reopen when** something does
 - [ ] depguard rule for the adapter contract / registry package (placement still open) — **Phase 3**
 - [ ] Kafka adapter must not implement generic DNS/TCP/TLS transport. Needs an import-level
       expression once `internal/adapter/kafka/` exists; not expressible as a package deny
@@ -137,11 +143,14 @@ expressible, not a promise that it lands automatically.
 
 ### Deferred security hardening
 
-- [ ] Restrict and audit `security.Reveal` usage to explicitly approved low-level boundaries.
-      Today it is greppable and documented, but nothing enforces where it may be called.
-      Still deferred: no adapter wire package exists to confine it to, and inventing a path
-      to point a lint rule at would be worse than waiting. There are currently zero call
-      sites outside its own package and tests — **Phase 3**
+- [x] Restrict and audit `security.Reveal` usage to explicitly approved low-level boundaries.
+      **Done in Phase 3.2** (ADR 0027), when the reopen condition below was met. `forbidigo`
+      confines the call to `internal/adapter/<service>/wire/` and fails the build elsewhere;
+      two `depguard` rules additionally deny `internal/security` to diagnosis, renderers and
+      platform. depguard could not express the reveal rule on its own, because an adapter must
+      import `internal/security` to hold a `Credential` and call `SecretFor`. There are still
+      **zero call sites**: the guard was installed in the phase before the first credential
+      byte, so no exception has to be argued against working code
 - [x] Preserve the full secret leak regression matrix whenever the representation or
       formatting of `Secret` changes. **Satisfied by executable tests, no extra CI mechanism
       needed.** Two matrices run under the ordinary `go test ./...` that `make check` already
@@ -710,6 +719,57 @@ no `Origin`.
       is a guess. Moving constants is mechanical. **Reopen when** the first Kafka diagnosis
       rule is written.
 
+### Phase 3.2a — SASL mechanism discovery (complete)
+
+Implemented in `internal/adapter/kafka/` and `internal/adapter/kafka/wire/`, **no new
+interface**, **no new dependency**, **no credential sent**:
+
+- [x] `SASLHandshake` over every ApiVersions session, one L5 node each, parented to the
+      `kafka.api_versions` node of the same path (**ADR 0026**)
+- [x] SaslHandshake **v1**, the flow whose failures are framed error codes rather than a
+      closed socket, with no automatic downgrade to v0
+- [x] Caller-supplied mechanism; probing with a deliberately invalid mechanism name was
+      rejected, because it puts a value on the wire no client would send
+- [x] Two normalized attributes — the requested mechanism and the offered list, sorted for
+      byte-stability and **not** deduplicated — plus the existing `kafka.error_code` and
+      `kafka.request_api_version` keys, reused with one meaning each
+- [x] One new code normalized: `UNSUPPORTED_SASL_MECHANISM` to `AUTH_MECHANISM_NOT_OFFERED`,
+      the **peer-side** class. `ILLEGAL_SASL_STATE` stays conservative: two causes, one code
+- [x] Connection lifetime follows the protocol, not the evidence state — only an accepted
+      handshake has a defined next message, and a test holds that apart from `FAIL`
+- [x] `HandshakeSession` as a distinct type, so authentication cannot be handed a session
+      whose mechanism was never agreed
+- [x] `Session.Endpoint()` added: Phase 3.1 dropped the logical endpoint at L4, and credential
+      authority is name-based (ADR 0026 §9)
+- [x] Kafka framing consolidated in `wire`, one implementation for every request kind, with a
+      guard that refuses flexible messages the header reader cannot parse
+- [x] `security.Reveal` confined mechanically, before any credential exists (**ADR 0027**)
+- [x] Hermetic fake broker answering both requests on one connection; no container, no cluster
+- [x] Redaction contract test covering the L5 node and its mechanism facts
+
+**Deliberately not done in 3.2a:** no authentication, no PLAIN, no SCRAM, no
+SaslAuthenticate, no credential acquisition, no `security.Reveal` call site, no path
+selection, no Metadata, no topology, no diagnosis rules, no findings, no severity, no CLI,
+no renderer, no registry, no `Origin`, and no L5 skipped nodes.
+
+**Lint reassessment, decided from evidence:** `forbidigo` enabled and verified both ways —
+the same file is rejected in `internal/adapter/kafka` and accepted in
+`internal/adapter/kafka/wire`. `gosec` stayed enabled and produced five real findings in the
+new test code, all fixed rather than suppressed except one narrow, explained `nolint` on a
+signed-int16 wire decode. `noctx` clean. `bodyclose` still off: no `net/http`.
+
+### Phase 3.2b — Kafka authentication (not started, blocked)
+
+Blocked on four decisions, not on effort. Each is in the open-decisions table with its
+reopen condition (ADR 0026 §7):
+
+- [ ] Which successful paths receive credentials, and who records that choice
+- [ ] Secret source resolution, so a `security.Credential` can exist outside a test — Phase 5
+- [ ] Whether a credential may cross an unverified or plaintext channel, and which layer
+      enforces or reports it
+- [ ] PLAIN authentication (`SaslAuthenticate`), once the three above are answered
+- [ ] SCRAM-SHA-256 / SCRAM-SHA-512, with an explicit dependency decision first
+
 ### Remaining Phase 3 work
 
 The first real adapter. It is what forces the adapter contract, the registry, service
@@ -726,18 +786,17 @@ consume Phase 2's transport engine without reimplementing any of it.
 - [ ] Target normalization for Kafka bootstrap endpoints (L0)
 - [ ] Settle service attribute-key ownership, and per-key sensitivity classification for
       redaction's known limit
-- [ ] Restrict and audit `security.Reveal` to approved wire boundaries, now that a wire
-      package exists to confine it to
+- [x] Restrict and audit `security.Reveal` to approved wire boundaries — Phase 3.2a, ADR 0027
 - [ ] depguard: adapter contract / registry package rule, and an import-level expression that
       a Kafka adapter must not implement generic DNS/TCP/TLS transport
 
 ### Protocol and authentication
 
 - [x] ApiVersions (L4) — Phase 3.1
-- [ ] SASL mechanism discovery (L5)
-- [ ] PLAIN
-- [ ] SCRAM-SHA-256
-- [ ] SCRAM-SHA-512
+- [x] SASL mechanism discovery (L5) — Phase 3.2a
+- [ ] PLAIN — blocked, see Phase 3.2b
+- [ ] SCRAM-SHA-256 — blocked, and needs a dependency decision
+- [ ] SCRAM-SHA-512 — blocked, and needs a dependency decision
 - [ ] supplied-token OAUTHBEARER
 - [ ] mTLS
 - [ ] Normalize protocol errors and response codes into evidence at the adapter boundary; no

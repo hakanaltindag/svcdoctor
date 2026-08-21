@@ -16,6 +16,7 @@ linters:
   enable:
     - depguard      # architecture boundary enforcement (see settings below)
     - errcheck      # unhandled errors hide transport/protocol failures
+    - forbidigo     # confines security.Reveal to the wire boundary (see below)
     - gosec         # security checks; earns its place now that TLS code exists
     - govet         # standard correctness checks
     - ineffassign   # assignments that are never used
@@ -41,8 +42,32 @@ linters:
   #
   # bodyclose remains off: it checks HTTP response bodies and no code uses
   # net/http. See docs/BACKLOG.md.
+  #
+  # forbidigo was activated in Phase 3.2, when a Kafka wire package finally
+  # existed to confine security.Reveal to. docs/BACKLOG.md carried that item with
+  # the reopen condition "Kafka wire packages exist"; this is it. The lint lands
+  # deliberately *before* the first credential byte, so the phase that adds
+  # authentication cannot introduce a reveal in the wrong package and discover it
+  # in review instead of in CI.
+  #
+  # depguard cannot express this. Reveal is reachable by any package that imports
+  # internal/security, and an adapter must be able to import that package to hold
+  # a Credential and check its endpoint binding. Banning the import would ban the
+  # binding check with it. forbidigo bans the call instead, which is the thing
+  # that actually turns a masked secret into bytes.
 
   settings:
+    forbidigo:
+      # Match against the full expression, so security.Reveal is recognized by
+      # the call it is: an in-package call inside internal/security is not
+      # written this way and is not the escape hatch being confined.
+      analyze-types: false
+      forbid:
+        - pattern: '^security\.Reveal$'
+          msg: >-
+            security.Reveal turns a masked secret into plaintext. Only a service
+            adapter's wire package may call it, immediately before the value goes
+            on the socket. See docs/SECURITY.md and ADR 0026.
     depguard:
       rules:
         # Diagnosis is a pure function over frozen evidence.
@@ -59,6 +84,10 @@ linters:
               desc: diagnosis produces findings; explaining them is a renderer's job
             - pkg: github.com/hakanaltindag/svcdoctor/internal/platform
               desc: diagnosis consumes normalized platform evidence, not collectors
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/security
+              desc: >-
+                diagnosis reads a frozen graph; a secret has no role in it and no
+                path into it
             - pkg: net
               desc: diagnosis must not perform network I/O
             - pkg: net/http
@@ -144,6 +173,10 @@ linters:
               desc: renderers must not execute adapters
             - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
               desc: renderers must not produce findings
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/security
+              desc: >-
+                renderers explain a report that is already safe; discovering or
+                holding secrets is not their job
 
         # Platform collects environment context, not diagnosis.
         # docs/ARCHITECTURE.md section 15.
@@ -157,6 +190,10 @@ linters:
               desc: platform packages must not drive probes
             - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
               desc: platform packages must not produce diagnosis
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/security
+              desc: >-
+                platform collectors gather environment context; harvesting cloud
+                or Kubernetes tokens is forbidden (docs/SECURITY.md item 9)
 
   exclusions:
     generated: lax
@@ -167,6 +204,23 @@ linters:
       - path: _test\.go$
         linters:
           - errcheck
+
+      # The one place security.Reveal may be called: a service adapter's wire
+      # package, which is the last layer before the socket and holds no state
+      # between exchanges. Nothing calls it yet — Phase 3.2 sends no credentials
+      # — and this exclusion is what will make the first call legal exactly here
+      # and illegal everywhere else.
+      - path: internal/adapter/[^/]+/wire/
+        linters:
+          - forbidigo
+
+      # internal/security is where Reveal is defined and where its own leak
+      # matrix proves what it returns. Those calls are in-package and are not
+      # written as security.Reveal, but the exclusion is explicit rather than
+      # incidental.
+      - path: internal/security/
+        linters:
+          - forbidigo
 
 formatters:
   enable:

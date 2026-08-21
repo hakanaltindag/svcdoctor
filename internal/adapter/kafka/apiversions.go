@@ -70,6 +70,14 @@ const (
 // attribute; this constant is only how the classification recognizes it.
 const errorCodeUnsupportedVersion int16 = 35
 
+// errorCodeUnsupportedSASLMechanism is Kafka's UNSUPPORTED_SASL_MECHANISM.
+//
+// It is the second and last code this adapter normalizes, and it earns that for
+// the same narrow reason as the first: on a SaslHandshake response it means the
+// broker does not offer the mechanism that was named, and nothing else. See
+// handshakeFailure.
+const errorCodeUnsupportedSASLMechanism int16 = 33
+
 // ErrInvalidInput reports that the adapter was called with something it cannot
 // use.
 //
@@ -189,7 +197,7 @@ func exchange(
 		return nil
 	}
 
-	result.add(conn, path.Address(), evidence.ID())
+	result.add(conn, path.Endpoint(), path.Address(), evidence.ID())
 	return nil
 }
 

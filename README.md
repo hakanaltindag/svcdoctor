@@ -6,8 +6,14 @@
 
 **Phases 1 and 2 are complete, and Phase 3 — the Kafka vertical slice — has begun. The tool is
 not usable yet**: it can sweep one endpoint end to end, ask every reachable broker for its API
-versions, and produce an evidence graph. Nothing interprets or presents that yet, because no
-diagnosis rule, renderer or CLI exists.
+versions and which SASL mechanisms it offers, and produce an evidence graph. Nothing interprets
+or presents that yet, because no diagnosis rule, renderer or CLI exists.
+
+**No credential has ever been sent.** SASL mechanism discovery is credential-free by protocol
+definition — the request carries a mechanism name and nothing else — and authentication is
+deliberately deferred behind four recorded decisions (ADR 0026). `security.Reveal`, the one
+function that turns a masked secret into plaintext, is confined by lint to adapter wire
+packages and has zero call sites (ADR 0027).
 
 What is implemented, with one runtime dependency (`github.com/twmb/franz-go/pkg/kmsg`,
 BSD-3-Clause, no transitive dependencies):
@@ -22,10 +28,11 @@ BSD-3-Clause, no transitive dependencies):
 - `internal/probe/tcp` — the TCP probe and connection ownership transfer (Phase 2.2)
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 - `internal/probe/transport` — the generic transport chain: DNS → TCP per address → TLS (Phase 2.4)
-- `internal/adapter/kafka` — the Kafka adapter boundary and ApiVersions evidence (Phase 3.1)
+- `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1) and
+  SASL mechanism discovery (Phase 3.2a)
 
-What is not implemented: Kafka SASL, Metadata and topology, PostgreSQL, concrete diagnosis
-rules, renderers and the CLI. Those directories contain no Go code.
+What is not implemented: Kafka authentication, Metadata and topology, PostgreSQL, concrete
+diagnosis rules, renderers and the CLI. Those directories contain no Go code.
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
 > It reconstructs the mental model, the locked invariants, the rejected alternatives and the

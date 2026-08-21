@@ -46,43 +46,7 @@ func kafkaPeer(t *testing.T) netip.AddrPort {
 			if acceptErr != nil {
 				return
 			}
-			go func() {
-				defer func() { _ = conn.Close() }()
-
-				var sizeBuf [4]byte
-				if _, err := io.ReadFull(conn, sizeBuf[:]); err != nil {
-					return
-				}
-				size := int64(binary.BigEndian.Uint32(sizeBuf[:]))
-				if size < 8 || size > 1<<20 {
-					return
-				}
-				body := make([]byte, size)
-				if _, err := io.ReadFull(conn, body); err != nil {
-					return
-				}
-				correlationID := binary.BigEndian.Uint32(body[4:8])
-
-				response := kmsg.NewPtrApiVersionsResponse()
-				response.SetVersion(0)
-				key := kmsg.NewApiVersionsResponseApiKey()
-				key.ApiKey, key.MinVersion, key.MaxVersion = 18, 0, 3
-				response.ApiKeys = []kmsg.ApiVersionsResponseApiKey{key}
-
-				payload := make([]byte, 4)
-				binary.BigEndian.PutUint32(payload, correlationID)
-				payload = response.AppendTo(payload)
-
-				if len(payload) > math.MaxInt32 {
-					return
-				}
-				framed := make([]byte, 4, 4+len(payload))
-				//nolint:gosec // G115: the guard above bounds the length; a frame prefix has no other form.
-				binary.BigEndian.PutUint32(framed, uint32(len(payload)))
-				_, _ = conn.Write(append(framed, payload...))
-
-				_, _ = io.Copy(io.Discard, conn)
-			}()
+			go serveKafka(conn)
 		}
 	}()
 
@@ -91,6 +55,74 @@ func kafkaPeer(t *testing.T) netip.AddrPort {
 		t.Fatalf("parsing the peer address: %v", err)
 	}
 	return addr
+}
+
+// serveKafka answers the two requests one svcdoctor run makes on a connection:
+// ApiVersions, then SaslHandshake. It answers both on the same socket, because
+// that is what the adapter does and a fixture that closed in between would make
+// the redaction fixture diverge from the code it is protecting.
+func serveKafka(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+
+	for {
+		key, correlationID, ok := readKafkaRequest(conn)
+		if !ok {
+			return
+		}
+
+		var payload []byte
+		switch key {
+		case 18: // ApiVersions
+			response := kmsg.NewPtrApiVersionsResponse()
+			response.SetVersion(0)
+			apiKey := kmsg.NewApiVersionsResponseApiKey()
+			apiKey.ApiKey, apiKey.MinVersion, apiKey.MaxVersion = 18, 0, 3
+			response.ApiKeys = []kmsg.ApiVersionsResponseApiKey{apiKey}
+			payload = response.AppendTo(correlationBytes(correlationID))
+		case 17: // SaslHandshake
+			response := kmsg.NewPtrSASLHandshakeResponse()
+			response.SetVersion(1)
+			response.SupportedMechanisms = []string{"PLAIN", "SCRAM-SHA-512"}
+			payload = response.AppendTo(correlationBytes(correlationID))
+		default:
+			return
+		}
+
+		if len(payload) > math.MaxInt32 {
+			return
+		}
+		framed := make([]byte, 4, 4+len(payload))
+		//nolint:gosec // G115: the guard above bounds the length; a frame prefix has no other form.
+		binary.BigEndian.PutUint32(framed, uint32(len(payload)))
+		if _, err := conn.Write(append(framed, payload...)); err != nil {
+			return
+		}
+	}
+}
+
+// readKafkaRequest consumes one framed request and reports its key and
+// correlation identifier.
+func readKafkaRequest(conn net.Conn) (int16, uint32, bool) {
+	var sizeBuf [4]byte
+	if _, err := io.ReadFull(conn, sizeBuf[:]); err != nil {
+		return 0, 0, false
+	}
+	size := int64(binary.BigEndian.Uint32(sizeBuf[:]))
+	if size < 8 || size > 1<<20 {
+		return 0, 0, false
+	}
+	body := make([]byte, size)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return 0, 0, false
+	}
+	//nolint:gosec // G115: a Kafka api key is an int16 on the wire by definition.
+	return int16(binary.BigEndian.Uint16(body[0:2])), binary.BigEndian.Uint32(body[4:8]), true
+}
+
+func correlationBytes(correlationID uint32) []byte {
+	out := make([]byte, 4)
+	binary.BigEndian.PutUint32(out, correlationID)
+	return out
 }
 
 type kafkaResolver struct{}
@@ -133,6 +165,18 @@ func kafkaReport(t *testing.T) domain.Report {
 
 	if len(protocol.Sessions()) != 1 {
 		t.Fatalf("sessions = %d, want 1: the fixture exchange did not complete", len(protocol.Sessions()))
+	}
+
+	handshake, err := kafka.SASLHandshake(
+		context.Background(), builder, protocol.Sessions(), kafka.SASLParams{Mechanism: "PLAIN"})
+	if err != nil {
+		t.Fatalf("kafka.SASLHandshake: %v", err)
+	}
+	t.Cleanup(func() { _ = handshake.Close() })
+
+	if len(handshake.Sessions()) != 1 {
+		t.Fatalf("handshake sessions = %d, want 1: the fixture handshake did not complete",
+			len(handshake.Sessions()))
 	}
 
 	graph, err := builder.Freeze()
@@ -232,6 +276,77 @@ func TestKafkaFactsSurviveRedaction(t *testing.T) {
 	list, _ := ranges.StringList()
 	if len(list) != 1 || list[0] != "18:0-3" {
 		t.Errorf("ranges = %v, want [18:0-3] intact", list)
+	}
+}
+
+// TestSASLFactsSurviveRedaction is the L5 half: what a broker offers is a
+// protocol fact, not an identity, and a shared report keeps saying it.
+//
+// Mechanism names are the reason this test exists. They are strings that carry
+// no identity, so declaring them identifying would pseudonymize PLAIN into
+// host-001 and destroy the only thing the node is for.
+func TestSASLFactsSurviveRedaction(t *testing.T) {
+	shareable, err := redaction.Redact(kafkaReport(t))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+
+	var handshake domain.Evidence
+	for _, evidence := range shareable.Graph().Nodes() {
+		if evidence.Step() == kafka.StepSASLHandshake {
+			handshake = evidence
+			break
+		}
+	}
+	if handshake.IsZero() {
+		t.Fatal("no handshake evidence survived redaction")
+	}
+
+	if handshake.Layer() != domain.LayerAuth {
+		t.Errorf("layer = %s, want L5", handshake.Layer())
+	}
+	if handshake.State() != domain.StatePass {
+		t.Errorf("state = %s, want PASS", handshake.State())
+	}
+
+	requested, ok := handshake.Attribute(kafka.AttrSASLRequestedMechanism)
+	if !ok {
+		t.Fatal("the requested mechanism did not survive redaction")
+	}
+	if value, _ := requested.Str(); value != "PLAIN" {
+		t.Errorf("requested mechanism = %q, want PLAIN intact", value)
+	}
+
+	offered, ok := handshake.Attribute(kafka.AttrSASLOfferedMechanisms)
+	if !ok {
+		t.Fatal("the offered mechanisms did not survive redaction")
+	}
+	list, _ := offered.StringList()
+	if len(list) != 2 || list[0] != "PLAIN" || list[1] != "SCRAM-SHA-512" {
+		t.Errorf("offered = %v, want [PLAIN SCRAM-SHA-512] intact", list)
+	}
+}
+
+// TestSASLNodeCarriesNoIdentity is the other direction: the L5 node is built
+// from a subject and an endpoint scope, and both are identity that must be gone.
+func TestSASLNodeCarriesNoIdentity(t *testing.T) {
+	shareable, err := redaction.Redact(kafkaReport(t))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+
+	for _, evidence := range shareable.Graph().Nodes() {
+		if evidence.Step() != kafka.StepSASLHandshake {
+			continue
+		}
+		for _, canary := range kafkaCanaries() {
+			if strings.Contains(evidence.ID().String(), canary) {
+				t.Errorf("the handshake identifier still carries %q", canary)
+			}
+			if strings.Contains(evidence.Subject().Ref(), canary) {
+				t.Errorf("the handshake subject still carries %q", canary)
+			}
+		}
 	}
 }
 

@@ -89,6 +89,62 @@ already keeps three things out of evidence: raw protocol objects, buffers, and t
 socket's own error text. When SASL arrives, secret handling stays inside that one
 package rather than spreading through the adapter.
 
+### Reveal is confined to that boundary, and the compiler says so
+
+As of Phase 3.2 the rule above is a lint rather than an intention (**ADR 0027**):
+
+```text
+security.Reveal may be called only from internal/adapter/<service>/wire/
+```
+
+`forbidigo` enforces it and `make check` fails otherwise. Two `depguard` rules go
+with it: diagnosis, renderers and platform collectors may not import
+`internal/security` at all, because none of them has a legitimate use for a secret
+type and a platform collector harvesting cloud tokens is already forbidden by item
+9 above.
+
+depguard alone could not express the reveal rule. An adapter must import
+`internal/security` to hold a `Credential` and call `SecretFor` — the endpoint
+check that makes credential use auditable — so denying the import would ban the
+safety check along with the escape hatch. The boundary is "which package may turn
+a secret into bytes", and that is a call-level rule.
+
+**There are still zero call sites.** The guard was installed in the phase before
+the first credential byte, deliberately: a rule added afterwards has to be argued
+against working code.
+
+### Kafka SASL: what Phase 3.2 does and does not send
+
+`kafka.sasl_handshake` (L5) asks a broker whether it offers a named mechanism. The
+request carries **a mechanism name and nothing else** — no identity, no password,
+no token — which is a property of the Kafka protocol, not a choice made here. That
+is what makes it safe to run on every measured path.
+
+Mechanism names such as `PLAIN` or `SCRAM-SHA-512` are protocol facts drawn from a
+public registry. They are neither secrets nor identity, so they are recorded as
+ordinary string values and survive redaction intact; a shared report that turned
+`PLAIN` into `host-001` would have destroyed the only thing the node is for.
+
+Authentication is deferred, and `docs/BACKLOG.md` carries the four questions that
+block it. Two of them are security questions in their own right: which paths may
+receive credentials, and whether a credential may cross an unverified channel. See
+ADR 0026.
+
+### Credential authority is name-based, and DNS cannot widen it
+
+`security.Endpoint.Equal` compares normalized names, never resolved addresses, and
+this is load-bearing rather than incidental: resolution changes over time, differs
+per vantage point, and can be influenced by an attacker.
+
+> A credential is authorized by the logical endpoint the operator named, never by
+> an address it resolved to.
+
+One lookup producing five addresses therefore produces five paths that are all the
+same authorized endpoint, and no answer in a DNS response ever becomes an
+authority of its own. `kafka.Session.Endpoint()` carries that logical name through
+the adapter chain unchanged, so the value `SecretFor` will eventually be given is
+the one the operator asked about. See ADR 0026 section 9.
+
 ## Report output mode
 
 A report is produced unredacted for local use. The shareable, redacted form is a separate
