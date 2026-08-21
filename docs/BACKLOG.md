@@ -297,6 +297,31 @@ Zero runtime dependencies. Every layer above is a pure value model or a pure
 transformation over one, which is what makes the whole of Phase 1 testable without a
 network.
 
+Sealed. `docs/PHASE1_HANDOFF.md` is the entry point for anyone starting Phase 2 with
+no prior context.
+
+## Phase 2 — Generic Transport Engine: NOT STARTED
+
+No Go code exists for any item below. `internal/probe`, `internal/adapter`,
+`internal/render`, `internal/platform`, `internal/app` and `cmd/svcdoctor` are empty.
+
+- [ ] DNS probe with latency and multi-address observations
+- [ ] TCP probe per resolved address
+- [ ] TLS handshake probe with chain, SAN and expiry observations
+- [ ] Per-probe observation types normalized into `Evidence` at the probe boundary
+- [ ] Transport chain
+- [ ] **Connection ownership transfer** — a live established connection handed to a
+      protocol adapter, so an adapter never opens its own
+- [ ] Short-circuit execution producing `SKIPPED` evidence and `BlockedBy` relationships
+- [ ] Hermetic test seams (`Resolver`, `Dialer`, `Handshaker`)
+
+Out of scope for Phase 2: Kafka or PostgreSQL protocol, topology discovery, any
+service-specific branching, renderers, CLI productization, plugin frameworks.
+
+Phase 2 must answer three deferred questions against real evidence rather than from
+first principles: transport severity policy, `Origin`, and generic/service finding
+overlap. See `docs/PHASE1_HANDOFF.md` section 15.
+
 ### Implementation (not started)
 
 - [ ] Adapter registration boundary

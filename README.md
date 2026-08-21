@@ -19,6 +19,12 @@ What is not implemented: DNS/TCP/TLS probes, connection ownership transfer, the 
 execution engine, service adapters, Kafka, PostgreSQL, topology execution, renderers and the
 CLI. Those directories contain no Go code.
 
+> **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
+> It reconstructs the mental model, the locked invariants, the rejected alternatives and the
+> open decisions, and it states exactly where Phase 2 may begin. Then read
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the relevant records in
+> [`docs/decisions/`](docs/decisions/README.md), and [`docs/BACKLOG.md`](docs/BACKLOG.md).
+
 The first implementation target will be Kafka. PostgreSQL follows after the Kafka vertical slice is complete and validated.
 
 | | |
