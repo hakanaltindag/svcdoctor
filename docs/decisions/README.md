@@ -20,7 +20,7 @@ does not overturn it, and both remain authoritative.
 | 0006 | Project license is Apache-2.0 | Accepted | Supersedes its own earlier open state |
 | 0007 | Layer order places protocol before authentication | Accepted | Corrects the ordering used before it |
 | 0008 | Kafka wire-client strategy | Accepted | Direction only; no Kafka code exists yet |
-| 0009 | Explicit composition-root service registration | Accepted | No registry exists yet; the decision governs Phase 2+ |
+| 0009 | Explicit composition-root service registration | Accepted | No registry exists yet; the decision binds from Phase 3, when the first adapter lands |
 | 0010 | Canonical evidence excludes raw objects and uncontrolled payloads | Accepted | |
 | 0011 | CLI uses service-specific subcommands | Accepted | No CLI exists yet |
 | 0012 | Vantage is a first-class concept | Accepted | |

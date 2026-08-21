@@ -89,6 +89,35 @@ Generic does not mean parameterless. A TLS probe may accept SNI, ALPN, protocol 
 bounds, trust source, and client certificate material, because those are generic TLS
 concepts. The caller supplies them; the probe does not know which service asked.
 
+### 3.1 Transport orchestration is not application orchestration
+
+A generic transport chain sequences DNS, TCP and TLS for one endpoint and decides that a
+failed lookup blocks the connection attempt that would have followed. That sequencing is
+part of the probe boundary.
+
+> **Generic transport orchestration is not application orchestration.**
+
+Both run steps in order, which is what makes them easy to conflate. They are on opposite
+sides of an architecture boundary:
+
+| | Generic transport orchestration | Application orchestration |
+|---|---|---|
+| Lives in | `internal/probe` | `internal/app`, `cmd/svcdoctor` |
+| Knows | how to run DNS → TCP → TLS for one endpoint, and when a failure blocks the next layer | which service was selected, which adapter to wire, which rules to evaluate, which renderer to use, which exit code to return |
+| Produces | evidence and, on success, a live connection | a report, rendered output, and a process exit code |
+| Depends on | `internal/domain` and the standard library | every layer |
+
+Anything that chooses a *service*, assembles a *report*, or decides what the *process* does
+is application orchestration and does not belong in a probe.
+
+The same split governs timeouts. A per-probe or per-chain deadline is transport-local. The
+whole-run execution budget, cancellation propagation, and the partial-run exit code in
+section 13 belong to the application boundary.
+
+This distinction is a boundary clarification, not a new decision: it follows from section 14
+and from the invariant that probes collect facts. `docs/BACKLOG.md` applies it to the phase
+plan.
+
 ## 4. Connection ownership
 
 Generic transport owns DNS, TCP, and TLS. A protocol adapter must not reimplement that logic.
@@ -462,8 +491,9 @@ The application/orchestration layer collects platform context when required. Dia
 consumes only normalized platform evidence/context, exactly as it consumes any other
 evidence, and performs no platform I/O itself.
 
-Kubernetes integration stays Phase 4 work. No Kubernetes client library selection is made
-at this stage.
+Kubernetes integration stays Phase 5 work, with the rest of platform and productization. No
+Kubernetes client library selection is made at this stage. See `docs/BACKLOG.md` for the
+authoritative phase numbering.
 
 ### Vantage
 

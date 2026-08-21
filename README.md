@@ -118,7 +118,9 @@ long-term monitoring, LLM-based core diagnosis, and generic rule scripting DSLs.
 
 ## Repository layout
 
-The `internal/`, `cmd/`, and `test/` directories below are scaffold only. They contain no Go code.
+Only `internal/domain`, `internal/security`, `internal/security/redaction` and
+`internal/diagnosis` contain Go code. Every other `internal/`, `cmd/` and `test/` directory
+below is scaffold and is empty.
 
 ```text
 svcdoctor/
@@ -135,16 +137,16 @@ svcdoctor/
 │   │   ├── tcp/                   # Generic TCP facts
 │   │   └── tls/                   # Generic TLS facts
 │   ├── adapter/
-│   │   ├── kafka/                 # Kafka protocol + topology semantics
-│   │   └── postgres/              # Reserved for phase 3
+│   │   ├── kafka/                 # Kafka protocol + topology semantics; phase 3
+│   │   └── postgres/              # Reserved for phase 4
 │   ├── diagnosis/
 │   │   ├── transport/             # Cross-service transport-layer correlation
-│   │   ├── kafka/                 # Kafka-specific diagnosis rules
-│   │   └── postgres/              # Reserved for phase 3
+│   │   ├── kafka/                 # Kafka-specific diagnosis rules; phase 3
+│   │   └── postgres/              # Reserved for phase 4
 │   ├── render/                    # Terminal / JSON / Markdown / HTML renderers
 │   ├── security/                  # Secret types + structural redaction
 │   └── platform/
-│       ├── kubernetes/            # Optional platform context; phase 4
+│       ├── kubernetes/            # Optional platform context; phase 5
 │       └── local/                 # Local vantage metadata only; no host doctor
 ├── test/
 │   ├── integration/
@@ -170,6 +172,11 @@ Unit and package-level fixtures will live in package-adjacent `testdata/` direct
 the corresponding packages exist. `test/` holds cross-package and environment-dependent tests.
 
 ## Implementation order
+
+The authoritative phase numbering and checklist live in
+[`docs/BACKLOG.md`](docs/BACKLOG.md): Phase 1 Core Foundations (complete), Phase 2 Generic
+Transport Engine, Phase 3 Kafka, Phase 4 PostgreSQL, Phase 5 productization/platform/
+renderers, Phase 6 validation. The sequence below is the same work read as a narrative.
 
 1. Freeze architecture contracts and evidence schema.
 2. Define secret handling and redaction contracts.

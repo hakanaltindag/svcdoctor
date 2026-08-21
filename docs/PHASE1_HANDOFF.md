@@ -141,9 +141,9 @@ exit-code mapping. It ships **no concrete rules yet** — see §13.
 
                 internal/security ──────────────────────> (stdlib)
 
-   Phase 2 boundary, not yet present:
-       internal/probe ──> internal/domain
-       internal/adapter ──> internal/probe, internal/domain
+   Not yet present:
+       internal/probe ──> internal/domain                      (Phase 2)
+       internal/adapter ──> internal/probe, internal/domain    (Phase 3)
 ```
 
 `internal/domain` and `internal/security` are both leaves. Nothing imports
@@ -428,26 +428,53 @@ the same question and will likely be answered together.
 
 ## 14. Phase 2 entry contract
 
-**Phase 2 — Generic Transport Engine.**
+**Phase 2 — Generic Transport Engine.** It delivers a reusable transport engine: the
+facts a client can gather about reaching an endpoint, and a live connection the first
+adapter can take over in Phase 3. It delivers no product.
+
+`docs/BACKLOG.md` holds the authoritative checklist and the repository's phase
+numbering. This section states the same boundary in prose; if the two ever disagree,
+report the contradiction rather than choosing one.
 
 **May implement:** DNS, TCP and TLS probes under `internal/probe`; per-probe
-observation types normalized into `Evidence` at their own boundary; a transport chain;
-**connection ownership transfer**, so a successfully established live connection can
-be handed to a protocol adapter; short-circuit execution that records `SKIPPED`
-evidence and produces `BlockedBy` relationships; and hermetic test seams
-(`Resolver`, `Dialer`, `Handshaker`) — the one place an interface is justified,
-because testability is a real second consumer and no test may depend on an
-uncontrolled public service.
+observation types normalized into `Evidence` at their own boundary; a deterministic
+evidence identifier scheme for transport nodes, because the domain generates none; a
+generic transport chain orchestrating DNS → TCP → TLS inside the probe boundary;
+transport-local timeout and budget handling; short-circuit execution that records
+`SKIPPED` evidence and produces `BlockedBy` relationships; **connection ownership
+transfer**, so a successfully established live connection can be handed to a protocol
+adapter; and hermetic test seams (`Resolver`, `Dialer`, `Handshaker`) — the one place
+an interface is justified, because testability is a real second consumer and no test
+may depend on an uncontrolled public service.
 
-**Must not implement:** Kafka or PostgreSQL protocol, topology discovery, any
-service-specific branching, renderers, CLI productization unless separately
-scheduled, or a speculative plugin framework.
+**Must not implement:** `internal/app` product orchestration, `cmd/svcdoctor`, the CLI
+in any form, service selection, the adapter contract, the adapter registry or service
+registration, Kafka or PostgreSQL protocol, topology discovery, endpoint deduplication
+or topology depth policy, renderers, exit-code mapping or implementation, secret source
+resolution, concrete transport diagnosis rules whose severity policy is still
+unresolved, any service-specific branching, or a speculative plugin framework.
+
+**Generic transport orchestration is not application orchestration.** Both run steps in
+order, which is what makes them easy to conflate, but they sit on opposite sides of an
+architecture boundary. A chain that sequences generic probes for one endpoint, and
+decides that a failed DNS lookup blocks the TCP attempt, is inside the probe boundary
+and is Phase 2. Anything that chooses a *service*, assembles a *report*, or decides
+what the *process* does is application orchestration, lives in `internal/app` and
+`cmd/svcdoctor`, and is Phase 5. The same split governs timeouts: a per-probe or
+per-chain deadline is Phase 2, while the whole-run execution budget and cancellation of
+§13 in `docs/ARCHITECTURE.md` belong to the application boundary. See
+`docs/ARCHITECTURE.md` section 3.1.
 
 **Watch this boundary.** Connection ownership transfer is the invariant most easily
 lost by accident: if a probe is written as "connect, measure, close", the adapter is
 forced to open its own connection, and the rule that generic transport owns
 DNS/TCP/TLS dies without a single test failing. Design the probe API so a live
 connection can be handed over from the start.
+
+**Watch this one too.** Redaction recognizes a string attribute as identifying only
+when it parses as an IP address or a `host[:port]` reference. A probe that records an
+identifying value in some other string shape lands inside the known limit of §9.
+Prefer attribute shapes redaction can recognize structurally.
 
 Phase 2 will be the first real exercise of the `probe-is-service-agnostic` depguard
 rule and the first code in the repository to use `net` and `crypto/tls`.
@@ -468,6 +495,12 @@ Phase 2 produces:
 
 Answering 1 probably requires answering 2. Answering 2 reopens ADR 0013's deferral,
 which is expected and allowed — the ADR names this exact condition.
+
+These are design decisions, not implementation items. Phase 2's obligation is to
+*produce the evidence that lets them be answered*, not to answer them by fiat. Because
+1 is open, concrete rules under `internal/diagnosis/transport/` are not Phase 2 work;
+they are Phase 3 work, blocked on that answer. And 2 is unlikely to be settled before
+Phase 3 either, because topology is what makes the question concrete.
 
 ---
 

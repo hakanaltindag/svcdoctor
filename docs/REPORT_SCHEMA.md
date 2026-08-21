@@ -164,6 +164,21 @@ Not every field is mandatory on every node. `failureClass` is meaningless on a `
 - `step` names the concrete operation, for example a DNS lookup or an ApiVersions exchange.
 - `origin` distinguishes an endpoint the user supplied from one discovered through topology.
 
+**`origin` is intentionally not implemented, and the concept above is not yet a field.**
+Topology and discovery execution do not exist, so nothing reads it, and adding it now would
+create a second record of how a subject entered the run alongside the graph structure itself,
+with no implementation to show which is authoritative. Whether explicit provenance is
+necessary is a question only a real topology implementation can answer.
+
+Do not infer that parent relationships already encode discovery provenance. A parent edge is
+a structural or derivation relationship and says nothing about how a subject entered the run;
+reading provenance out of graph shape would be a guess with the same authority problem in a
+less visible form.
+
+Revisit when real topology orchestration exists, at which point the requirement will be
+concrete enough to decide whether provenance belongs on the node, in graph metadata, or
+nowhere. This is a deferral, not a rejection. See ADR 0013 and `docs/BACKLOG.md`.
+
 ### States
 
 ```text
