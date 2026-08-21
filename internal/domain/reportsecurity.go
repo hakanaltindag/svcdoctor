@@ -63,28 +63,52 @@ func (m OutputMode) MarshalJSON() ([]byte, error) {
 	return []byte(strconv.Quote(outputModeNames[m])), nil
 }
 
+// RedactionCounts is how many values a shareable transformation replaced, by
+// category.
+//
+// It is a struct rather than a map so the encoded form has a fixed shape and a
+// fixed field order, with no key-ordering question and no missing keys.
+//
+// The counts describe what was removed, never what it was. They exist so a
+// reader can tell that redaction happened and roughly what kind of thing it
+// touched, which is what docs/REPORT_SCHEMA.md section 9 asks for.
+//
+// There is no separate identity or username category. Schema v1 has no
+// structural carrier for a username: the report holds no credential, and a
+// username can only reach it inside an attribute value or a prose field, where
+// it is counted under those categories.
+type RedactionCounts struct {
+	// Hostname counts DNS names replaced, wherever they appeared.
+	Hostname int `json:"hostname"`
+	// IPAddress counts IP literals replaced.
+	IPAddress int `json:"ipAddress"`
+	// EvidenceID counts evidence identifiers rewritten.
+	EvidenceID int `json:"evidenceId"`
+	// Prose counts human-readable fields in which at least one value was
+	// replaced.
+	Prose int `json:"prose"`
+}
+
+// Total returns how many replacements were counted.
+func (c RedactionCounts) Total() int {
+	return c.Hostname + c.IPAddress + c.EvidenceID + c.Prose
+}
+
 // ReportSecurity carries the facts a reader needs to interpret a report
 // correctly.
 //
-// It is metadata, not a mechanism. It records what a run did; it performs no
-// redaction and holds no secret. There is deliberately no security.Secret or
-// security.Credential field, which is why this package needs no dependency on
-// internal/security at all.
+// It is metadata, not a mechanism. It records what a run did and what a
+// transformation removed; it performs no redaction itself and holds no secret.
+// There is deliberately no security.Secret or security.Credential field, which
+// is why this package needs no dependency on internal/security at all.
 //
-// # Why there is no redacted-field count
-//
-// docs/REPORT_SCHEMA.md section 9 also lists the number and categories of
-// redacted fields. Those fields are absent here on purpose: no redactor exists,
-// so any value this type could report would be a fabrication. A count of zero
-// would read as "nothing sensitive was present" rather than "nothing was
-// examined". They arrive with structural redaction, which can populate them
-// honestly.
-//
-// The zero ReportSecurity is invalid. Use NewReportSecurity.
+// The zero ReportSecurity is invalid. Use NewReportSecurity, or
+// NewShareableReportSecurity for the output of a redaction.
 type ReportSecurity struct {
 	outputMode                  OutputMode
 	tlsVerificationDisabled     bool
 	credentialForwardingEnabled bool
+	redactions                  RedactionCounts
 }
 
 // NewReportSecurity records how a run was configured.
@@ -112,8 +136,49 @@ func NewReportSecurity(
 	}, nil
 }
 
+// NewShareableReportSecurity derives the security metadata of a redacted report.
+//
+// It takes the local report's metadata and the counts of what a transformation
+// actually replaced, so the shareable report carries forward the same facts
+// about how the run was configured while stating what was removed.
+//
+// The source must be a LOCAL_FULL value. That is what keeps the mode honest:
+// the ordinary constructor refuses to produce SHAREABLE_REDACTED at all, and
+// this one can only derive it from a real local report, alongside counts a
+// caller has to have something to count.
+//
+// Counts must not be negative. All-zero counts are valid and mean a report held
+// nothing identifying.
+func NewShareableReportSecurity(from ReportSecurity, redactions RedactionCounts) (ReportSecurity, error) {
+	if from.IsZero() {
+		return ReportSecurity{}, fmt.Errorf(
+			"%w: shareable security metadata requires the local report's metadata", ErrInvalidValue)
+	}
+	if from.outputMode != OutputModeLocalFull {
+		return ReportSecurity{}, fmt.Errorf(
+			"%w: shareable security metadata must derive from %s, got %s",
+			ErrInvalidValue, OutputModeLocalFull, from.outputMode)
+	}
+	if redactions.Hostname < 0 || redactions.IPAddress < 0 ||
+		redactions.EvidenceID < 0 || redactions.Prose < 0 {
+		return ReportSecurity{}, fmt.Errorf(
+			"%w: redaction counts must not be negative", ErrInvalidValue)
+	}
+	return ReportSecurity{
+		outputMode:                  OutputModeShareableRedacted,
+		tlsVerificationDisabled:     from.tlsVerificationDisabled,
+		credentialForwardingEnabled: from.credentialForwardingEnabled,
+		redactions:                  redactions,
+	}, nil
+}
+
 // OutputMode returns which form of report was produced.
 func (s ReportSecurity) OutputMode() OutputMode { return s.outputMode }
+
+// Redactions returns how many values a shareable transformation replaced.
+//
+// It is all zeroes on a local report, where nothing was transformed.
+func (s ReportSecurity) Redactions() RedactionCounts { return s.redactions }
 
 // TLSVerificationDisabled reports whether the run ran with TLS verification off.
 func (s ReportSecurity) TLSVerificationDisabled() bool { return s.tlsVerificationDisabled }
@@ -129,17 +194,28 @@ func (s ReportSecurity) IsZero() bool { return s == ReportSecurity{} }
 //
 // The booleans are always present, because false is a statement about the run
 // rather than an absent value.
+//
+// The redaction counts appear only on a shareable report. On a local report
+// there was no transformation, and emitting zeroes would read as "nothing
+// sensitive was present" rather than "nothing was removed".
 func (s ReportSecurity) MarshalJSON() ([]byte, error) {
 	if s.IsZero() {
 		return nil, fmt.Errorf("%w: zero ReportSecurity", ErrInvalidValue)
 	}
-	return json.Marshal(struct {
-		OutputMode                  OutputMode `json:"outputMode"`
-		TLSVerificationDisabled     bool       `json:"tlsVerificationDisabled"`
-		CredentialForwardingEnabled bool       `json:"credentialForwardingEnabled"`
+
+	out := struct {
+		OutputMode                  OutputMode       `json:"outputMode"`
+		TLSVerificationDisabled     bool             `json:"tlsVerificationDisabled"`
+		CredentialForwardingEnabled bool             `json:"credentialForwardingEnabled"`
+		Redactions                  *RedactionCounts `json:"redactions,omitempty"`
 	}{
 		OutputMode:                  s.outputMode,
 		TLSVerificationDisabled:     s.tlsVerificationDisabled,
 		CredentialForwardingEnabled: s.credentialForwardingEnabled,
-	})
+	}
+	if s.outputMode == OutputModeShareableRedacted {
+		out.Redactions = &s.redactions
+	}
+
+	return json.Marshal(out)
 }

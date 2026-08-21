@@ -60,13 +60,44 @@ Credentials are not automatically sent over an unverified TLS channel.
 ## Report output mode
 
 A report is produced unredacted for local use. The shareable, redacted form is a separate
-report produced by transforming a local one.
+report produced by transforming a local one, in `internal/security/redaction`.
 
-Until that transformation exists, a report **cannot be labelled shareable**: the report
-constructor refuses the mode, and the redacted-field metadata is absent rather than zero.
-A report that claimed redaction it never performed would be acted on by a reader who shares
-it. Prefer an unavailable mode over an aspirational one. See `docs/REPORT_SCHEMA.md`
-section 9.
+The mode stays honest at the type level: the ordinary report-security constructor still
+refuses to produce `SHAREABLE_REDACTED`, so only a real transformation can label a report
+that way, and the redaction counts it carries come from that transformation rather than from
+a caller.
+
+### What a shareable report removes
+
+Identity is removed and correlation is preserved. Each distinct value maps to one stable
+pseudonym everywhere it appears, so a reader can still see that one host occurs in the
+target, in several evidence subjects and in a finding:
+
+```text
+kafka.prod.internal -> host-001
+10.20.30.40         -> ip-001
+```
+
+Covered structurally: the target, the vantage host, evidence and finding subjects, evidence
+identifiers, identifying attribute values, and any of those values repeated inside finding
+prose. Ports are kept — a port says which protocol was expected, not who was running it.
+
+Pseudonyms are per-report. Two reports shared from the same environment cannot be
+correlated through them.
+
+Diagnostic content is untouched: layers, states, failure classes, steps, graph topology,
+finding codes, kinds, severities, confidences, timings and the summary figures all survive.
+
+### Known limit
+
+An attribute value that carries identity in a shape the transformation cannot recognize
+structurally, and that appears nowhere else in the report, is **preserved**. The evidence
+model has no per-key sensitivity classification, and adding one is tied to the open question
+of where service attribute keys live.
+
+Until that is resolved, treat a shareable report as safe for the identifiers svcdoctor knows
+it collected, not as a guarantee about attribute values a future adapter may add. See
+ADR 0018 and `docs/BACKLOG.md`.
 
 ## Redaction boundary
 

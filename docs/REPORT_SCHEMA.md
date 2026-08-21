@@ -385,12 +385,28 @@ See `docs/SECURITY.md`.
 
 ### Implemented in schema v1
 
-`outputMode`, `tlsVerificationDisabled` and `credentialForwardingEnabled`.
+`outputMode`, `tlsVerificationDisabled`, `credentialForwardingEnabled`, and — on a shareable
+report only — `redactions`.
 
-**Redacted-field counts and categories are absent, and `SHAREABLE_REDACTED` cannot be
-produced.** Structural redaction does not exist yet, so any count would be a fabrication —
-a zero would read as "nothing sensitive was present" rather than "nothing was examined" —
-and a report labelled shareable would assert a transformation that never ran, which a reader
-would act on by sharing it. The vocabulary is defined so the encoded shape is stable; the
-constructor refuses the mode until a redactor exists. A shareable report is produced by
-transforming a local one, which is the phase that will populate these fields honestly.
+```json
+"security": {
+  "outputMode": "SHAREABLE_REDACTED",
+  "tlsVerificationDisabled": false,
+  "credentialForwardingEnabled": false,
+  "redactions": {"hostname": 3, "ipAddress": 1, "evidenceId": 3, "prose": 4}
+}
+```
+
+The counts are of **distinct values** replaced, not occurrences: "three hostnames were
+removed" is what a reader can act on, and an occurrence count would describe how often each
+host appeared, which is structural information about the environment. `prose` counts fields
+in which at least one value was replaced.
+
+`redactions` is **absent on a local report**. Nothing was transformed there, and a zero would
+read as "nothing sensitive was present" rather than "nothing was removed".
+
+The counts come from the transformation, never from a caller: the ordinary constructor still
+refuses to produce `SHAREABLE_REDACTED`, so only a real redaction can label a report that
+way. There is no separate identity or username category — schema v1 has no structural
+carrier for a username, so one can only reach a report through an attribute value or prose
+and is counted there. See ADR 0018 and `docs/SECURITY.md`.

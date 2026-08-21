@@ -128,7 +128,7 @@ func NewReport(in ReportInput) (Report, error) {
 		return Report{}, err
 	}
 
-	sortFindings(findings)
+	SortFindings(findings)
 
 	return Report{
 		run:      in.Run,
@@ -155,10 +155,11 @@ func validateEvidenceRefs(g Graph, findings []Finding) error {
 	return nil
 }
 
-// sortFindings puts findings in canonical order.
+// SortFindings puts findings in canonical order, in place.
 //
-// Insertion order is not canonical: diagnosis may evaluate rules concurrently
-// later, and a report must be byte-stable for the same content regardless.
+// Insertion order is not canonical: diagnosis evaluates a set of rules whose
+// order is a wiring detail, and a report must be byte-stable for the same
+// content regardless of it.
 //
 // The order is most severe first, then earliest layer, which puts the earliest
 // broken layer near the top where docs/FINDINGS.md section 5 wants it. The
@@ -172,7 +173,10 @@ func validateEvidenceRefs(g Graph, findings []Finding) error {
 //	joined evidence references ascending
 //
 // Two findings equal on all six are treated as equivalent for ordering.
-func sortFindings(findings []Finding) {
+//
+// It is exported because the report and the diagnosis engine both need this
+// order, and a second implementation of it could disagree with this one.
+func SortFindings(findings []Finding) {
 	slices.SortStableFunc(findings, func(a, b Finding) int {
 		if c := cmp.Compare(b.Severity(), a.Severity()); c != 0 {
 			return c

@@ -4,13 +4,20 @@
 
 ## Project status
 
-Repository and tooling bootstrap exists. **No svcdoctor runtime, domain, or protocol
-implementation has been written yet**, and the tool is not usable.
+**Phase 1 — Core Foundations is complete. The tool is not usable yet**: it cannot connect to
+anything, because no probe, adapter or CLI exists.
 
-Concretely:
+What is implemented, with zero runtime dependencies:
 
-- The Go module, license, quality gates, and CI are in place.
-- There are zero Go source files. Nothing diagnoses anything yet.
+- `internal/security` — masked secret and endpoint-bound credential primitives
+- `internal/security/redaction` — structural redaction into a shareable report
+- `internal/domain` — domain primitives, evidence, the immutable evidence DAG, findings and
+  the canonical report
+- `internal/diagnosis` — the rule contract and a deterministic diagnosis engine
+
+What is not implemented: DNS/TCP/TLS probes, connection ownership transfer, the short-circuit
+execution engine, service adapters, Kafka, PostgreSQL, topology execution, renderers and the
+CLI. Those directories contain no Go code.
 
 The first implementation target will be Kafka. PostgreSQL follows after the Kafka vertical slice is complete and validated.
 

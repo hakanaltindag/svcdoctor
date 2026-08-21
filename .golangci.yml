@@ -34,12 +34,55 @@ linters:
               desc: diagnosis must not import probes; it consumes normalized evidence only
             - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter
               desc: diagnosis must not import adapters; it consumes normalized evidence only
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/render
+              desc: diagnosis produces findings; explaining them is a renderer's job
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/platform
+              desc: diagnosis consumes normalized platform evidence, not collectors
             - pkg: net
               desc: diagnosis must not perform network I/O
             - pkg: net/http
               desc: diagnosis must not perform network I/O
             - pkg: crypto/tls
               desc: diagnosis must not perform TLS operations
+            - pkg: os
+              desc: diagnosis must not read files, the environment, or process state
+            - pkg: os/exec
+              desc: diagnosis must not run commands
+            - pkg: math/rand
+              desc: diagnosis must be deterministic
+            - pkg: math/rand/v2
+              desc: diagnosis must be deterministic
+
+        # Redaction transforms one valid report into another. It performs no I/O
+        # and reaches no other layer. docs/ARCHITECTURE.md section 6.2, ADR 0018.
+        redaction-is-a-transformation:
+          files:
+            - "**/internal/security/redaction/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/probe
+              desc: redaction transforms a finished report; it collects nothing
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter
+              desc: redaction transforms a finished report; it knows no protocol
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
+              desc: redaction must not diagnose
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/render
+              desc: redaction transforms domain values, never serialized output
+            - pkg: net
+              desc: redaction must not perform network I/O
+            - pkg: net/http
+              desc: redaction must not perform network I/O
+            - pkg: os
+              desc: redaction must not read files, the environment, or process state
+            - pkg: os/exec
+              desc: redaction must not run commands
+            - pkg: math/rand
+              desc: pseudonyms must be deterministic
+            - pkg: math/rand/v2
+              desc: pseudonyms must be deterministic
+            - pkg: regexp
+              desc: >-
+                redaction is structural; a regex scan is a safety net over known
+                values, not the mechanism
 
         # Probes are service-agnostic and produce observations, not diagnosis.
         # docs/ARCHITECTURE.md section 3.

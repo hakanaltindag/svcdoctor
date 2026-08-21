@@ -150,6 +150,61 @@ Cross-service transport correlation lives in `internal/diagnosis/transport/`; se
 live in `internal/diagnosis/<service>/`. This allows service-specific knowledge without
 contaminating the shared engine.
 
+### 6.1 Rule contract
+
+```text
+immutable domain.Graph -> rules -> []domain.Finding
+```
+
+A rule is a function, `func(domain.Graph) []domain.Finding`, owned by
+`internal/diagnosis`. The frozen graph is its only argument and it returns no error: it
+reads in-memory evidence and has nothing operational to fail at. See ADR 0017.
+
+- The engine holds rules, evaluates them, and orders the result. It does not filter, rank,
+  merge or suppress findings, and it holds no service name to branch on. A service rule is
+  simply a rule that is only wired in for that service.
+- Findings come back in the canonical order of `domain.SortFindings`, the same order the
+  report uses. Wiring order does not reach the output.
+- The engine does not deduplicate. Deciding when two findings are one conclusion is not
+  defined anywhere, and dropping one could remove a real finding.
+- Diagnosis stops at findings. It assembles no report, derives no summary (ADR 0015), and
+  maps nothing to an exit code.
+- A rule must not knowingly emit a dangling evidence reference, but the authoritative
+  membership check stays at report construction, where both sides are owned (ADR 0014).
+
+Purity is enforced by `depguard` in `.golangci.yml` rather than left to discipline:
+`internal/diagnosis` may not import probes, adapters, renderers, platform collectors, `net`,
+`net/http`, `crypto/tls`, `os`, `os/exec`, or a random source.
+
+### 6.2 Redaction boundary
+
+```text
+LOCAL_FULL Report -> Redact -> SHAREABLE_REDACTED Report
+```
+
+> **Redaction transforms an already-valid canonical report into another valid canonical
+> report. It does not diagnose.**
+
+It lives in `internal/security/redaction`, a subpackage so that `internal/security` stays a
+leaf and the `domain -> security` direction remains available. It creates no findings,
+changes no severity, confidence, kind, state, failure class or graph relationship, performs
+no I/O, and never mutates its input.
+
+- Identity is removed, correlation is preserved: each distinct value maps to one stable
+  pseudonym everywhere it appears. Ports survive; they say which protocol was expected.
+- Evidence identifiers are rewritten, because the identifier grammar admits hostnames.
+  Every reference is remapped with them and the result passes the ADR 0014 check.
+- Assignment is deterministic: values are collected, sorted, then numbered. Pseudonyms are
+  per-report, so two shared reports cannot be correlated.
+- The output is rebuilt through the ordinary domain constructors, so its summary is
+  re-derived (ADR 0015) rather than copied.
+- Redaction fails closed. There is no partial result, and errors never name the value they
+  were protecting.
+
+Enforced by `depguard`: the package may not import probes, adapters, diagnosis, renderers,
+`net`, `net/http`, `os`, `os/exec`, a random source, or `regexp` — redaction is structural,
+and pattern matching is only a safety net over already-known values. See ADR 0018.
+
 ## 7. Renderers
 
 Renderers transform the canonical report model into output formats.

@@ -84,12 +84,19 @@ Tracked now, implemented when the required boundaries exist:
 
 - [ ] Restrict and audit `security.Reveal` usage to explicitly approved low-level
       boundaries. Today it is greppable and documented, but nothing enforces where it
-      may be called. Once the adapter wire packages exist, a depguard or custom lint
-      rule should confine it to them.
-- [ ] Preserve the full secret leak regression matrix whenever the representation or
-      formatting of `Secret` changes. The `%p` reflection leak found during Phase 1.1
-      was only caught because the matrix sweeps every fmt verb, JSON, text, and error
-      path; shrinking it would silently remove that protection.
+      may be called. Still deferred: no adapter wire package exists to confine it to,
+      and inventing a path to point a lint rule at would be worse than waiting. As of
+      Phase 1.6 there are zero call sites outside its own package and tests.
+- [x] Preserve the full secret leak regression matrix whenever the representation or
+      formatting of `Secret` changes. **Satisfied by executable tests, no extra CI
+      mechanism needed.** Two matrices run under the ordinary `go test ./...` that
+      `make check` already invokes: the Phase 1.1 secret matrix in
+      `internal/security/leak_test.go`, which sweeps every fmt verb, JSON, text, error
+      and reflection path, and the Phase 1.6 report matrix in
+      `internal/security/redaction/redact_test.go`, which asserts hostname, IP, vantage
+      and secret canaries are absent from every field, the canonical JSON and error
+      strings. A change that reopens a leak fails the build rather than needing a
+      separate guard.
 
 ### Phase 1.2 — Domain primitives (complete)
 
@@ -223,12 +230,77 @@ Implemented in `internal/domain/`, standard library only, zero interfaces:
   report cannot claim a transformation that never ran.
 - Exit-code computation — the contract lives in `docs/SCOPE.md` and belongs to the CLI.
 
+### Phase 1.5 — Diagnosis engine (complete)
+
+Implemented in `internal/diagnosis/`, standard library plus `internal/domain` only,
+zero interfaces:
+
+- [x] `Rule` contract — `func(domain.Graph) []domain.Finding`, owned by
+      `internal/diagnosis` (ADR 0017)
+- [x] `Engine` — immutable rule set, deterministic evaluation, canonical ordering
+- [x] `domain.SortFindings` exported so the engine and the report share one
+      definition of canonical order
+- [x] Purity enforced by depguard rather than convention
+
+**No concrete rules were implemented, and the reason is a missing policy rather than
+missing work.** `docs/FINDINGS.md` names `DNS_RESOLUTION_FAILED`,
+`TCP_CONNECTION_REFUSED` and `TLS_CERTIFICATE_EXPIRED` only as examples of the naming
+convention; it assigns them no severity, confidence or kind. Kind and confidence are
+derivable from evidence state, severity is not. See ADR 0017.
+
+Two questions must be answered before the first transport rule is written:
+
+- [ ] **Severity policy for transport failures.** Severity is impact, and whether a
+      failed lookup or refused connection prevents correct use depends on whether the
+      endpoint was user-supplied or discovered. That distinction is `Origin`, deferred
+      by ADR 0013 until topology orchestration exists.
+- [ ] **Generic/service rule overlap.** `docs/FINDINGS.md` section 5 forbids
+      manufacturing downstream failure findings, but nothing says how a generic
+      transport rule and a service rule avoid both reporting one failed endpoint —
+      `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` and a generic `TCP_CONNECTION_REFUSED`
+      would otherwise describe the same fact twice.
+
+Also deferred:
+
+- [ ] **Finding identity**, needed only if a real rule set produces duplicates. The
+      engine preserves them today rather than guessing which to discard (ADR 0017).
+
+### Phase 1.6 — Structural redaction (complete)
+
+Implemented in `internal/security/redaction/`, standard library plus `internal/domain`
+only, zero interfaces:
+
+- [x] `Redact` — `LOCAL_FULL` report to `SHAREABLE_REDACTED` report
+- [x] Deterministic per-report pseudonyms, assigned from a sorted collection pass
+- [x] Evidence identifier remapping, with every reference rewritten (ADR 0014 still passes)
+- [x] Target, vantage, subject, attribute and prose redaction
+- [x] `SHAREABLE_REDACTED` activated, with derived `RedactionCounts` metadata
+- [x] Idempotent: an already-shareable report is returned unchanged
+- [x] Fail-closed, with a residual scan over known values as a safety net
+- [x] Purity enforced by depguard, including a ban on `regexp`
+
+**Known limit, recorded in `docs/SECURITY.md` and ADR 0018:** an attribute value that
+carries identity in a shape the transformation cannot recognize structurally, and that
+appears nowhere else in the report, is preserved. Closing this needs per-key sensitivity
+classification, which is tied to the open attribute-key ownership decision below.
+
+### Phase 1 — Core Foundations: COMPLETE
+
+Present: security primitives, domain primitives, evidence, immutable evidence DAG,
+finding model, canonical report, diagnosis engine, structural redaction.
+
+Deliberately absent, and belonging to Phase 2 or later: DNS/TCP/TLS probes, connection
+ownership transfer, the short-circuit execution engine, service adapters, Kafka,
+PostgreSQL, topology execution, the CLI, and terminal/Markdown/HTML renderers.
+
+Zero runtime dependencies. Every layer above is a pure value model or a pure
+transformation over one, which is what makes the whole of Phase 1 testable without a
+network.
+
 ### Implementation (not started)
 
 - [ ] Adapter registration boundary
-- [ ] Diagnosis `Rule` and engine
-- [ ] Structural redaction, and the shareable report transformation that enables
-      `SHAREABLE_REDACTED` plus the redacted-field metadata
+- [ ] Concrete transport rules under `internal/diagnosis/transport/`
 - [ ] Exit-code mapping at the CLI boundary
 - [ ] Short-circuit execution and layer progression (orchestration, not the graph)
 - [ ] Endpoint deduplication and topology depth policy (orchestration, not the graph)
