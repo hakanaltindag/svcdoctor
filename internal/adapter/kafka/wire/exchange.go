@@ -37,8 +37,9 @@ const (
 // read while a handshake is expected fails the comparison instead of being
 // decoded as a handshake.
 const (
-	correlationAPIVersions   uint32 = 1
-	correlationSASLHandshake uint32 = 2
+	correlationAPIVersions      uint32 = 1
+	correlationSASLHandshake    uint32 = 2
+	correlationSASLAuthenticate uint32 = 3
 )
 
 // Sentinel errors describing what was observed on the wire.

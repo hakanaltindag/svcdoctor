@@ -67,7 +67,7 @@ linters:
           msg: >-
             security.Reveal turns a masked secret into plaintext. Only a service
             adapter's wire package may call it, immediately before the value goes
-            on the socket. See docs/SECURITY.md and ADR 0026.
+            on the socket. See docs/SECURITY.md, ADR 0027 and ADR 0030.
         - pattern: '^security\.Channel[A-Z]'
           msg: >-
             a security.Channel constant states what a connection proved, and only
@@ -223,9 +223,10 @@ linters:
 
       # The one place security.Reveal may be called: a service adapter's wire
       # package, which is the last layer before the socket and holds no state
-      # between exchanges. Nothing calls it yet — Phase 3.2 sends no credentials
-      # — and this exclusion is what will make the first call legal exactly here
-      # and illegal everywhere else.
+      # between exchanges. As of Phase 3.2c there is exactly one call, in
+      # internal/adapter/kafka/wire/saslauthenticate.go, and this exclusion is
+      # what makes it legal there and illegal everywhere else. Verified in both
+      # directions against deliberate violations before that call was written.
       - path: internal/adapter/[^/]+/wire/
         linters:
           - forbidigo

@@ -78,16 +78,16 @@ Credentials are not automatically sent over an unverified TLS channel.
 
 ## Protocol wire boundaries
 
-A service adapter's wire package is where credentials will eventually be written to
-a socket. `internal/adapter/kafka/wire` is built for that before it needs to be:
-it is the only package that touches the protocol library, it holds no state
+A service adapter's wire package is where credentials are written to a socket.
+`internal/adapter/kafka/wire` was built for that two phases before it needed to
+be: it is the only package that touches the protocol library, it holds no state
 between exchanges, and everything it returns upward is plain values that a report
 can carry.
 
-Phase 3.1 sends no credentials — ApiVersions is unauthenticated — but the boundary
-already keeps three things out of evidence: raw protocol objects, buffers, and the
-socket's own error text. When SASL arrives, secret handling stays inside that one
-package rather than spreading through the adapter.
+As of Phase 3.2c it does write one. The boundary keeps four things out of
+evidence: raw protocol objects, buffers, the socket's own error text, and the
+broker's SASL error message. Secret handling stays inside that one package rather
+than spreading through the adapter.
 
 ### Reveal is confined to that boundary, and the compiler says so
 
@@ -109,9 +109,12 @@ check that makes credential use auditable — so denying the import would ban th
 safety check along with the escape hatch. The boundary is "which package may turn
 a secret into bytes", and that is a call-level rule.
 
-**There are still zero call sites.** The guard was installed in the phase before
-the first credential byte, deliberately: a rule added afterwards has to be argued
-against working code.
+**There is exactly one call site**, in
+`internal/adapter/kafka/wire/saslauthenticate.go`, inside `plainAuthBytes`. The
+guard was installed in the phase *before* the first credential byte, deliberately:
+a rule added afterwards has to be argued against working code. It was re-verified
+against deliberate violations in an adapter package and a probe package before
+that byte was written, and both were rejected.
 
 Re-verified before authentication was designed, and the re-verification found a
 hole worth knowing about: golangci-lint deduplicates issues by line, so a
@@ -119,7 +122,7 @@ hole worth knowing about: golangci-lint deduplicates issues by line, so a
 dropped. `issues.uniq-by-line` is now `false` and the violation is caught however
 it is written. See the amendment in ADR 0027.
 
-### Kafka SASL: what Phase 3.2 does and does not send
+### Kafka SASL: what each step sends
 
 `kafka.sasl_handshake` (L5) asks a broker whether it offers a named mechanism. The
 request carries **a mechanism name and nothing else** — no identity, no password,
@@ -131,8 +134,8 @@ public registry. They are neither secrets nor identity, so they are recorded as
 ordinary string values and survive redaction intact; a shared report that turned
 `PLAIN` into `host-001` would have destroyed the only thing the node is for.
 
-Authentication is deferred. The two security questions it depended on are now
-answered by **ADR 0028**, and what remains is mechanism rather than policy.
+`kafka.sasl_authenticate` (L5) is the step that does send one. What it sends, and
+what has to be true first, is the whole of the next section.
 
 ### When a credential may be sent
 
@@ -166,6 +169,7 @@ step would consume:
 tls.Result.Verified() -> transport.Continuation.Channel()
                       -> kafka.Session.Channel()
                       -> kafka.HandshakeSession.Channel()
+                      -> kafka.AuthenticatedSession.Channel()
 ```
 
 The policy reads it and nothing else:
@@ -215,9 +219,31 @@ recorded, and none exists. A weaker policy value added now would be a bypass wit
 no owner. See ADR 0029 for the condition that reopens it.
 
 **A refusal is recorded, not silent.** When policy forbids the attempt, the
-authentication node is `SKIPPED` with `EXEC_SKIPPED_BY_POLICY`, blocked by the TLS
-node whose `tls.verified` is false when one exists. A reader can then tell "not
-attempted, by policy" from "not attempted, nobody asked" — and nothing was sent.
+authentication node is `SKIPPED` with `EXEC_SKIPPED_BY_POLICY`, and **zero bytes
+reach the peer** — which the tests assert by measuring what the peer's protocol
+layer consumed, not by observing that authentication failed. A reader can then
+tell "not attempted, by policy" from "not attempted, nobody asked".
+
+The node points at the fact that caused it, when one exists:
+
+| Channel | `blockedBy` |
+|---|---|
+| `tls-unverified` | the L3 TLS node for this path, whose `tls.verified` is `false` |
+| `plaintext` | **none** |
+| `unknown` | **none** |
+
+A plaintext channel is recorded because the caller asked for no TLS, so **no node
+anywhere in the graph states that TLS is absent**. A refusal there carries no
+blocker rather than pointing at the TCP node, which passed and says nothing about
+encryption. The identifier travels for the same reason the channel does — declared
+by the layer that recorded it, never re-derived — and reports its own absence:
+
+```text
+transport.Continuation.ChannelEvidence() (domain.EvidenceID, bool)
+  -> kafka.Session -> kafka.HandshakeSession -> kafka.AuthenticatedSession
+```
+
+See ADR 0030 section 9.
 
 ### One credential, one broker, one call
 
@@ -246,6 +272,100 @@ same authorized endpoint, and no answer in a DNS response ever becomes an
 authority of its own. `kafka.Session.Endpoint()` carries that logical name through
 the adapter chain unchanged, so the value `SecretFor` will eventually be given is
 the one the operator asked about. See ADR 0026 section 9.
+
+Recovering it is mechanical and never touches the resolved address:
+
+```text
+HandshakeSession.Endpoint()  "primary.internal:9092"   the name the operator gave
+  -> net.SplitHostPort       ("primary.internal", 9092)
+  -> security.NewEndpoint    normalized: ASCII case, trailing dot, IPv6 form
+  -> credential.SecretFor(endpoint)
+```
+
+A mismatch is a **programming error, not a diagnostic result**. It returns an
+error, records no evidence and sends nothing — an evidence node saying "the wrong
+credential was offered" would be svcdoctor reporting on its own caller.
+
+### The order in which a credential becomes bytes
+
+This is the sequence every credentialed step follows, and each step is a
+precondition for the next:
+
+```text
+session.Channel()                        what this connection proved
+  -> policy.PermitsCredentials(channel)  may a secret cross it at all
+  -> security.NewEndpoint(session)       the logical name, never the address
+  -> credential.SecretFor(endpoint)      is this credential authorized here
+  -> wire.ExchangePLAIN                  the only layer that may reveal
+  -> security.Reveal                     one call, immediately before the write
+```
+
+A refused channel never reaches the code that parses an endpoint. A credential
+bound elsewhere never reaches the wire package. **Nothing is revealed in either
+path, because nothing reaches the only function that can reveal.**
+
+The order is asserted from the outside rather than trusted: for a policy refusal,
+an endpoint mismatch, an unclassified channel and an undefined policy value alike,
+the tests prove the peer received **zero protocol bytes** after the handshake.
+
+### SASL/PLAIN specifics
+
+The payload is RFC 4616, built inside the wire package immediately before the
+write:
+
+```text
+authzid NUL authcid NUL passwd
+```
+
+The authorization identity is **empty and present** — a leading NUL with nothing
+before it, which means "act as the authenticating identity". `security.Credential`
+has no authorization identity, and one is not synthesized: overloading `Identity`
+to mean both would give one field two meanings. See ADR 0030 section 2.
+
+**No erasure is claimed or performed.** By the time the payload reaches the socket
+the protocol library has copied it into the frame it builds, and the string
+`Reveal` returns cannot be erased at all. A `Zero` call would imply a guarantee
+item 11 explicitly refuses. Lifecycle handling is best-effort; memory exposure is
+addressed by process hardening.
+
+### The broker's error message never leaves the wire package
+
+`SASLAuthenticateResponse` carries an `ErrorMessage` written by the deployment
+rather than by the protocol. In practice it names principals, realms, listeners
+and internal hostnames.
+
+It is dropped where it arrives. The value the wire package returns has two
+fields — an error code and a session lifetime — so there is **no field an error
+message could occupy** and no filtering step anybody can forget. The error code is
+the normalized fact. A canary test gives a fake broker a message naming a
+principal and an internal host, proves it is really sent, and proves that neither
+the message nor any fragment of it reaches evidence, a report, an error, a
+`String()` or any `fmt` verb.
+
+**The authenticating identity is not recorded either.** A username is real
+deployment identity, and redaction's declared kinds cover hosts and addresses; a
+bare principal name is not structurally recognizable, so it would survive into a
+shareable report unpseudonymized. Reopen when a rule needs to tell two identities
+apart — which needs a declared identity-bearing kind first.
+
+### What happens to the socket
+
+| Outcome | Evidence | Connection |
+|---|---|---|
+| Authenticated | `PASS` | **kept** — becomes an `AuthenticatedSession` |
+| Credentials rejected | `FAIL` | closed |
+| Exchange broke, peer closed, malformed | `FAIL` | closed |
+| Budget expired or cancelled | `UNKNOWN` | closed |
+| Policy refused to send | `SKIPPED` | closed |
+| Credential bound elsewhere | none | closed |
+
+The criterion is the protocol's, not the recorded state's: **does this socket have
+a defined next message?** After a SaslHandshake a broker accepts only that
+mechanism's SaslAuthenticate, so a refused session has no other legal operation on
+that socket — nothing reusable is being discarded. An expired budget closes for a
+different reason: a request may be in flight and a response unread, so the socket's
+*state* is unknown even though nothing is known to be wrong with the peer.
+
 
 ## Report output mode
 

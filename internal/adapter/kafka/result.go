@@ -24,10 +24,11 @@ import (
 type Session struct {
 	ownedConn
 
-	endpoint   string
-	address    netip.AddrPort
-	evidenceID domain.EvidenceID
-	channel    security.Channel
+	endpoint        string
+	address         netip.AddrPort
+	evidenceID      domain.EvidenceID
+	channel         security.Channel
+	channelEvidence domain.EvidenceID
 }
 
 // Endpoint returns the logical label this path belongs to, such as
@@ -58,6 +59,13 @@ func (s *Session) Address() netip.AddrPort { return s.address }
 // this package, and the tests fail if a channel is forged or downgraded. See
 // ADR 0029.
 func (s *Session) Channel() security.Channel { return s.channel }
+
+// ChannelEvidence returns the node that established this session's channel, and
+// whether there is one. It is carried through unchanged from the transport path,
+// like the channel it describes.
+func (s *Session) ChannelEvidence() (domain.EvidenceID, bool) {
+	return s.channelEvidence, s.channelEvidence != ""
+}
 
 // Evidence returns the identifier of the ApiVersions node for this session.
 //
@@ -135,12 +143,14 @@ func (r *Result) Close() error {
 // this function, which is a visible change to a security-carrying constructor
 // rather than a wrong argument at a call site. See ADR 0029.
 func (r *Result) add(conn net.Conn, path *transport.Continuation, evidenceID domain.EvidenceID) {
+	channelEvidence, _ := path.ChannelEvidence()
 	r.sessions = append(r.sessions, &Session{
-		ownedConn:  ownedConn{conn: conn},
-		endpoint:   path.Endpoint(),
-		address:    path.Address(),
-		evidenceID: evidenceID,
-		channel:    path.Channel(),
+		ownedConn:       ownedConn{conn: conn},
+		endpoint:        path.Endpoint(),
+		address:         path.Address(),
+		evidenceID:      evidenceID,
+		channel:         path.Channel(),
+		channelEvidence: channelEvidence,
 	})
 }
 
@@ -158,11 +168,12 @@ func (r *Result) add(conn net.Conn, path *transport.Continuation, evidenceID dom
 type HandshakeSession struct {
 	ownedConn
 
-	endpoint   string
-	address    netip.AddrPort
-	mechanism  string
-	evidenceID domain.EvidenceID
-	channel    security.Channel
+	endpoint        string
+	address         netip.AddrPort
+	mechanism       string
+	evidenceID      domain.EvidenceID
+	channel         security.Channel
+	channelEvidence domain.EvidenceID
 }
 
 // Endpoint returns the logical label this path belongs to, carried through from
@@ -180,6 +191,17 @@ func (s *HandshakeSession) Address() netip.AddrPort { return s.address }
 // copied at each hop from the object being continued and unchanged by any of
 // them. See Session.Channel for what enforces that.
 func (s *HandshakeSession) Channel() security.Channel { return s.channel }
+
+// ChannelEvidence returns the node that established this session's channel, and
+// whether there is one.
+//
+// Authentication consults it when the policy refuses to send a credential, so
+// that the refusal can point at the fact that caused it rather than assert it.
+// It reports false on a plaintext path, where no node states that TLS is absent,
+// and a refusal there truthfully carries no blocker. See ADR 0030.
+func (s *HandshakeSession) ChannelEvidence() (domain.EvidenceID, bool) {
+	return s.channelEvidence, s.channelEvidence != ""
+}
 
 // Mechanism returns the SASL mechanism the broker accepted.
 //
@@ -247,12 +269,154 @@ func (r *HandshakeResult) Close() error {
 func (r *HandshakeResult) add(
 	conn net.Conn, session *Session, mechanism string, evidenceID domain.EvidenceID,
 ) {
+	channelEvidence, _ := session.ChannelEvidence()
 	r.sessions = append(r.sessions, &HandshakeSession{
-		ownedConn:  ownedConn{conn: conn},
-		endpoint:   session.Endpoint(),
-		address:    session.Address(),
-		mechanism:  mechanism,
-		evidenceID: evidenceID,
-		channel:    session.Channel(),
+		ownedConn:       ownedConn{conn: conn},
+		endpoint:        session.Endpoint(),
+		address:         session.Address(),
+		mechanism:       mechanism,
+		evidenceID:      evidenceID,
+		channel:         session.Channel(),
+		channelEvidence: channelEvidence,
 	})
+}
+
+// AuthenticatedSession is one path whose broker accepted a credential, together
+// with the connection the authentication ran over.
+//
+// It is a third type rather than a reused HandshakeSession, and the reason is
+// protocol state rather than taste. A HandshakeSession's socket accepts exactly
+// one message: the SaslAuthenticate continuing the mechanism the broker agreed
+// to. An authenticated socket accepts every request the broker offers. Returning
+// a HandshakeSession from a successful authentication would therefore say
+// "authenticate on this again", which is false, and would let a later Metadata
+// step be written against a connection that never presented a credential.
+//
+// This is the first Kafka step whose success produces a connection that is more
+// usable than the one it consumed. Every other outcome produces none at all.
+//
+// It carries no secret and no identity. The credential did its work at the wire
+// boundary and has no reason to outlive it; what survives is the fact that the
+// broker accepted one, which is in the evidence. See ADR 0030.
+type AuthenticatedSession struct {
+	ownedConn
+
+	endpoint        string
+	address         netip.AddrPort
+	mechanism       string
+	evidenceID      domain.EvidenceID
+	channel         security.Channel
+	channelEvidence domain.EvidenceID
+}
+
+// Endpoint returns the logical label this path belongs to, carried through from
+// the HandshakeSession it continued.
+//
+// It stays the name the operator asked about, never the address it resolved to,
+// because it is the value that authorized the credential in the first place.
+func (s *AuthenticatedSession) Endpoint() string { return s.endpoint }
+
+// Address returns the broker this session speaks to.
+func (s *AuthenticatedSession) Address() netip.AddrPort { return s.address }
+
+// Channel reports what the connection under this session proved about its peer.
+//
+// It is necessarily ChannelTLSVerified under the only policy that exists, since
+// nothing weaker reaches an authentication attempt. It is carried anyway rather
+// than assumed, because a policy that can be chosen is a reopen condition and
+// the fact should not have to be reintroduced when it is.
+func (s *AuthenticatedSession) Channel() security.Channel { return s.channel }
+
+// ChannelEvidence returns the node that established this session's channel, and
+// whether there is one.
+func (s *AuthenticatedSession) ChannelEvidence() (domain.EvidenceID, bool) {
+	return s.channelEvidence, s.channelEvidence != ""
+}
+
+// Mechanism returns the SASL mechanism the authentication used.
+//
+// It is the one the broker accepted at the handshake, carried through rather
+// than supplied again, so the mechanism that authenticated cannot disagree with
+// the one that was negotiated.
+func (s *AuthenticatedSession) Mechanism() string { return s.mechanism }
+
+// Evidence returns the identifier of the SaslAuthenticate node for this session.
+func (s *AuthenticatedSession) Evidence() domain.EvidenceID { return s.evidenceID }
+
+// AuthResult is what one authentication attempt leaves the caller holding.
+//
+// # Why it exists when authentication is singular
+//
+// A step that returns at most one session does not obviously need a result type,
+// and this one earns its place on two counts. It carries the identifier of the
+// node that was recorded, which is the only thing a *refused* attempt produces —
+// without it a caller that was refused would receive nothing at all and could not
+// name the evidence it just caused. And it keeps `defer result.Close()` the same
+// unconditional idiom it is for the two steps below it, so ownership does not
+// change shape at the one step that handles a credential.
+//
+// # What is not here
+//
+// A session, unless the broker accepted the credential. A rejection, a policy
+// refusal, a broken exchange and an expired budget all produce evidence and no
+// continuation, because none of them leaves a socket with a defined next
+// message. See ADR 0030.
+//
+// An AuthResult is not safe for concurrent use.
+type AuthResult struct {
+	evidenceID domain.EvidenceID
+	session    *AuthenticatedSession
+}
+
+// Evidence returns the identifier of the SaslAuthenticate node this attempt
+// recorded. It is present in every outcome, including a refusal.
+func (r *AuthResult) Evidence() domain.EvidenceID { return r.evidenceID }
+
+// Authenticated reports whether the broker accepted the credential.
+//
+// It is a statement about the exchange, and it stays true after the connection
+// has been taken or closed — unlike Session, which reports what is still here.
+func (r *AuthResult) Authenticated() bool { return r.session != nil }
+
+// Session returns the authenticated session, and whether there is one.
+//
+// A caller that receives false was not authenticated and holds no connection:
+// there is nothing to close and nothing to continue on.
+func (r *AuthResult) Session() (*AuthenticatedSession, bool) {
+	if r.session == nil {
+		return nil, false
+	}
+	return r.session, true
+}
+
+// Close releases the connection the result still owns.
+//
+// It is idempotent, safe when nothing was authenticated, and does nothing once
+// the connection has been taken.
+func (r *AuthResult) Close() error {
+	if r.session == nil {
+		return nil
+	}
+	return r.session.Close()
+}
+
+// authenticated records a successful authentication and takes ownership of its
+// connection.
+//
+// As with the two constructors above, everything describing the path is copied
+// from the session being continued rather than passed alongside it, so no call
+// site can supply a channel at all and therefore cannot supply a stronger one.
+func (r *AuthResult) authenticated(
+	conn net.Conn, session *HandshakeSession, evidenceID domain.EvidenceID,
+) {
+	channelEvidence, _ := session.ChannelEvidence()
+	r.session = &AuthenticatedSession{
+		ownedConn:       ownedConn{conn: conn},
+		endpoint:        session.Endpoint(),
+		address:         session.Address(),
+		mechanism:       session.Mechanism(),
+		evidenceID:      evidenceID,
+		channel:         session.Channel(),
+		channelEvidence: channelEvidence,
+	}
 }

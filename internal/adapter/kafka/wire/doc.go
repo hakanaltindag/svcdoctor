@@ -8,13 +8,31 @@
 //
 // # What it does
 //
-//	ExchangeAPIVersions(ctx, conn) -> APIVersions
+//	ExchangeAPIVersions(ctx, conn)                     -> APIVersions
+//	ExchangeSASLHandshake(ctx, conn, mechanism)        -> SASLHandshake
+//	ExchangePLAIN(ctx, conn, identity, secret)         -> SASLAuthenticate
 //
 // One request, one response, over a connection somebody else established and
 // still owns. It does not dial, does not retry, does not reconnect, and does not
 // switch peers: ADR 0008 requires a controlled connection lifecycle, because a
 // library that quietly reconnected would attribute protocol facts to a socket
 // nobody measured.
+//
+// # This is where a secret becomes bytes
+//
+// ExchangePLAIN holds svcdoctor's only call to security.Reveal, and this package
+// is the only place a lint permits one (ADR 0027). The properties that make it
+// the right home are structural rather than promised: it holds no state between
+// exchanges, owns no connection, has no evidence or report model in scope, and
+// everything it returns upward is a plain value.
+//
+// It checks no policy and no credential binding. Both happen in the adapter
+// above, before this package is called at all, because a check duplicated in two
+// layers is a check the two layers can disagree about. See ADR 0030.
+//
+// Nothing derived from a secret leaves. The broker's own ErrorMessage does not
+// leave either: it is deployment-authored prose that routinely names principals
+// and hosts, so it is dropped here rather than carried upward and filtered later.
 //
 // That is also why only kmsg is imported and not kgo. kmsg encodes and decodes
 // messages; kgo is a client that owns connections, refreshes metadata and retries.

@@ -23,6 +23,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // The peer here answers just enough Kafka to exercise ApiVersions, and it uses
@@ -70,6 +71,12 @@ func advertised() []kmsg.ApiVersionsResponseApiKey {
 }
 
 // countingConn counts closes so ownership assertions are facts.
+//
+// It deliberately does not count bytes written. Counting them here cannot
+// express "nothing was transmitted" on a TLS path: closing a *tls.Conn writes a
+// close_notify alert through this socket, so a refusal that sent nothing still
+// moves the counter. The zero-byte claims are measured on the peer instead,
+// above its TLS layer — see broker.appBytes.
 type countingConn struct {
 	net.Conn
 	mu     sync.Mutex
@@ -101,12 +108,20 @@ const (
 	defaultErrorCode int16 = 35
 
 	// Request keys the fixture answers.
-	apiKeyAPIVersions   int16 = 18
-	apiKeySASLHandshake int16 = 17
+	apiKeyAPIVersions      int16 = 18
+	apiKeySASLHandshake    int16 = 17
+	apiKeySASLAuthenticate int16 = 36
 
 	// saslHandshakeFixtureVersion is the response version the fixture encodes.
 	// It matches what the adapter asks for, and a test pins that they agree.
 	saslHandshakeFixtureVersion int16 = 1
+
+	// saslAuthenticateFixtureVersion is the same for authentication.
+	saslAuthenticateFixtureVersion int16 = 1
+
+	// errorCodeSASLAuthenticationFailedFixture is what a broker answers when it
+	// evaluated a credential and refused it.
+	errorCodeSASLAuthenticationFailedFixture int16 = 58
 )
 
 // defaultMechanisms is what the fake broker offers, deliberately out of
@@ -125,6 +140,11 @@ type broker struct {
 	saslErrorCode  int16
 	saslMechanisms []string
 
+	auth                peerBehaviour
+	authErrorCode       int16
+	authErrorMessage    string
+	authSessionLifetime int64
+
 	// serverTLS is nil for a plaintext broker. When set, every accepted
 	// connection is wrapped before any Kafka byte is read, so a path through
 	// this broker is a real TLS path.
@@ -136,6 +156,26 @@ type broker struct {
 	saslMechanismsSeen []string
 	saslPayloads       [][]byte
 	clientIDs          []string
+
+	authRequests     int
+	authPayloads     [][]byte
+	authVersionsSeen []int16
+
+	// appBytes counts the request bytes this peer has consumed, above TLS.
+	//
+	// It is the unit the zero-byte claims need. Counting on svcdoctor's own
+	// socket cannot express it on a TLS path: closing a *tls.Conn writes a
+	// close_notify alert, so a refusal that transmitted nothing still moves a
+	// raw byte counter by the size of that alert. Counted here, after the
+	// server's TLS layer has decrypted, the number is exactly what svcdoctor's
+	// protocol layer sent — and awaitIdle is what makes reading it a proof
+	// rather than a poll.
+	appBytes int
+
+	// serving tracks the goroutines reading from accepted connections, so that
+	// a test can wait for the peer to have consumed everything svcdoctor ever
+	// sent before asserting that it sent nothing. See awaitIdle.
+	serving sync.WaitGroup
 }
 
 // brokerOption configures a fixture broker before its listener starts, so that
@@ -163,6 +203,34 @@ func withSASLError(code int16) brokerOption {
 // withMechanisms replaces what the broker says it offers.
 func withMechanisms(mechanisms ...string) brokerOption {
 	return func(b *broker) { b.saslMechanisms = mechanisms }
+}
+
+// withAuth sets how the broker reacts to a SaslAuthenticate.
+func withAuth(behaviour peerBehaviour) brokerOption {
+	return func(b *broker) { b.auth = behaviour }
+}
+
+// withAuthError makes the authentication answer carry code, which is how a
+// fixture says "these credentials are wrong".
+func withAuthError(code int16) brokerOption {
+	return func(b *broker) {
+		b.auth = peerAnswersWithError
+		b.authErrorCode = code
+	}
+}
+
+// withAuthErrorMessage makes the broker attach prose to its rejection.
+//
+// It exists to be given a canary: a real broker writes this field itself, and
+// what it writes routinely names principals, listeners and internal hosts.
+func withAuthErrorMessage(message string) brokerOption {
+	return func(b *broker) { b.authErrorMessage = message }
+}
+
+// withSessionLifetime sets what the broker says about how long the
+// authentication stays valid.
+func withSessionLifetime(millis int64) brokerOption {
+	return func(b *broker) { b.authSessionLifetime = millis }
 }
 
 // newErrorBroker answers every ApiVersions request with a well-formed response
@@ -195,6 +263,8 @@ func newBroker(t *testing.T, behaviour peerBehaviour, options ...brokerOption) *
 		sasl:           peerAnswers,
 		saslErrorCode:  errorCodeUnsupportedSASLMechanism,
 		saslMechanisms: defaultMechanisms(),
+		auth:           peerAnswers,
+		authErrorCode:  errorCodeSASLAuthenticationFailedFixture,
 	}
 	for _, option := range options {
 		option(b)
@@ -209,7 +279,11 @@ func newBroker(t *testing.T, behaviour peerBehaviour, options ...brokerOption) *
 			if b.serverTLS != nil {
 				conn = cryptotls.Server(conn, b.serverTLS)
 			}
-			go b.serve(conn)
+			b.serving.Add(1)
+			go func() {
+				defer b.serving.Done()
+				b.serve(conn)
+			}()
 		}
 	}()
 	return b
@@ -313,6 +387,10 @@ func (b *broker) answer(conn net.Conn, request brokerRequest) bool {
 		b.count(&b.saslRequests)
 		b.recordMechanism(request)
 		return b.react(conn, b.sasl, request, b.saslHandshakeResponse)
+	case apiKeySASLAuthenticate:
+		b.count(&b.authRequests)
+		b.recordAuthPayload(request)
+		return b.react(conn, b.auth, request, b.saslAuthenticateResponse)
 	default:
 		return false
 	}
@@ -378,6 +456,7 @@ func (b *broker) readRequest(conn net.Conn) (brokerRequest, error) {
 	if _, err := io.ReadFull(conn, body); err != nil {
 		return brokerRequest{}, err
 	}
+	b.countAppBytes(4 + len(body))
 
 	// apiKey int16, apiVersion int16, correlationID int32, clientID nullable string
 	request := brokerRequest{
@@ -431,6 +510,45 @@ func (b *broker) saslHandshakeResponse(correlationID uint32) []byte {
 	return response.AppendTo(out)
 }
 
+// saslAuthenticateResponse encodes a SaslAuthenticate response.
+//
+// The error message is attached whenever a test set one, including on a
+// successful answer, because "the broker sent prose and it went nowhere" is the
+// property under test and it should hold on every path.
+func (b *broker) saslAuthenticateResponse(correlationID uint32) []byte {
+	response := kmsg.NewPtrSASLAuthenticateResponse()
+	response.SetVersion(saslAuthenticateFixtureVersion)
+	response.SessionLifetimeMillis = b.authSessionLifetime
+	if b.auth == peerAnswersWithError {
+		response.ErrorCode = b.authErrorCode
+	}
+	if b.authErrorMessage != "" {
+		message := b.authErrorMessage
+		response.ErrorMessage = &message
+	}
+
+	out := correlationBytes(correlationID)
+	return response.AppendTo(out)
+}
+
+// recordAuthPayload keeps the exact SASL bytes svcdoctor sent, so a test can
+// prove what did reach the peer before proving what did not reach anywhere else.
+//
+// A leak test whose canary never travelled proves nothing, so this is what makes
+// the absence assertions elsewhere mean something.
+func (b *broker) recordAuthPayload(request brokerRequest) {
+	decoded := kmsg.NewPtrSASLAuthenticateRequest()
+	decoded.SetVersion(request.version)
+	if err := decoded.ReadFrom(request.payload); err != nil {
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.authPayloads = append(b.authPayloads, append([]byte(nil), decoded.SASLAuthBytes...))
+	b.authVersionsSeen = append(b.authVersionsSeen, request.version)
+}
+
 // recordMechanism decodes the mechanism the client asked about, so a test can
 // assert svcdoctor sent the mechanism it was given and nothing else.
 func (b *broker) recordMechanism(request brokerRequest) {
@@ -478,6 +596,56 @@ func (b *broker) handshakeBytes() [][]byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([][]byte(nil), b.saslPayloads...)
+}
+
+func (b *broker) authRequestCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.authRequests
+}
+
+func (b *broker) countAppBytes(n int) {
+	b.mu.Lock()
+	b.appBytes += n
+	b.mu.Unlock()
+}
+
+// appBytesRead reports how many request bytes this peer has consumed above TLS.
+//
+// Read it after awaitIdle to make a difference of zero a proof that svcdoctor's
+// protocol layer wrote nothing.
+func (b *broker) appBytesRead() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.appBytes
+}
+
+// awaitIdle blocks until every accepted connection's read loop has exited.
+//
+// It is what turns "the broker received no authentication" from a poll into a
+// proof. Without it a test could observe zero simply because the peer's
+// goroutine had not run yet, which is the failure mode that makes a leak test
+// pass for the wrong reason. Once svcdoctor has closed a socket, the peer reads
+// end-of-file and its loop exits — so after this returns, everything that was
+// ever written has been read and counted.
+//
+// It is only safe to call once the test has stopped opening connections, which
+// is always the case here: the exchange under test has already returned.
+func (b *broker) awaitIdle() { b.serving.Wait() }
+
+// authPayloadsSeen returns the SASL bytes of every authentication the broker
+// received, decoded out of the request.
+func (b *broker) authPayloadsSeen() [][]byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([][]byte(nil), b.authPayloads...)
+}
+
+// authVersions returns the request version of every authentication received.
+func (b *broker) authVersions() []int16 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]int16(nil), b.authVersionsSeen...)
 }
 
 func (b *broker) clientIDsSeen() []string {
@@ -690,4 +858,178 @@ func attribute(t *testing.T, e domain.Evidence, key domain.AttributeKey) domain.
 		t.Fatalf("attribute %s is missing; present: %v", key, e.Attributes())
 	}
 	return value
+}
+
+// --- authentication targets -----------------------------------------------
+
+// The endpoint every authentication test runs against. The logical label and the
+// resolved address are deliberately different values, because the distinction
+// between them is what most of these tests are about.
+const (
+	authHost     = "primary.internal"
+	authAddress  = "10.0.0.1"
+	authEndpoint = "primary.internal:9092"
+	authNodeID   = "kafka.sasl_authenticate/primary.internal:9092/10.0.0.1"
+
+	// authIdentity and authSecret are what a test presents. The secret is
+	// high-entropy and unlike any other string in the repository, so finding it
+	// anywhere is unambiguous and finding it nowhere is not luck.
+	authIdentity = "svcdoctor-probe-user"
+	//nolint:gosec // G101: a leak-test canary, not a credential. It exists so that
+	// finding it anywhere outside the peer's received payload is unambiguous.
+	authSecret = "Zq7XmK4pR9wL2vN8tJ6bH3sY5cD1gF0aQeUiOpAsDfGh"
+)
+
+// authTarget is one prepared path: a broker answering all three requests, the
+// handshake sessions over real sockets, the graph they were recorded in, and the
+// registry holding those sockets.
+type authTarget struct {
+	broker   *broker
+	builder  *domain.GraphBuilder
+	sessions []*HandshakeSession
+	registry *connRegistry
+}
+
+// session returns the single handshake session, failing if the path did not
+// produce exactly one.
+func (a *authTarget) session(t *testing.T) *HandshakeSession {
+	t.Helper()
+
+	if len(a.sessions) != 1 {
+		t.Fatalf("handshake sessions = %d, want 1: the fixture path did not complete",
+			len(a.sessions))
+	}
+	return a.sessions[0]
+}
+
+// conn returns the single socket the transport chain established.
+func (a *authTarget) conn(t *testing.T) *countingConn {
+	t.Helper()
+
+	established := a.registry.all()
+	if len(established) != 1 {
+		t.Fatalf("transport established %d connections, want 1", len(established))
+	}
+	return established[0]
+}
+
+// buildAuthTarget runs the whole real chain — DNS, TCP, optionally TLS,
+// ApiVersions, SaslHandshake — so that authentication receives a session
+// produced the way production would produce one.
+//
+// Nothing here is hand-made. A hand-built HandshakeSession would let a test
+// assert against a channel and an endpoint nobody established, which is the one
+// thing these tests must not do.
+func buildAuthTarget(
+	t *testing.T, b *broker, tlsOptions *transport.TLSOptions, addresses ...string,
+) *authTarget {
+	t.Helper()
+
+	if len(addresses) == 0 {
+		addresses = []string{authAddress}
+	}
+	registry := &connRegistry{}
+	builder := domain.NewGraphBuilder()
+
+	paths, err := transport.Run(context.Background(), builder, transport.Params{
+		Host: authHost, Port: 9092,
+		Resolver: fixedResolver{addresses: parseAddrs(t, addresses)},
+		Dialer:   brokerDialer{target: b.addr, conns: registry},
+		TLS:      tlsOptions,
+	})
+	if err != nil {
+		t.Fatalf("transport.Run: %v", err)
+	}
+	t.Cleanup(func() { _ = paths.Close() })
+
+	protocol, err := Run(context.Background(), builder, paths.Continuations(), Params{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	t.Cleanup(func() { _ = protocol.Close() })
+
+	handshake, err := SASLHandshake(
+		context.Background(), builder, protocol.Sessions(), SASLParams{Mechanism: "PLAIN"})
+	if err != nil {
+		t.Fatalf("SASLHandshake: %v", err)
+	}
+	t.Cleanup(func() { _ = handshake.Close() })
+
+	return &authTarget{
+		broker:   b,
+		builder:  builder,
+		sessions: handshake.Sessions(),
+		registry: registry,
+	}
+}
+
+// verifiedTarget is the only kind of path the default policy permits: a real TLS
+// handshake against a certificate the test generated, verified against the only
+// pool that trusts it.
+func verifiedTarget(t *testing.T, options ...brokerOption) *authTarget {
+	t.Helper()
+
+	b, pool := newTLSBroker(t, authHost, options...)
+	return buildAuthTarget(t, b, &transport.TLSOptions{RootCAs: pool})
+}
+
+// verifiedTargetAt is verifiedTarget over several resolved addresses, which is
+// how the "one credential, five addresses" case is exercised.
+func verifiedTargetAt(t *testing.T, addresses []string, options ...brokerOption) *authTarget {
+	t.Helper()
+
+	b, pool := newTLSBroker(t, authHost, options...)
+	return buildAuthTarget(t, b, &transport.TLSOptions{RootCAs: pool}, addresses...)
+}
+
+// unverifiedTarget completes a real TLS handshake and verifies nothing, which is
+// the case that proves encryption alone does not permit a credential.
+func unverifiedTarget(t *testing.T, options ...brokerOption) *authTarget {
+	t.Helper()
+
+	b, _ := newTLSBroker(t, authHost, options...)
+	return buildAuthTarget(t, b, &transport.TLSOptions{InsecureSkipVerify: true})
+}
+
+// plaintextTarget performs no TLS at all.
+func plaintextTarget(t *testing.T, options ...brokerOption) *authTarget {
+	t.Helper()
+
+	return buildAuthTarget(t, newBroker(t, peerAnswers, options...), nil)
+}
+
+// credentialFor binds the fixture secret to one endpoint.
+func credentialFor(t *testing.T, host string, port uint16) security.Credential {
+	t.Helper()
+
+	return credentialWith(t, host, port, authIdentity, authSecret)
+}
+
+func credentialWith(t *testing.T, host string, port uint16, identity, secret string) security.Credential {
+	t.Helper()
+
+	endpoint, err := security.NewEndpoint(host, port)
+	if err != nil {
+		t.Fatalf("security.NewEndpoint(%q, %d): %v", host, port, err)
+	}
+	credential, err := security.NewCredential(endpoint, identity, security.NewSecret(secret))
+	if err != nil {
+		t.Fatalf("security.NewCredential: %v", err)
+	}
+	return credential
+}
+
+// authenticate runs one authentication over one session with the default policy.
+func authenticate(
+	t *testing.T, target *authTarget, credential security.Credential, params AuthParams,
+) *AuthResult {
+	t.Helper()
+
+	result, err := Authenticate(
+		context.Background(), target.builder, target.session(t), credential, params)
+	if err != nil {
+		t.Fatalf("Authenticate: unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = result.Close() })
+	return result
 }

@@ -278,8 +278,9 @@ deferred with a reopen condition in ADR 0025 §9.
 
 ### 5.2 Credential-free discovery comes before credential use
 
-Phase 3.2 added L5 mechanism discovery — `kafka.sasl_handshake` — and stopped
-there. The boundary it draws generalizes past Kafka (**ADR 0026**):
+Phase 3.2 added L5 mechanism discovery — `kafka.sasl_handshake` — and Phase 3.2c
+added the step that follows it, `kafka.sasl_authenticate`. The boundary between
+them generalizes past Kafka (**ADR 0026**, **ADR 0030**):
 
 - **A step that sends no credential may run on every measured path**, because it
   costs the target nothing. ApiVersions and SaslHandshake both qualify: a
@@ -288,7 +289,8 @@ there. The boundary it draws generalizes past Kafka (**ADR 0026**):
   where.** An authentication attempt is logged, counted and lockout-relevant, so
   "every path" and "the first path" are policy, not defaults — and *the first*
   would silently mean IPv4, the artifact ADR 0024 removed from the transport
-  chain.
+  chain. The two discovery steps therefore take a slice of sessions; the
+  authentication step takes one.
 - **Path selection for credentials therefore belongs to the layer that can record
   why it chose**, which is the orchestration boundary that does not exist yet.
   **ADR 0028 makes that structural**: the authentication API takes exactly one
@@ -312,6 +314,14 @@ there. The boundary it draws generalizes past Kafka (**ADR 0026**):
   through `transport.Continuation`, `kafka.Session` and `kafka.HandshakeSession`,
   and `security.CredentialTransportPolicy` reads it. Both zero values fail closed,
   and an adapter has no way to strengthen the claim.
+- **A refusal names the fact that caused it, or names nothing.** The identifier of
+  the node that classified a channel travels the same way the channel does
+  (`ChannelEvidence`), so an unverified-TLS refusal points at the L3 node carrying
+  `tls.verified=false`. On a plaintext path it points at nothing, because no node
+  in the graph states that TLS is absent and the TCP node proves nothing about
+  encryption. **The smallest honest representation of "nothing proves this" is
+  nothing** — a synthetic blocker would make a report read as though something had
+  been established (**ADR 0030 §9**).
 
 **A runtime ownership fact is not a diagnostic observation.** The channel is the
 first fact this project carries beside a connection without also recording it as
@@ -324,8 +334,12 @@ reaches a report is not the channel but its consequence — a `SKIPPED` node wit
 **Connection lifetime follows the protocol, not the evidence state.** ApiVersions
 keeps a connection whose broker answered with an error code, because any request
 may still follow it; a rejected SaslHandshake closes one, because the broker will
-accept only the agreed mechanism's continuation and there is nothing left to send.
-The criterion is whether the protocol defines a next message on that socket.
+accept only the agreed mechanism's continuation and there is nothing left to send;
+a refused or rejected authentication closes one for the same reason, since that
+continuation is exactly what was declined or refused. A successful authentication
+is the first step whose result is a connection *more* usable than the one it
+consumed, which is why it produces a distinct type. The criterion throughout is
+whether the protocol defines a next message on that socket.
 
 ### Adapter contract sizing
 

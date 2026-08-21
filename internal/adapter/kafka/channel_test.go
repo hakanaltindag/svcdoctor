@@ -316,3 +316,111 @@ func TestConstructorsCopyTheChannelRatherThanAcceptIt(t *testing.T) {
 		t.Fatalf("handshake sessions = %d, want 2", len(handshakes.Sessions()))
 	}
 }
+
+// --- the node that classified the channel ---------------------------------
+
+// TestChannelEvidenceReachesTheHandshakeSession follows the second half of the
+// channel fact through both adapter steps.
+//
+// It travels for one reason: a policy refusal has to be able to point at the
+// fact that caused it, and the only honest source of that identifier is the
+// layer that recorded the node.
+func TestChannelEvidenceReachesTheHandshakeSession(t *testing.T) {
+	broker, pool := newTLSBroker(t, "primary.internal")
+
+	builder := domain.NewGraphBuilder()
+	sessions := apiVersionsSessionsAt(t, builder, broker, "primary.internal", "10.0.0.1",
+		&transport.TLSOptions{RootCAs: pool})
+
+	if len(sessions.Sessions()) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(sessions.Sessions()))
+	}
+	sessionID, ok := sessions.Sessions()[0].ChannelEvidence()
+	if !ok {
+		t.Fatal("the L4 session lost the node that classified its channel")
+	}
+
+	result, err := SASLHandshake(
+		context.Background(), builder, sessions.Sessions(), SASLParams{Mechanism: "PLAIN"})
+	if err != nil {
+		t.Fatalf("SASLHandshake: %v", err)
+	}
+	t.Cleanup(func() { _ = result.Close() })
+
+	handshakeSessions := result.Sessions()
+	if len(handshakeSessions) != 1 {
+		t.Fatalf("handshake sessions = %d, want 1", len(handshakeSessions))
+	}
+	handshakeID, ok := handshakeSessions[0].ChannelEvidence()
+	if !ok {
+		t.Fatal("the L5 session lost the node that classified its channel")
+	}
+	if handshakeID != sessionID {
+		t.Errorf("channel evidence changed across the hop: %s then %s", sessionID, handshakeID)
+	}
+
+	// It names a real TLS node for this exact path.
+	graph := freeze(t, builder)
+	classifier, present := graph.Node(handshakeID)
+	if !present {
+		t.Fatalf("the session names %s, which is not in the graph", handshakeID)
+	}
+	if classifier.Layer() != domain.LayerTLS {
+		t.Errorf("classifier layer = %s, want L3", classifier.Layer())
+	}
+	if got, want := classifier.Subject().Ref(), "10.0.0.1:9092"; got != want {
+		t.Errorf("classifier subject = %q, want %q", got, want)
+	}
+}
+
+// TestPlaintextSessionsNameNoClassifier: the gap travels honestly too. A session
+// that has no node proving its channel insufficient says so rather than
+// substituting a node that proves something else.
+func TestPlaintextSessionsNameNoClassifier(t *testing.T) {
+	broker := newBroker(t, peerAnswers)
+	sessions, builder, _ := apiVersionsSessions(t, broker)
+
+	if _, ok := sessions.Sessions()[0].ChannelEvidence(); ok {
+		t.Error("a plaintext L4 session names a classifier; nothing classified it")
+	}
+
+	result := runHandshake(t, sessions, builder, SASLParams{})
+	if id, ok := result.Sessions()[0].ChannelEvidence(); ok {
+		t.Errorf("a plaintext L5 session names %s as its classifier", id)
+	}
+}
+
+// TestChannelEvidenceDoesNotContaminateAcrossPaths: two paths established under
+// different transport security must each name their own node, or none.
+func TestChannelEvidenceDoesNotContaminateAcrossPaths(t *testing.T) {
+	secure, pool := newTLSBroker(t, "primary.internal")
+	plain := newBroker(t, peerAnswers)
+
+	builder := domain.NewGraphBuilder()
+	secureSessions := apiVersionsSessionsAt(t, builder, secure, "primary.internal", "10.0.0.1",
+		&transport.TLSOptions{RootCAs: pool})
+	plainSessions := apiVersionsSessionsAt(t, builder, plain, "secondary.internal", "10.0.0.2", nil)
+
+	combined := append(secureSessions.Sessions(), plainSessions.Sessions()...)
+	result, err := SASLHandshake(context.Background(), builder, combined, SASLParams{Mechanism: "PLAIN"})
+	if err != nil {
+		t.Fatalf("SASLHandshake: %v", err)
+	}
+	t.Cleanup(func() { _ = result.Close() })
+
+	for _, session := range result.Sessions() {
+		id, ok := session.ChannelEvidence()
+		switch session.Address().Addr().String() {
+		case "10.0.0.1":
+			if !ok {
+				t.Error("the TLS path lost its classifier")
+			} else if !strings.Contains(id.String(), "10.0.0.1") {
+				t.Errorf("the TLS path names %s, which is about another address", id)
+			}
+		case "10.0.0.2":
+			if ok {
+				t.Errorf("the plaintext path names %s as its classifier", id)
+			}
+		}
+	}
+}

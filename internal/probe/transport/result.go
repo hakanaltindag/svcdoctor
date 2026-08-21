@@ -21,6 +21,12 @@ type Continuation struct {
 	evidenceID domain.EvidenceID
 	channel    security.Channel
 
+	// channelEvidence identifies the node that classified the channel above,
+	// when a node did. It is empty on a plaintext path: that channel is
+	// recorded by the branch that ran because no TLS was asked for, and no
+	// evidence node states "TLS was not attempted here". See ChannelEvidence.
+	channelEvidence domain.EvidenceID
+
 	conn   net.Conn
 	taken  bool
 	closed bool
@@ -60,6 +66,28 @@ func (c *Continuation) Address() netip.AddrPort { return c.address }
 // It is a mechanism fact. Whether it is good enough to carry a credential is
 // security.CredentialTransportPolicy's question. See ADR 0029.
 func (c *Continuation) Channel() security.Channel { return c.channel }
+
+// ChannelEvidence returns the identifier of the node that established what this
+// connection proved about its peer, and whether there is one.
+//
+// It exists so that a layer refusing to write a secret can point at the fact
+// that made the channel insufficient, instead of asserting the insufficiency on
+// its own. The node it names is the TLS node for this path, whose tls.verified
+// attribute is the recorded half of the same observation Channel is the runtime
+// half of.
+//
+// **It reports false on a plaintext path, and that is the honest answer rather
+// than a gap.** A plaintext channel is recorded because the caller asked for no
+// TLS, so there is no node anywhere in the graph that proves TLS is absent, and
+// naming the TCP node instead would point a reader at a step that passed and
+// says nothing about encryption. A caller that gets false has no blocker to
+// record, which is exactly what ADR 0028 section 3 decided.
+//
+// Like Channel, it is set next to the connection at the moment the chain decides
+// to keep it, so the two cannot come to describe different sockets.
+func (c *Continuation) ChannelEvidence() (domain.EvidenceID, bool) {
+	return c.channelEvidence, c.channelEvidence != ""
+}
 
 // Evidence returns the identifier of the deepest node recorded for this path:
 // the TLS node when TLS ran, otherwise the TCP node.
@@ -176,23 +204,34 @@ func (r *Result) Close() error {
 	return firstErr
 }
 
+// completedPath is what the chain knows about one path it decided to keep.
+//
+// It is a parameter object for the reason domain.EvidenceInput is one: two of
+// its fields are evidence identifiers that mean different things, and a
+// positional call that transposed them would compile and produce a graph whose
+// edges point at plausible but wrong nodes.
+type completedPath struct {
+	endpoint   string
+	address    netip.AddrPort
+	evidenceID domain.EvidenceID
+	channel    security.Channel
+
+	// channelEvidence is empty when nothing classified the channel with a node.
+	channelEvidence domain.EvidenceID
+}
+
 // add records a completed path and takes ownership of its connection.
 //
-// The channel is supplied here rather than derived later, so the connection and
-// the fact describing it enter the Result in one statement and cannot be paired
-// up wrongly afterwards.
-func (r *Result) add(
-	conn net.Conn,
-	endpoint string,
-	address netip.AddrPort,
-	evidenceID domain.EvidenceID,
-	channel security.Channel,
-) {
+// The channel and the node that established it are supplied here rather than
+// derived later, so the connection and the facts describing it enter the Result
+// in one statement and cannot be paired up wrongly afterwards.
+func (r *Result) add(conn net.Conn, path completedPath) {
 	r.continuations = append(r.continuations, &Continuation{
-		endpoint:   endpoint,
-		address:    address,
-		evidenceID: evidenceID,
-		channel:    channel,
-		conn:       conn,
+		endpoint:        path.endpoint,
+		address:         path.address,
+		evidenceID:      path.evidenceID,
+		channel:         path.channel,
+		channelEvidence: path.channelEvidence,
+		conn:            conn,
 	})
 }

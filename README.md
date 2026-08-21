@@ -4,16 +4,21 @@
 
 ## Project status
 
-**Phases 1 and 2 are complete, and Phase 3 — the Kafka vertical slice — has begun. The tool is
-not usable yet**: it can sweep one endpoint end to end, ask every reachable broker for its API
-versions and which SASL mechanisms it offers, and produce an evidence graph. Nothing interprets
-or presents that yet, because no diagnosis rule, renderer or CLI exists.
+**Phases 1 and 2 are complete, and Phase 3 — the Kafka vertical slice — is in progress. The
+tool is not usable yet**: it can sweep one endpoint end to end, ask every reachable broker for
+its API versions and which SASL mechanisms it offers, authenticate to one chosen broker with
+SASL/PLAIN, and produce an evidence graph. Nothing interprets or presents that yet, because no
+diagnosis rule, renderer or CLI exists.
 
-**No credential has ever been sent.** SASL mechanism discovery is credential-free by protocol
-definition — the request carries a mechanism name and nothing else — and authentication is
-deliberately deferred behind four recorded decisions (ADR 0026). `security.Reveal`, the one
-function that turns a masked secret into plaintext, is confined by lint to adapter wire
-packages and has zero call sites (ADR 0027).
+**svcdoctor now transmits credentials, under a contract written before the first byte.** A
+password is sent only over a channel whose peer identity was verified — never plaintext, never
+TLS with verification disabled — and a refusal is recorded as a `SKIPPED` node with
+`EXEC_SKIPPED_BY_POLICY` rather than as silence. A credential is authorized by the logical
+endpoint the operator named, never by an address it resolved to, so DNS cannot widen its
+authority. Authentication takes exactly one session, never a list, so the adapter cannot choose
+which broker receives a credential. `security.Reveal`, the one function that turns a masked
+secret into plaintext, is confined by lint to adapter wire packages and has **exactly one call
+site** (ADR 0027, ADR 0028, ADR 0030).
 
 What is implemented, with one runtime dependency (`github.com/twmb/franz-go/pkg/kmsg`,
 BSD-3-Clause, no transitive dependencies):
@@ -28,11 +33,15 @@ BSD-3-Clause, no transitive dependencies):
 - `internal/probe/tcp` — the TCP probe and connection ownership transfer (Phase 2.2)
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 - `internal/probe/transport` — the generic transport chain: DNS → TCP per address → TLS (Phase 2.4)
-- `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1) and
-  SASL mechanism discovery (Phase 3.2a)
+- `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1),
+  SASL mechanism discovery (Phase 3.2a), channel propagation (Phase 3.2b) and SASL/PLAIN
+  authentication (Phase 3.2c)
+- `internal/adapter/kafka/wire` — the only importer of the Kafka protocol library, and the only
+  package permitted to call `security.Reveal`
 
-What is not implemented: Kafka authentication, Metadata and topology, PostgreSQL, concrete
-diagnosis rules, renderers and the CLI. Those directories contain no Go code.
+What is not implemented: SCRAM and every other SASL mechanism, Kafka Metadata and topology,
+PostgreSQL, concrete diagnosis rules, renderers and the CLI. Those directories contain no Go
+code.
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
 > It reconstructs the mental model, the locked invariants, the rejected alternatives and the

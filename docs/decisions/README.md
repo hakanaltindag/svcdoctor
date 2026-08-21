@@ -41,13 +41,19 @@ does not overturn it, and both remain authoritative.
 | 0027 | `security.Reveal` is confined to adapter wire packages, mechanically | Accepted | Closes the Phase 1 deferral its own backlog entry named. Adds no call sites |
 | 0028 | Credentialed authentication is singular, policy-gated and channel-aware | Accepted | Answers 0026 §7.1 and §7.3, narrows §7.2. Decides work not yet written |
 | 0029 | A connection carries what it proved, and a fail-closed policy reads it | Accepted | Implements 0028 §6. Sends no credential; changes no report schema |
+| 0030 | PLAIN authentication, and the ordering that governs every credential byte | Accepted | Implements 0028 over 0029's mechanisms, inside 0027's boundary. **The first phase that transmits a credential.** Supplies the blocker carrier 0028 §3 assumed |
 
 ## Decisions that govern work not yet written
 
 Some accepted records decide how something will be built rather than describe
 something that exists. That is intentional, and they are binding when that work
 starts: **0008** (Kafka wire client), **0009** (service registration), **0011**
-(CLI shape), **0028** (credentialed authentication).
+(CLI shape).
+
+**0028 has left this list.** It decided credentialed authentication before any
+existed; 0029 built the mechanisms it required and 0030 implemented it, so it now
+describes code. Its selection rule, endpoint authority and ownership table remain
+binding on every mechanism added after PLAIN.
 
 ## Deferrals recorded inside ADRs
 
@@ -91,6 +97,12 @@ A deferral is a decision too, and each names the condition that should reopen it
   that would record it, under one shared condition: a layer that can carry an
   explicit per-run decision. Neither is useful without the other, so they arrive
   together or not at all.
+- **0030** defers nothing that blocks work, and names five conditions that would
+  extend it: a multi-round-trip mechanism, a distinct authorization identity, an
+  identity-bearing attribute kind for principals, a layer that can choose a
+  transport policy, and a node that positively records "no TLS was attempted".
+  The last is the one that would give a plaintext policy refusal a truthful
+  blocker; today it correctly has none.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

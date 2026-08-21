@@ -166,7 +166,16 @@ func sweepAddress(
 		// Plaintext is a positive fact here, not an inference: this branch runs
 		// because the caller asked for no TLS, so nothing was encrypted and
 		// nobody was identified. It is never concluded from a missing TLS node.
-		result.add(conn, params.endpoint(), addr, tcpEvidence.ID(), security.ChannelPlaintext)
+		//
+		// channelEvidence stays empty for the same reason, in the other
+		// direction: the fact is true, and no node in this graph states it, so
+		// there is nothing honest to point a later refusal at.
+		result.add(conn, completedPath{
+			endpoint:   params.endpoint(),
+			address:    addr,
+			evidenceID: tcpEvidence.ID(),
+			channel:    security.ChannelPlaintext,
+		})
 		return nil
 	}
 
@@ -209,7 +218,18 @@ func handshake(
 	}
 
 	wrapped, _ := session.TakeConn()
-	result.add(wrapped, params.endpoint(), addr, tlsEvidence.ID(), channelOf(session))
+	// The TLS node is both the deepest node for this path and the node that
+	// classified its channel. They are named separately because they are
+	// answers to different questions — "what does a protocol node derive from?"
+	// and "what proves what this connection is?" — and a later chain that
+	// records another layer would keep the second pointing here.
+	result.add(wrapped, completedPath{
+		endpoint:        params.endpoint(),
+		address:         addr,
+		evidenceID:      tlsEvidence.ID(),
+		channel:         channelOf(session),
+		channelEvidence: tlsEvidence.ID(),
+	})
 	return nil
 }
 

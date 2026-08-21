@@ -3,6 +3,7 @@ package transport
 import (
 	"testing"
 
+	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tls"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
@@ -252,5 +253,145 @@ func TestChannelIntroducesNoSelection(t *testing.T) {
 	}
 	if !continuations[0].Address().Addr().Is4() {
 		t.Error("canonical ordering changed; that is evidence ordering, not a preference")
+	}
+}
+
+// --- the node that classified the channel ---------------------------------
+
+// TestVerifiedTLSPathNamesTheNodeThatClassifiedIt covers the second half of the
+// channel fact: a layer refusing to write a secret needs to point at the fact
+// that made the channel insufficient, rather than assert the insufficiency on
+// its own.
+func TestVerifiedTLSPathNamesTheNodeThatClassifiedIt(t *testing.T) {
+	peer := newTLSPeer(t, []string{testHost})
+	dialer := &loopbackDialer{target: peer.addr}
+
+	result, graph := run(t, Params{
+		Host: testHost, Port: testPort, Resolver: resolving(t, "10.0.0.1"), Dialer: dialer,
+		TLS: &TLSOptions{RootCAs: peer.pool},
+	})
+
+	continuations := result.Continuations()
+	if len(continuations) != 1 {
+		t.Fatalf("continuations = %d, want 1", len(continuations))
+	}
+
+	id, ok := continuations[0].ChannelEvidence()
+	if !ok {
+		t.Fatal("a TLS path names no node for the channel it established")
+	}
+
+	classifier, present := graph.Node(id)
+	if !present {
+		t.Fatalf("the channel names %s, which is not in the graph", id)
+	}
+	if classifier.Layer() != domain.LayerTLS {
+		t.Errorf("the classifier is %s, want the TLS node", classifier.Layer())
+	}
+	if classifier.Step() != tls.StepHandshake {
+		t.Errorf("classifier step = %s, want %s", classifier.Step(), tls.StepHandshake)
+	}
+
+	// The node it names carries the recorded half of the same observation.
+	verified, has := classifier.Attribute(tls.AttrVerified)
+	if !has {
+		t.Fatal("the classifier records no tls.verified")
+	}
+	if value, _ := verified.Bool(); !value {
+		t.Error("the classifier says tls.verified=false on a verified path")
+	}
+}
+
+// TestUnverifiedTLSPathNamesTheNodeProvingItUnverified is the case that matters:
+// the refusal has something true to point at.
+func TestUnverifiedTLSPathNamesTheNodeProvingItUnverified(t *testing.T) {
+	peer := newTLSPeer(t, []string{"other.internal"})
+	dialer := &loopbackDialer{target: peer.addr}
+
+	result, graph := run(t, Params{
+		Host: testHost, Port: testPort, Resolver: resolving(t, "10.0.0.1"), Dialer: dialer,
+		TLS: &TLSOptions{RootCAs: peer.pool, InsecureSkipVerify: true},
+	})
+
+	continuations := result.Continuations()
+	if len(continuations) != 1 {
+		t.Fatalf("continuations = %d, want 1", len(continuations))
+	}
+
+	id, ok := continuations[0].ChannelEvidence()
+	if !ok {
+		t.Fatal("an unverified TLS path names no node for the channel it established")
+	}
+	classifier, present := graph.Node(id)
+	if !present {
+		t.Fatalf("the channel names %s, which is not in the graph", id)
+	}
+
+	verified, has := classifier.Attribute(tls.AttrVerified)
+	if !has {
+		t.Fatal("the classifier records no tls.verified")
+	}
+	if value, _ := verified.Bool(); value {
+		t.Error("the classifier says tls.verified=true on an unverified path")
+	}
+}
+
+// TestPlaintextPathNamesNoClassifier is the honest gap, asserted rather than
+// worked around.
+//
+// A plaintext channel is recorded because the caller asked for no TLS, so no
+// node in this graph states that TLS is absent. Reporting the TCP node here
+// would hand a later refusal a blocker that passed and proves nothing about
+// encryption. False is the truthful answer.
+func TestPlaintextPathNamesNoClassifier(t *testing.T) {
+	result, _ := run(t, tcpParams(resolving(t, "10.0.0.1"), newScriptedDialer(t)))
+
+	continuations := result.Continuations()
+	if len(continuations) != 1 {
+		t.Fatalf("continuations = %d, want 1", len(continuations))
+	}
+	if continuations[0].Channel() != security.ChannelPlaintext {
+		t.Fatalf("precondition: channel = %s, want plaintext", continuations[0].Channel())
+	}
+
+	id, ok := continuations[0].ChannelEvidence()
+	if ok {
+		t.Errorf("a plaintext path names %s as having classified it; nothing did", id)
+	}
+	if id != "" {
+		t.Errorf("channel evidence = %q, want empty", id)
+	}
+}
+
+// TestChannelEvidenceDescribesTheSamePathAsTheChannel: both facts are set in one
+// statement next to the connection, so they cannot come to describe different
+// sockets.
+func TestChannelEvidenceDescribesTheSamePathAsTheChannel(t *testing.T) {
+	peer := newTLSPeer(t, []string{testHost})
+	dialer := &loopbackDialer{target: peer.addr}
+
+	result, graph := run(t, Params{
+		Host: testHost, Port: testPort,
+		Resolver: resolving(t, "10.0.0.1", "10.0.0.2"), Dialer: dialer,
+		TLS: &TLSOptions{RootCAs: peer.pool},
+	})
+
+	continuations := result.Continuations()
+	if len(continuations) != 2 {
+		t.Fatalf("continuations = %d, want 2", len(continuations))
+	}
+
+	for _, continuation := range continuations {
+		id, ok := continuation.ChannelEvidence()
+		if !ok {
+			t.Fatalf("%s names no classifier", continuation.Address())
+		}
+		classifier, present := graph.Node(id)
+		if !present {
+			t.Fatalf("%s names %s, which is not in the graph", continuation.Address(), id)
+		}
+		if got, want := classifier.Subject().Ref(), continuation.Address().String(); got != want {
+			t.Errorf("%s is classified by a node about %s", continuation.Address(), got)
+		}
 	}
 }

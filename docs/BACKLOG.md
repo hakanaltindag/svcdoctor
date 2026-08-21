@@ -18,8 +18,10 @@ has exactly one runtime dependency, added in Phase 3.1: `github.com/twmb/franz-g
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 - `internal/probe/transport` — the generic transport chain (Phase 2.4)
 - `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1),
-  SASL mechanism discovery (Phase 3.2a) and channel propagation (Phase 3.2b)
-- `internal/adapter/kafka/wire` — the only package that imports the Kafka protocol library
+  SASL mechanism discovery (Phase 3.2a), channel propagation (Phase 3.2b) and PLAIN
+  authentication (Phase 3.2c)
+- `internal/adapter/kafka/wire` — the only package that imports the Kafka protocol library, and
+  the only package that may call `security.Reveal`
 
 No Go code exists in any of the following, and nothing in them may be assumed implemented:
 
@@ -53,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -813,25 +815,59 @@ ADR 0028 required before any credential byte, and nothing else. See **ADR 0029**
       constant (one policy value, unchoosable), or absent (no override). **Reopen when** a CLI
       or application layer can carry an explicit per-run decision into the report
 
-### Phase 3.2c — PLAIN authentication (not started, unblocked)
+### Phase 3.2c — PLAIN authentication (complete)
 
-Contract fixed by ADR 0028; the mechanisms it required exist as of 3.2b (ADR 0029). What
-remains is the authentication implementation itself.
+**The first phase in this repository that transmits credential-derived bytes.** Contract
+fixed by ADR 0028, mechanisms built by ADR 0029, implementation and its open questions
+recorded in **ADR 0030**.
 
-- [ ] `Authenticate` taking **exactly one** `HandshakeSession` and one `security.Credential`
-- [ ] `SecretFor` called with the **logical endpoint**, recovered from the session label by
+- [x] `Authenticate` taking **exactly one** `HandshakeSession` and one `security.Credential`.
+      A `reflect`-based test and a compile-time signature assertion both fail if it ever
+      takes a slice
+- [x] `SecretFor` called with the **logical endpoint**, recovered from the session label by
       `net.SplitHostPort` and normalized by `security.NewEndpoint` — never the resolved address
-- [ ] PLAIN payload built inside `internal/adapter/kafka/wire`, the only package permitted to
-      call `security.Reveal` (ADR 0027)
-- [ ] `SaslAuthenticate` v1, non-flexible, so the wire framing guard accepts it and a rejection
-      arrives as an error code rather than a closed socket
-- [ ] `security.CredentialTransportPolicy.PermitsCredentials(session.Channel())` consulted
-      before anything is written, using the fact 3.2b propagated
-- [ ] Policy refusal recorded as `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, blocked by the TLS node
-      when one exists
-- [ ] Broker-supplied `ErrorMessage` kept out of evidence, exactly as socket error text is
-- [ ] Two credential-authority tests: one credential authorizes every resolved address of its
-      endpoint, and an address-bound credential is refused for the named endpoint
+- [x] PLAIN payload built inside `internal/adapter/kafka/wire`, in the repository's **one and
+      only** `security.Reveal` call site (ADR 0027). The guard was re-verified against
+      deliberate violations in an adapter and a probe package before the first byte was written
+- [x] `SaslAuthenticate` v1, non-flexible, so the wire framing guard accepts it and a rejection
+      arrives as an error code rather than a closed socket. v0 lacks the session lifetime; v2
+      is flexible and would misparse
+- [x] `security.CredentialTransportPolicy.PermitsCredentials(session.Channel())` consulted
+      **before** the endpoint is even parsed, using the fact 3.2b propagated
+- [x] Policy refusal recorded as `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, blocked by the TLS node
+      when one exists and by **nothing** on a plaintext path, because no node states TLS is
+      absent
+- [x] Broker-supplied `ErrorMessage` kept out of evidence — structurally, by there being no
+      field for it above the wire boundary. Canary-tested whole and in fragments
+- [x] Credential-authority matrix: one credential authorizes all five resolved addresses of its
+      endpoint; an address-bound credential is refused for the named endpoint; case and
+      trailing-dot forms are accepted; a different name or port is refused
+- [x] Zero-byte proofs measured on the **peer's protocol layer above TLS**, for policy refusal,
+      endpoint mismatch, unclassified channel and undefined policy alike
+- [x] `AuthenticatedSession` as a third session type, so a future Metadata step cannot be
+      written against a connection that never presented a credential
+- [x] `ChannelEvidence` propagated `Continuation` → `Session` → `HandshakeSession` →
+      `AuthenticatedSession`, so a refusal names the fact that caused it rather than asserting it
+
+**Deliberately not done in 3.2c:** no SCRAM, no OAUTHBEARER, no GSSAPI, no mTLS, no Metadata,
+no topology, no `Origin`, no diagnosis rule, no finding, no severity, no CLI, no registry, no
+generic adapter contract, no retry, no reconnect, no broker selection, no credential forwarding
+to discovered brokers, no unsafe transport override, no new dependency, no report-schema change.
+
+**Decisions taken, with their reopen conditions:**
+
+- [x] **The authenticating identity is not recorded.** A username is deployment identity with
+      no declared redaction kind, so a plain string holding one would survive into a shareable
+      report unpseudonymized. **Reopen when** a diagnosis rule needs to tell two identities
+      apart — which needs an identity-bearing attribute kind in ADR 0022's model first
+- [x] **A policy refusal consumes the session and closes the socket.** The non-consuming
+      alternative was analysed: after a SaslHandshake the broker accepts only that mechanism's
+      SaslAuthenticate, so a refused session has no other legal operation on that socket and
+      nothing reusable is discarded. **Reopen when** a non-credential operation becomes legal
+      on a post-handshake socket
+- [ ] **A plaintext policy refusal carries no `blockedBy`.** Nothing in the graph positively
+      records "no TLS was attempted", and the TCP node proves nothing about encryption.
+      **Reopen when** such a node exists
 
 ### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
 
@@ -861,7 +897,7 @@ consume Phase 2's transport engine without reimplementing any of it.
 
 - [x] ApiVersions (L4) — Phase 3.1
 - [x] SASL mechanism discovery (L5) — Phase 3.2a
-- [ ] PLAIN — Phase 3.2c, contract fixed by ADR 0028, blocked on the 3.2b mechanisms
+- [x] PLAIN — Phase 3.2c, ADR 0030. The first credential svcdoctor transmits
 - [ ] SCRAM-SHA-256 — Phase 3.2d, needs a dependency decision first
 - [ ] SCRAM-SHA-512 — Phase 3.2d, needs a dependency decision first
 - [ ] supplied-token OAUTHBEARER

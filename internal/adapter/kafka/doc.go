@@ -5,13 +5,15 @@
 // chain establishes and measures the paths, and this package speaks over the
 // exact connections that were measured (ADR 0021).
 //
-//	transport.Continuation -> ApiVersions   -> Session          -> domain.Evidence (L4)
-//	Session                -> SaslHandshake -> HandshakeSession -> domain.Evidence (L5)
+//	transport.Continuation -> ApiVersions      -> Session              -> domain.Evidence (L4)
+//	Session                -> SaslHandshake    -> HandshakeSession     -> domain.Evidence (L5)
+//	HandshakeSession       -> SaslAuthenticate -> AuthenticatedSession -> domain.Evidence (L5)
 //
-// Two steps exist: ApiVersions (Phase 3.1) and SASL mechanism discovery
-// (Phase 3.2a). There is no Metadata, no topology and no finding.
+// Three steps exist: ApiVersions (Phase 3.1), SASL mechanism discovery
+// (Phase 3.2a) and SASL/PLAIN authentication (Phase 3.2c). There is no Metadata,
+// no topology and no finding.
 //
-// # No credential is sent, and that is a boundary rather than a gap
+// # Two of the three steps send no credential, and the third is why that matters
 //
 // A SaslHandshake request carries a mechanism name and nothing else — no
 // identity, no password, no token. That is a property of the Kafka protocol, and
@@ -19,14 +21,27 @@
 // broker nothing and appears in no audit log as an authentication attempt.
 //
 // Authentication is a different kind of act. A failed attempt is logged, counted
-// and, in directory-backed deployments, a step towards lockout. So it may not run
-// anywhere until a layer exists that can say *where* and record why — and that
-// layer does not exist yet. Three more questions block it: where a credential
-// comes from, whether it may cross an unverified channel, and how SCRAM is
-// implemented without importing the production client. See ADR 0026 section 7.
+// and, in directory-backed deployments, a step towards lockout. So the two
+// discovery steps take a slice of sessions and ask all of them, and Authenticate
+// takes exactly one session and asks nobody else. The asymmetry is in the types.
 //
-// This package therefore has no parameter a credential could be put into, and
-// security.Reveal is confined by lint to the wire package below it (ADR 0027).
+// Before any byte derived from a credential is written, four things are checked,
+// in this order and no other:
+//
+//	session.Channel()                        what this connection proved
+//	  -> policy.PermitsCredentials(channel)  may a secret cross it at all
+//	  -> security.NewEndpoint(session)       the logical name, never the address
+//	  -> credential.SecretFor(endpoint)      is this credential authorized here
+//	  -> wire.ExchangePLAIN                  the only layer that may reveal
+//
+// A channel the policy refuses ends the call before an endpoint is parsed; a
+// credential bound elsewhere ends it before the wire package is reached. Neither
+// path reaches the only function that can turn a Secret into plaintext, and
+// security.Reveal stays confined by lint to the wire package below (ADR 0027).
+//
+// A refusal is evidence rather than silence: a SKIPPED node with
+// EXEC_SKIPPED_BY_POLICY, blocked by the TLS node that proves the channel
+// insufficient when one exists. See ADR 0028 and ADR 0030.
 //
 // # Every transport path is asked, and no path is chosen
 //
@@ -49,13 +64,22 @@
 // ApiVersions is also the cheapest thing to ask: unauthenticated, side-effect
 // free, and the first request every Kafka client sends anyway.
 //
-// # Connections stay live
+// # Connections stay live, when the protocol defines a next message
 //
 // A successful exchange leaves the connection open and owned by the returned
 // Result, because the next phases — SASL, then Metadata — must continue on the
 // same measured socket rather than dial a new one. A failed exchange closes its
 // connection: after a protocol error the socket's state is unknown, and only
 // this package is in a position to know that.
+//
+// The criterion is the protocol's rather than the recorded state's, and the
+// three steps differ because the protocol does. ApiVersions keeps a connection
+// whose broker answered with an error code, since any request may still follow
+// it. A handshake keeps one only when the mechanism was accepted, since the
+// broker will then accept that mechanism's continuation and nothing else. An
+// authentication keeps one only when the credential was accepted — at which
+// point the socket is more usable than the one it consumed, which is why
+// success produces a distinct AuthenticatedSession.
 //
 // # What it refuses to decide
 //
