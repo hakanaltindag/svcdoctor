@@ -118,13 +118,27 @@ func collect(report domain.Report) (hosts, ips []string, ids []domain.EvidenceID
 // or timestamp cannot, which the closed AttrValue union makes checkable rather
 // than assumed.
 //
-// A value is treated as identifying when it parses as an IP address or as a
-// host:port reference. Both are structural tests, not pattern matching. A bare
-// identifying string in some other shape is not recognized here; if it appears
-// elsewhere in the report it is still replaced, and if it does not, it is
-// preserved. See the package documentation.
+// There are two routes, and the difference matters:
+//
+//   - A host or hostList value was *declared* identity-bearing by its producer
+//     (ADR 0022). It is always collected, whatever it looks like. This is the
+//     route a probe should use, and the only one that is guaranteed.
+//   - A plain string or stringList is inspected opportunistically: it counts as
+//     identity when it parses as an IP address or a host:port reference. That is
+//     a structural test, not pattern matching, and it stays as a safety net for
+//     a producer that forgot to declare. A bare name in a plain string cannot be
+//     recognized — "broker.internal" and "TLS1.3" are the same shape — which is
+//     exactly why the declared kinds exist.
 func collectAttr(v domain.AttrValue, hosts, ips *[]string) {
 	switch v.Kind() {
+	case domain.AttrKindHost:
+		host, _ := v.Host()
+		classify(host, hosts, ips)
+	case domain.AttrKindHostList:
+		list, _ := v.HostList()
+		for _, host := range list {
+			classify(host, hosts, ips)
+		}
 	case domain.AttrKindString:
 		s, _ := v.Str()
 		classifyAttrString(s, hosts, ips)
@@ -299,6 +313,15 @@ func redactSubject(t *table, s domain.Subject) (domain.Subject, error) {
 // shareable report diagnostically useful.
 func redactAttr(t *table, v domain.AttrValue) domain.AttrValue {
 	switch v.Kind() {
+	case domain.AttrKindHost:
+		host, _ := v.Host()
+		return domain.HostAttr(t.attrValue(host))
+	case domain.AttrKindHostList:
+		list, _ := v.HostList()
+		for i, host := range list {
+			list[i] = t.attrValue(host)
+		}
+		return domain.HostListAttr(list...)
 	case domain.AttrKindString:
 		s, _ := v.Str()
 		return domain.StringAttr(t.attrValue(s))

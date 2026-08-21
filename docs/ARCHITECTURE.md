@@ -111,19 +111,27 @@ observe (the only I/O)  ->  observation (producer-local)  ->  domain.Evidence
   connected by the graph rather than by repeating a value.
 - **Identifiers are derived** as `<step>[/<component>...]`, escaped so that no
   input has to be refused to keep them unambiguous (ADR 0019).
-- **Attributes carry facts, not derivations**, and identity-bearing values use
-  shapes structural redaction recognizes — one address or one `host[:port]`
-  reference per value, never embedded in prose.
+- **Attributes carry facts, not derivations**, and identity-bearing values are
+  **declared** with `domain.HostAttr` / `domain.HostListAttr`, one identity per
+  value or list entry, never embedded in prose (ADR 0022).
 - **Classification is conservative.** A completed measurement is a fact; otherwise
   the caller's context is consulted before the I/O error, so svcdoctor's own
   deadline expiring is `UNKNOWN`, never a remote failure.
 - **A failure is evidence.** A Go error means the probe was called with unusable
   input, not that the target is broken.
 
-The only interface a probe introduces is a test seam, such as `Resolver`, because
-no test may depend on an uncontrolled public service. There is deliberately no
-generic `Probe` interface: DNS, TCP and TLS take different inputs and produce
-different facts.
+A probe introduces a test seam only when a hermetic test genuinely needs one.
+`Resolver` and `Dialer` exist because DNS and TCP reach the network; the TLS probe
+has **no seam**, because a real `crypto/tls` server on a loopback listener the
+test controls reproduces every case, and an interface with no test consumer is the
+speculative abstraction the architecture forbids. There is likewise no generic
+`Probe` interface: DNS, TCP and TLS take different inputs and produce different
+facts.
+
+A probe that establishes or wraps a connection returns it under the ownership
+contract of section 4.1. TLS is both a consumer and a producer of that contract:
+it takes ownership of the connection it is handed, and hands on the TLS connection
+wrapping the same socket (ADR 0023).
 
 ### 3.2 Transport orchestration is not application orchestration
 
@@ -191,6 +199,10 @@ if conn, ok := r.TakeConn(); ok {
 - `Close` releases the connection only while the result still owns it, so it is safe
   to defer unconditionally and safe to call twice.
 - A failed attempt owns nothing.
+- A probe that *consumes* a connection takes ownership unconditionally, in every
+  outcome including a returned error, so a caller never has to work out which
+  branch left it responsible. Closing a wrapper closes what it wraps, so one
+  socket always has exactly one owner (ADR 0023).
 
 **Evidence never owns a connection.** `domain.Evidence` has no field one could occupy,
 and the graph and the report hold evidence, so no live resource can reach anything that

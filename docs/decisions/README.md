@@ -33,6 +33,8 @@ does not overturn it, and both remain authoritative.
 | 0019 | Evidence identifiers are derived from the step and a scope path | Accepted | Implements the scheme 0013 left to producers. Amended in Phase 2.2, which settled encoding and scoping |
 | 0020 | Generic transport probes normalize at their own boundary | Accepted | Implements 0002 and 0010 for the first real producer. Widened the `DNS_NO_ADDRESS` contract. Confirmed unchanged by the second producer |
 | 0021 | A successful connection is owned, transferred and closed explicitly | Accepted | Turns the ownership requirement in 0002 and ARCHITECTURE §4 into an API contract |
+| 0022 | A producer declares which attribute values carry identity | Accepted | Closes the known limit 0018 recorded, and supersedes its per-key framing |
+| 0023 | The TLS probe consumes a connection, verifies an identity, and hands it on | Accepted | Applies 0020 and 0021 at L3; defers mTLS, ALPN and trust-material loading |
 
 ## Decisions that govern work not yet written
 
@@ -48,11 +50,16 @@ A deferral is a decision too, and each names the condition that should reopen it
 - **0013** defers `Origin` until topology orchestration exists.
 - **0017** defers transport severity policy, generic/service finding overlap, and
   finding identity until real rules and real evidence exist.
-- **0018** records the attribute-sensitivity limit, which is tied to the open
-  question of where service attribute keys live.
+- **0018** recorded an attribute-sensitivity limit that **0022 has since closed**
+  for declared values. What remains is narrower: identity a producer recorded as
+  a plain string, in a shape that is neither an address nor a host:port
+  reference, and that appears nowhere else in the report.
 - **0019** settled encoding and endpoint scoping in Phase 2.2 and still defers
-  identifier scoping for **retries** and for **one endpoint discovered twice**.
-  The latter is the `Origin` question in another form and belongs to topology.
+  identifier scoping for **retries**, for **one endpoint discovered twice**, and
+  for **two handshakes to one address under different server names**. The second
+  is the `Origin` question in another form and belongs to topology.
+- **0023** defers mTLS, ALPN and trust-material loading, each with the condition
+  that would bring it back.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

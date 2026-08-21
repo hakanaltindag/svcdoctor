@@ -16,6 +16,7 @@ linters:
   enable:
     - depguard      # architecture boundary enforcement (see settings below)
     - errcheck      # unhandled errors hide transport/protocol failures
+    - gosec         # security checks; earns its place now that TLS code exists
     - govet         # standard correctness checks
     - ineffassign   # assignments that are never used
     - noctx         # network calls must accept a context (see below)
@@ -27,7 +28,19 @@ linters:
   # call that takes no context cannot be cancelled, so svcdoctor's local budget
   # would be unenforceable and a hung dial would outlive the run that started it.
   # It caught a real net.Listen in this repository's own test the day it was
-  # enabled. See docs/BACKLOG.md for why bodyclose and gosec are still off.
+  # enabled.
+  #
+  # gosec was activated in Phase 2.3, when crypto/tls arrived and it finally had
+  # something to check. Verified empirically: it flags G402 on the one line that
+  # honours a caller's explicit request to skip verification. That line carries a
+  # targeted nolint with its reason, because the value is a deliberate
+  # per-attempt diagnostic mode recorded in the evidence as tls.verified=false —
+  # see internal/probe/tls/params.go and docs/SECURITY.md. Suppressions of
+  # crypto rules stay single-line and explained; a blanket exclusion would remove
+  # the check that makes activating gosec worthwhile.
+  #
+  # bodyclose remains off: it checks HTTP response bodies and no code uses
+  # net/http. See docs/BACKLOG.md.
 
   settings:
     depguard:

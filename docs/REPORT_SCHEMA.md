@@ -247,6 +247,19 @@ Allowed conceptual value categories:
 - duration
 - timestamp
 - list of simple values
+- host, and list of hosts — a value that identifies a network peer
+
+The host categories were added in schema v1 by ADR 0022. They encode exactly like their
+string counterparts and differ only in the `kind` tag:
+
+```json
+"tls.server_name":    {"kind": "host",     "value": "broker.internal"},
+"tls.peer_dns_names": {"kind": "hostList", "value": ["alt.internal", "broker.internal"]}
+```
+
+The tag is what lets structural redaction replace identity without guessing at shapes: a
+producer declares that a value names somebody, because a bare hostname is indistinguishable
+from any other dotted string. A renderer may treat them as strings; a redactor must not.
 
 Avoid arbitrary nested dynamic objects unless Phase 1 demonstrates a real need.
 

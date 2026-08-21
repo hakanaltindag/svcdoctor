@@ -57,9 +57,9 @@ func answersOf(t *testing.T, e domain.Evidence) []string {
 	if !ok {
 		return nil
 	}
-	list, ok := v.StringList()
+	list, ok := v.HostList()
 	if !ok {
-		t.Fatalf("attribute %s has kind %s, want stringList", AttrAnswers, v.Kind())
+		t.Fatalf("attribute %s has kind %s, want hostList", AttrAnswers, v.Kind())
 	}
 	return list
 }
@@ -558,8 +558,8 @@ func TestEvidenceHoldsOnlyClosedAttributeKinds(t *testing.T) {
 		if !value.Valid() {
 			t.Errorf("attribute %s holds an invalid value", key)
 		}
-		if value.Kind() != domain.AttrKindStringList {
-			t.Errorf("attribute %s has kind %s, want stringList", key, value.Kind())
+		if value.Kind() != domain.AttrKindHostList {
+			t.Errorf("attribute %s has kind %s, want hostList", key, value.Kind())
 		}
 	}
 }

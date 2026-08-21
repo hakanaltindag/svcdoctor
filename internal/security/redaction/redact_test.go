@@ -934,3 +934,133 @@ func TestShareableModeCannotBeClaimedDirectly(t *testing.T) {
 		t.Error("deriving shareable metadata from shareable metadata should fail")
 	}
 }
+
+// TestDeclaredHostAttributesAreAlwaysRedacted covers the gap the TLS probe
+// found. A bare hostname in a plain string attribute cannot be recognized by
+// shape — "broker.internal" and "TLS1.3" look the same — so a producer declares
+// identity through the value's kind instead, and a declared value is replaced
+// whatever it looks like and wherever it appears. See ADR 0022.
+func TestDeclaredHostAttributesAreAlwaysRedacted(t *testing.T) {
+	const (
+		bareName = "cert-canary.internal"
+		version  = "TLS1.3"
+	)
+
+	shareable := mustRedact(t, reportWithHostAttributes(t, map[domain.AttributeKey]domain.AttrValue{
+		"tls.server_name":    domain.HostAttr(bareName),
+		"tls.peer_dns_names": domain.HostListAttr(bareName, "alt-canary.internal"),
+		"tls.version":        domain.StringAttr(version),
+	}))
+	encoded, err := shareable.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+
+	for _, canary := range []string{bareName, "alt-canary.internal"} {
+		if strings.Contains(string(encoded), canary) {
+			t.Errorf("a declared host attribute leaked %q:\n%s", canary, encoded)
+		}
+	}
+
+	node := shareable.Graph().Nodes()[0]
+
+	name, ok := node.Attribute("tls.server_name")
+	if !ok {
+		t.Fatal("tls.server_name disappeared")
+	}
+	if host, isHost := name.Host(); !isHost || !strings.HasPrefix(host, "host-") {
+		t.Errorf("tls.server_name = %q (kind %s), want a host pseudonym", host, name.Kind())
+	}
+
+	// A non-identifying value must survive intact, or a shareable report stops
+	// being worth sharing.
+	kept, ok := node.Attribute("tls.version")
+	if !ok {
+		t.Fatal("tls.version disappeared")
+	}
+	if got, _ := kept.Str(); got != version {
+		t.Errorf("tls.version = %q, want %q untouched", got, version)
+	}
+}
+
+// TestDeclaredHostAttributesCorrelate checks that the same name in two
+// attributes maps to one pseudonym, which is what lets a reader see that the
+// certificate carries the name that was asked for.
+func TestDeclaredHostAttributesCorrelate(t *testing.T) {
+	const name = "shared-canary.internal"
+
+	node := mustRedact(t, reportWithHostAttributes(t, map[domain.AttributeKey]domain.AttrValue{
+		"tls.server_name":    domain.HostAttr(name),
+		"tls.peer_dns_names": domain.HostListAttr(name),
+	})).Graph().Nodes()[0]
+
+	serverName, _ := mustAttribute(t, node, "tls.server_name").Host()
+	names, _ := mustAttribute(t, node, "tls.peer_dns_names").HostList()
+
+	if len(names) != 1 {
+		t.Fatalf("peer names = %v, want one entry", names)
+	}
+	if serverName != names[0] {
+		t.Errorf("the same name became %q and %q: correlation was lost", serverName, names[0])
+	}
+}
+
+func mustAttribute(t *testing.T, e domain.Evidence, key domain.AttributeKey) domain.AttrValue {
+	t.Helper()
+
+	v, ok := e.Attribute(key)
+	if !ok {
+		t.Fatalf("attribute %s is missing", key)
+	}
+	return v
+}
+
+// reportWithHostAttributes builds a minimal local report whose single node
+// carries the given attributes and nothing else identifying, so that a leak can
+// only come from the attributes themselves.
+func reportWithHostAttributes(t *testing.T, attrs map[domain.AttributeKey]domain.AttrValue) domain.Report {
+	t.Helper()
+
+	evidence := mustEvidence(t, nodeSpec{
+		id:    "tls.handshake/endpoint/10.0.0.1",
+		ref:   "10.0.0.1:9092",
+		layer: domain.LayerTLS,
+		step:  "tls.handshake",
+		state: domain.StatePass,
+		attrs: attrs,
+	})
+
+	builder := domain.NewGraphBuilder()
+	if err := builder.AddEvidence(evidence); err != nil {
+		t.Fatalf("AddEvidence: %v", err)
+	}
+	graph, err := builder.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+
+	run, err := domain.NewRunMetadata("0.1.0", testStart, time.Second, "example")
+	if err != nil {
+		t.Fatalf("NewRunMetadata: %v", err)
+	}
+	target, err := domain.NewTarget("10.0.0.1:9092")
+	if err != nil {
+		t.Fatalf("NewTarget: %v", err)
+	}
+	vantage, err := domain.NewLocalVantage("runner.local")
+	if err != nil {
+		t.Fatalf("NewLocalVantage: %v", err)
+	}
+	security, err := domain.NewReportSecurity(domain.OutputModeLocalFull, false, false)
+	if err != nil {
+		t.Fatalf("NewReportSecurity: %v", err)
+	}
+
+	report, err := domain.NewReport(domain.ReportInput{
+		Run: run, Target: target, Vantage: vantage, Graph: graph, Security: security,
+	})
+	if err != nil {
+		t.Fatalf("NewReport: %v", err)
+	}
+	return report
+}

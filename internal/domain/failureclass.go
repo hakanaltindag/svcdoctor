@@ -104,6 +104,16 @@ const (
 	FailureTLSClientCertificateRequired
 	// FailureTLSClientCertificateRejected means the peer rejected the client certificate.
 	FailureTLSClientCertificateRejected
+	// FailureTLSPeerNotTLS means the peer's first response was not a TLS record,
+	// so the endpoint does not speak TLS at all.
+	//
+	// It is deliberately distinct from FailureTLSHandshakeFailure, which means
+	// TLS was spoken and did not succeed. "This port is not TLS" and "TLS broke"
+	// lead to opposite actions: the first says the client is configured for the
+	// wrong protocol, the second says the server's TLS is misconfigured. A
+	// service-neutral fact, though it is what a plaintext-versus-encrypted port
+	// mix-up looks like from the outside.
+	FailureTLSPeerNotTLS
 
 	// Protocol.
 
@@ -182,6 +192,7 @@ var failureClassNames = [...]string{
 	FailureTLSVersionMismatch:           "TLS_VERSION_MISMATCH",
 	FailureTLSClientCertificateRequired: "TLS_CLIENT_CERTIFICATE_REQUIRED",
 	FailureTLSClientCertificateRejected: "TLS_CLIENT_CERTIFICATE_REJECTED",
+	FailureTLSPeerNotTLS:                "TLS_PEER_NOT_TLS",
 
 	FailureProtocolUnexpectedResponse:    "PROTOCOL_UNEXPECTED_RESPONSE",
 	FailureProtocolUnsupportedVersion:    "PROTOCOL_UNSUPPORTED_VERSION",

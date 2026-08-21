@@ -105,15 +105,19 @@ did not resolve it.
 One identifier means one node per `(step, components)` per run, and `GraphBuilder`
 rejects a duplicate outright rather than merging.
 
-Two cases remain open, and both belong to the phase that produces them:
+Three cases remain open, and each belongs to the phase that produces it:
 
 - **Retries.** Two attempts on the same endpoint and address in one run would
   collide. Retry policy is execution policy and does not exist yet.
 - **Topology.** One endpoint discovered twice by different paths may be two facts.
   That is the `Origin` question, deferred by ADR 0013 until topology orchestration
   exists.
+- **Server names.** Phase 2.3 added a layer whose attempt depends on a third
+  input: two TLS handshakes to one address under different server names are two
+  facts, and today they would collide. No caller does it — the chain performs one
+  handshake per endpoint — so the component is not added on speculation.
 
-Neither is invented now, because a scope shape designed for a caller that does not
+None is invented now, because a scope shape designed for a caller that does not
 exist would be a guess. `GraphBuilder` failing loudly on a duplicate is the correct
 interim behaviour: it surfaces the question at the moment something first needs it.
 

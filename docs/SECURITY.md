@@ -51,6 +51,25 @@ is recorded in the report.
 - is recorded in the report
 - is **never** an automatic fallback after a verification failure
 
+### Per-attempt verification, in the evidence
+
+The CLI flag does not exist yet, but the underlying contract does. `internal/probe/tls`
+takes verification settings per attempt and records what actually happened on the node:
+
+- `tls.verified` — true only when the handshake completed **and** verification was enabled.
+  A handshake with verification disabled proves the channel is encrypted and proves nothing
+  about who is on the other end, so the two never read the same.
+- `tls.trust_source` — `system` or `custom`; absent when verification was disabled, because
+  no trust source was consulted. It never records a filesystem path, which would be identity
+  a shareable report cannot redact.
+
+This is not a duplicate of the report's `tlsVerificationDisabled`, which records how the run
+was configured. The per-attempt fact has to be on the node because **diagnosis receives only
+the evidence graph** (ADR 0017): a rule can never see report security metadata, so a fact
+recorded only there would be invisible to the layer that must reason about it.
+
+The probe never retries an unverified handshake after a verified one fails; see ADR 0023.
+
 Automatically retrying with verification disabled would silently turn a safety failure into
 a successful-looking result. When disabling verification would produce useful additional
 evidence, that belongs in a recommendation for the operator to act on deliberately.
@@ -90,36 +109,57 @@ finding codes, kinds, severities, confidences, timings and the summary figures a
 
 ### Known limit
 
-An attribute value that carries identity in a shape the transformation cannot recognize
-structurally, and that appears nowhere else in the report, is **preserved**. The evidence
-model has no per-key sensitivity classification, and adding one is tied to the open question
-of where service attribute keys live.
+Identity that a producer recorded as a **plain string**, in a shape that is neither an IP
+address nor a `host:port` reference, and that appears nowhere else in the report, is
+**preserved**.
 
-Until that is resolved, treat a shareable report as safe for the identifiers svcdoctor knows
-it collected, not as a guarantee about attribute values a future adapter may add. See
-ADR 0018 and `docs/BACKLOG.md`.
+That limit used to be wider. Until Phase 2.3 it covered every unrecognizable shape, including
+the bare hostnames on a certificate, because redaction had to infer identity from shape.
+ADR 0022 replaced inference with declaration: a producer records identity through
+`domain.HostAttr` or `domain.HostListAttr`, and a declared value is always replaced. What
+remains is a producer forgetting to declare — a mistake code review and the contract tests
+below are there to catch, rather than a property of the model.
 
-### Producer obligation: identity-bearing attribute shapes
+Treat a shareable report as safe for identity svcdoctor declared, which is all of it today.
+See ADR 0018, ADR 0022 and `docs/BACKLOG.md`.
 
-The limit above is a requirement on every probe and adapter, not only a caveat for readers.
+### Producer obligation: declare identity-bearing values
 
-Redaction recognizes an identifying attribute value when it parses as an IP address or as a
-`host[:port]` reference. So a producer that records identity must record it as **one value
-per attribute or per list entry, in canonical form**:
+A producer that records identity **declares** it, using the value's type:
 
-```text
-good    dns.answers = ["10.11.12.13", "2001:db8::1"]
-bad     dns.summary = "resolved kafka.prod.internal to 10.11.12.13"
+```go
+domain.HostAttr("broker.prod.internal")            // one identity
+domain.HostListAttr("broker.internal", "alt.internal")  // one identity per entry
 ```
 
-The second shape survives redaction into a shareable report. Nothing rejects it at compile
-time, so the guard is a test: `test/security/dns_evidence_redaction_test.go` builds a report
-from real probe evidence, redacts it, and asserts that every canary identity is gone. A new
-probe or adapter that records identity should extend that contract test rather than assume it
-is covered.
+Every declared value is replaced with a stable pseudonym, whatever its shape and wherever it
+appears. That is what makes a certificate's subject alternative names safe to record: a bare
+hostname cannot be recognized by shape — `broker.internal` and `TLS1.3` are the same shape —
+so declaration, not inference, is the mechanism. See **ADR 0022**.
 
-Non-identifying values are untouched by redaction and stay readable, which is what keeps a
-shareable report diagnostically useful. See ADR 0020.
+Two rules go with it:
+
+```text
+good    tls.peer_dns_names = HostList("broker.internal", "alt.internal")
+bad     tls.peer_dns_names = HostList("broker.internal, alt.internal")   # two in one value
+bad     tls.summary        = String("broker.internal offered alt.internal")
+```
+
+Redaction replaces whole values, so two identities in one value survive together, and
+identity inside prose is not recognized at all.
+
+Plain string attributes are still checked opportunistically — a value that parses as an IP
+address or a `host:port` reference is replaced — but that is a safety net for a producer that
+forgot to declare, not the contract.
+
+Non-identifying values are untouched and stay readable, which is what keeps a shareable
+report diagnostically useful: a shared TLS report still says which version was negotiated,
+which cipher was chosen, whether identity was verified, and when the certificate expires.
+
+The guard is executable. `test/security/` builds reports from real probe evidence, redacts
+them, and asserts every canary identity is gone: `dns_evidence_redaction_test.go`,
+`tcp_evidence_redaction_test.go` and `tls_evidence_redaction_test.go`. A new probe or adapter
+that records identity extends that set rather than assuming it is covered.
 
 ### Identity inside evidence identifiers
 

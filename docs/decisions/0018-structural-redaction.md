@@ -169,3 +169,26 @@ value they were protecting.
   same content always produces the same bytes.
 - Redaction cannot be bypassed by adding a report field without a matching
   transformation: the residual scan fails the transformation instead.
+
+## Amendment: the known limit narrowed (Phase 2.3)
+
+This record documented a limit: an attribute value carrying identity in a shape
+the transformation cannot recognize structurally, and appearing nowhere else in
+the report, is preserved.
+
+**ADR 0022 closes that for declared values.** A producer now records identity
+through `domain.HostAttr` or `domain.HostListAttr`, and every such value is
+replaced whatever its shape. The structural checks described above remain, as an
+opportunistic safety net for plain strings.
+
+What is left of the limit is narrower and worth stating exactly: identity that a
+producer recorded as a **plain string**, in a shape that is neither an IP address
+nor a `host:port` reference, and that appears nowhere else in the report, is
+still preserved. That is now a producer mistake rather than a property of the
+model, and `test/security` is where it becomes visible.
+
+The framing this record and `docs/BACKLOG.md` used — that closing the limit needed
+per-key sensitivity classification — turned out to be wrong. Per-key
+classification would have required a shared key table that redaction cannot
+import from probes, and that would have become the central service-key registry
+the architecture rejects. Per-value declaration needs no table. See ADR 0022.

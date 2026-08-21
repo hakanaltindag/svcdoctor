@@ -74,12 +74,20 @@ invented one would be worse than recording nothing.
 The attribute is absent, not empty, when nothing resolved, so an absent answer set
 and an empty one are distinguishable.
 
-**Identity-bearing values must use shapes structural redaction recognizes**: one
-address or one `host[:port]` reference per value or list entry, never embedded in
-prose. Redaction recognizes an identifying attribute only when it parses as an IP
-address or a host-port reference (ADR 0018), so any other shape survives into a
-shareable report. This is a security requirement on every future probe and
-adapter, not a style preference.
+**Identity-bearing values must be declared, and must hold one identity each.** A
+producer records them with `domain.HostAttr` or `domain.HostListAttr`, which is
+what lets structural redaction replace them without guessing at shapes
+(ADR 0022). One identity per value or per list entry, never embedded in prose:
+redaction replaces whole values, so two names in one string would survive
+together. This is a security requirement on every future probe and adapter, not a
+style preference.
+
+Phase 2.1 and 2.2 stated this as a *shape* rule — an address or a `host:port`
+reference — because both probes happened to record only values redaction could
+recognize structurally. Phase 2.3 showed that shape alone cannot carry the rule,
+since a certificate name is a bare hostname indistinguishable from any other
+dotted string. The shape guidance still holds where it applies; the declaration is
+what makes it enforceable.
 
 Phase 2.2 tested the rule from the other direction: the TCP probe records **no
 attributes at all**. Its subject, state, failure class and duration say everything
@@ -150,6 +158,17 @@ changing it, and the two places it had to extend rather than follow — a subjec
 that is an address rather than a name, and a produced resource — are recorded here
 and in ADR 0021. Nothing in the contract had to be walked back, which is the
 strongest evidence available that it was not overfitted to DNS.
+
+Phase 2.3 was the third test and the first to change something. The TLS probe
+follows the contract — producer-local observation, one I/O function, typed-error
+classification, conservative timeout attribution, subject naming what the layer
+touched — and it records nine attributes where TCP recorded none, because a
+handshake genuinely observes that many independent facts. That volume exposed a
+gap this record had understated: the attribute *shape* rule was not enough,
+because a certificate name is a bare hostname that redaction cannot recognize by
+shape at all. The rule is now that a producer **declares** identity through the
+value's type; see ADR 0022. The shape guidance below still holds for the values
+it covers.
 
 ## Rejected alternatives
 

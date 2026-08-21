@@ -172,9 +172,9 @@ func TestRedactedDNSEvidenceStaysDiagnostic(t *testing.T) {
 	if !ok {
 		t.Fatalf("attribute %s is missing after redaction", dns.AttrAnswers)
 	}
-	answers, ok := value.StringList()
+	answers, ok := value.HostList()
 	if !ok {
-		t.Fatalf("attribute %s has kind %s, want stringList", dns.AttrAnswers, value.Kind())
+		t.Fatalf("attribute %s has kind %s, want hostList", dns.AttrAnswers, value.Kind())
 	}
 	if len(answers) != 2 {
 		t.Errorf("answers = %v, want 2 pseudonymized entries", answers)

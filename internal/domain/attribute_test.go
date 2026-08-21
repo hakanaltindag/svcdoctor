@@ -325,6 +325,8 @@ func TestNoArbitraryObjectCanBeStored(t *testing.T) {
 		DurationAttr(0),
 		TimeAttr(time.Time{}),
 		StringListAttr(),
+		HostAttr(""),
+		HostListAttr(),
 	} {
 		if !constructed.Valid() {
 			t.Errorf("constructor produced an invalid value of kind %s", constructed.Kind())
@@ -344,6 +346,8 @@ func TestAttrKindString(t *testing.T) {
 		{AttrKindDuration, "duration"},
 		{AttrKindTime, "time"},
 		{AttrKindStringList, "stringList"},
+		{AttrKindHost, "host"},
+		{AttrKindHostList, "hostList"},
 		{AttrKind(99), "AttrKind(99)"},
 	}
 
@@ -365,7 +369,10 @@ func TestAttrKindString(t *testing.T) {
 
 // TestAttrKindNamesCoverAllKinds fails if a kind is added without a name.
 func TestAttrKindNamesCoverAllKinds(t *testing.T) {
-	const wantCount = 7 // AttrKindInvalid plus six value kinds
+	// AttrKindInvalid plus eight value kinds. Phase 2.3 added host and hostList
+	// so that a producer can declare a value as identity-bearing rather than
+	// leaving redaction to guess; see ADR 0022.
+	const wantCount = 9
 
 	if len(attrKindNames) != wantCount {
 		t.Fatalf("attrKindNames has %d entries, want %d", len(attrKindNames), wantCount)
@@ -374,5 +381,58 @@ func TestAttrKindNamesCoverAllKinds(t *testing.T) {
 		if name == "" {
 			t.Errorf("AttrKind(%d) has no name", i)
 		}
+	}
+}
+
+// TestHostAttrsCarryIdentityDistinctly pins the reason the host kinds exist: a
+// producer declares that a value identifies a peer, so structural redaction
+// never has to tell "broker.internal" from "TLS1.3" by shape.
+func TestHostAttrsCarryIdentityDistinctly(t *testing.T) {
+	host := HostAttr("broker.internal")
+	if got, ok := host.Host(); !ok || got != "broker.internal" {
+		t.Errorf("Host() = %q, %v, want %q, true", got, ok, "broker.internal")
+	}
+	if _, ok := host.Str(); ok {
+		t.Error("a host value must not read as a plain string, or redaction could not tell them apart")
+	}
+	if got, want := host.Kind(), AttrKindHost; got != want {
+		t.Errorf("Kind() = %s, want %s", got, want)
+	}
+
+	list := HostListAttr("a.internal", "b.internal")
+	names, ok := list.HostList()
+	if !ok || len(names) != 2 {
+		t.Fatalf("HostList() = %v, %v, want two entries", names, ok)
+	}
+	if _, ok := list.StringList(); ok {
+		t.Error("a host list must not read as a plain string list")
+	}
+
+	// The copy is what stops a caller mutating recorded evidence.
+	names[0] = "mutated"
+	again, _ := list.HostList()
+	if again[0] != "a.internal" {
+		t.Error("HostList returned a slice that aliases the recorded value")
+	}
+}
+
+// TestHostAttrsEncodeLikeTheirStringCounterparts keeps the wire format simple:
+// the kind tag carries the meaning, and the value is the same text a reader
+// would expect.
+func TestHostAttrsEncodeLikeTheirStringCounterparts(t *testing.T) {
+	encoded, err := json.Marshal(HostAttr("broker.internal"))
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if got, want := string(encoded), `{"kind":"host","value":"broker.internal"}`; got != want {
+		t.Errorf("json.Marshal = %s, want %s", got, want)
+	}
+
+	encoded, err = json.Marshal(HostListAttr("a.internal", "b.internal"))
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if got, want := string(encoded), `{"kind":"hostList","value":["a.internal","b.internal"]}`; got != want {
+		t.Errorf("json.Marshal = %s, want %s", got, want)
 	}
 }

@@ -10,21 +10,24 @@ runtime dependencies:
 - `internal/security` — masked secret and endpoint-bound credential primitives
 - `internal/security/redaction` — structural redaction into a shareable report
 - `internal/diagnosis` — the `Rule` contract and the deterministic `Engine`
+- `internal/probe` — the evidence identifier encoding every probe shares
 - `internal/probe/dns` — the DNS probe, the first real I/O producer (Phase 2.1)
+- `internal/probe/tcp` — the TCP probe and connection ownership (Phase 2.2)
+- `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 
 No Go code exists in any of the following, and nothing in them may be assumed implemented:
 
-- `internal/probe/tcp`, `internal/probe/tls`
 - `internal/adapter`
 - `internal/render`
 - `internal/platform`
 - `internal/app`
 - `cmd/svcdoctor`
 
-So there is one probe and no TCP or TLS execution, no connection ownership transfer, no
+So all three generic transport probes exist, and nothing sequences them: there is no
 transport chain, no short-circuit execution engine, no adapters, no Kafka, no PostgreSQL, no
-topology execution, no renderers and no CLI. **The tool still cannot connect to anything**:
-it can resolve a name and record what it saw, and nothing consumes that yet.
+topology execution, no renderers and no CLI. **The tool still cannot diagnose anything**: it
+can resolve a name, open a connection, complete a handshake and record what it saw, and
+nothing consumes that yet.
 
 `internal/diagnosis` ships the rule contract and the engine and **no concrete rules**. That
 is a deliberate deferral with a recorded reason, not missing work; see Phase 1.5 and Phase 2
@@ -43,7 +46,7 @@ stale and should be corrected against this table.
 |---|---|---|
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
-| 2 | Generic Transport Engine | **In progress** — 2.1 DNS and 2.2 TCP complete |
+| 2 | Generic Transport Engine | **In progress** — 2.1 DNS, 2.2 TCP and 2.3 TLS complete |
 | 3 | Kafka Vertical Slice | Not started |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
@@ -67,7 +70,7 @@ condition that should reopen it.
 | **`Origin` / provenance** | No consumer; topology discovery does not exist. Adding it now creates a second record of how a subject entered the run, with no implementation to say which is authoritative | Topology orchestration exists, in Phase 3 (ADR 0013) |
 | **Generic vs service finding overlap** | Nothing says how a generic `TCP_CONNECTION_REFUSED` and a service `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` avoid describing one fact twice | The first service rules are written, in Phase 3 (ADR 0017) |
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
-| **Service attribute-key ownership**, and per-key sensitivity classification | Where service-specific key constants live is unsettled, and `internal/domain` must not grow a registry of them. Redaction's known limit depends on the same answer | The Kafka adapter demonstrates the real boundary, in Phase 3 |
+| **Service attribute-key ownership** | Where service-specific key constants live is unsettled, and `internal/domain` must not grow a registry of them | The Kafka adapter demonstrates the real boundary, in Phase 3 |
 | **Contract-package placement** for the adapter contract, the registry, the probe chain contract and CLI orchestration | Concrete structs first; interfaces only at real boundaries. A placement chosen before a real consumer is a guess | Each is forced by the implementation that needs it |
 | **`security.Reveal` restriction** | No adapter wire package exists to confine it to, and inventing a path to point a lint rule at would be worse than waiting | Kafka wire packages exist, in Phase 3 |
 | **Execution mode** in run metadata | No vocabulary is defined, and both plausible meanings already have owners: `vantage` and the summary | A real execution mode exists that neither already expresses |
@@ -75,6 +78,11 @@ condition that should reopen it.
 
 The first three converge on the same question and will likely be answered together. See
 `docs/ARCHITECTURE.md` section 18 and `docs/PHASE1_HANDOFF.md` sections 13 and 15.
+
+**Per-key sensitivity classification is no longer part of the attribute-key question.** It was
+listed here as redaction's prerequisite until Phase 2.3, when TLS forced the issue and ADR 0022
+answered it differently: sensitivity moved onto the *value*, so redaction needs no key
+vocabulary at all. Where keys live is still open; who is allowed to import them is still open.
 
 ---
 
@@ -111,8 +119,11 @@ Tooling only. No architecture is implemented by any of the above.
 Each activates when the code it governs exists. The phase named is when it becomes
 expressible, not a promise that it lands automatically.
 
-- [ ] `noctx` / `bodyclose` once network-facing code exists — **Phase 2**
-- [ ] `gosec` once there is code with meaningful signal — **Phase 2**
+- [x] `noctx` once network-facing code exists — activated in **Phase 2.2**
+- [x] `gosec` once there is code with meaningful signal — activated in **Phase 2.3**, when
+      crypto/tls arrived
+- [ ] `bodyclose` — evaluated in 2.2 and 2.3 and still off: it checks HTTP response bodies
+      and no code uses `net/http`. **Reopen when** something does
 - [ ] depguard rule for the adapter contract / registry package (placement still open) — **Phase 3**
 - [ ] Kafka adapter must not implement generic DNS/TCP/TLS transport. Needs an import-level
       expression once `internal/adapter/kafka/` exists; not expressible as a package deny
@@ -332,7 +343,7 @@ Phase 2 delivers a **reusable generic transport engine**: the facts a client can
 reaching an endpoint, and a live connection the first adapter can take over in Phase 3. It
 delivers no product.
 
-Phases 2.1 and 2.2 are complete. Everything else below is not started.
+Phases 2.1, 2.2 and 2.3 are complete. Everything else below is not started.
 
 ### Phase 2.1 — Generic probe contracts and DNS (complete)
 
@@ -379,14 +390,20 @@ Questions 2.1 surfaced:
       resolves to several addresses, and two names can share an address, so an identifier
       needs both the endpoint and the address. The delimiter rule is now honoured rather than
       merely stated — the DNS probe no longer refuses a host containing `/`. See ADR 0019.
-- [ ] **Where generic transport attribute keys live — revisited in Phase 2.2, still open, and
-      no longer urgent.** The TCP probe records **no attributes**, so the second producer
-      created no duplication and no shared vocabulary is justified yet; `internal/probe` holds
-      only the identifier encoding. The original problem is unchanged: a future rule in
-      `internal/diagnosis/transport/` cannot import `dns.AttrAnswers`, because depguard forbids
-      diagnosis importing probes. **Reopen when** the first transport rule needs a key, or when
-      two probes need the same one. This is the generic half of the attribute-key question and
-      does **not** settle the service-specific half.
+- [ ] **Where generic transport attribute keys live — revisited again in Phase 2.3; half of it
+      dissolved, half still open.** TLS is the third producer and the first with a large
+      factual vocabulary (nine keys), yet it still shares no key with DNS or TCP: each probe
+      observes different things, so there is still nothing to hoist and `internal/probe` holds
+      only the identifier encoding.
+      **Dissolved:** redaction no longer needs to know any key. It used to be a candidate
+      consumer of a shared key table, which would have become the central service-key registry
+      the architecture rejects; ADR 0022 moved sensitivity onto the *value* instead, so the
+      redactor needs no vocabulary at all.
+      **Still open:** a future rule in `internal/diagnosis/transport/` cannot import
+      `tls.AttrVerified` or `dns.AttrAnswers`, because depguard forbids diagnosis importing
+      probes. **Reopen when** the first transport rule needs a key, or when two probes need the
+      same one. This remains the generic half and does **not** settle the service-specific
+      half.
 
 ### Phase 2.2 — Generic TCP probe and connection ownership (complete)
 
@@ -428,16 +445,75 @@ findings, no service knowledge, no `Origin`.
   code or adding a suppression, for no security signal on a probe with no crypto, no file
   access and no privilege handling. **Reopen in Phase 2.3**, where G402 and the `--insecure`
   path give it something real to check — and where the G602 false positive must be dealt with.
+  *(That is what happened: gosec was activated in Phase 2.3 — see below.)*
+
+### Phase 2.3 — Generic TLS probe (complete)
+
+Implemented in `internal/probe/tls/`, standard library plus `internal/domain` and
+`internal/probe` only, **no new interface**:
+
+- [x] TLS handshake over a connection the caller already owns, never dialing and never
+      resolving
+- [x] **Ownership consumed and produced** — `Handshake` takes the connection
+      unconditionally, closes it on failure, and returns the wrapped TLS connection under the
+      ADR 0021 rules (**ADR 0023**)
+- [x] Generic TLS parameters: server name, trust source, version bounds, per-attempt
+      verification control
+- [x] Certificate facts — validity window, DNS and IP SANs, chain length — recorded on
+      verification failure as well as success, because the rejected chain is what makes a
+      failure actionable
+- [x] Negotiated version and cipher suite as stable names, with a numeric fallback for values
+      nobody has anticipated
+- [x] Typed-error classification, including `TLS_PEER_NOT_TLS` for a peer that answers with
+      something that is not a TLS record
+- [x] `domain.FailureTLSPeerNotTLS`, the one class the vocabulary was missing
+- [x] Verification on by default; disabling it is per-attempt, explicit, never an automatic
+      fallback, and recorded on the node as `tls.verified`
+- [x] **Declared identity values** — `domain.HostAttr` / `HostListAttr` (**ADR 0022**), after
+      the first `test/security` run leaked certificate names into a shareable report
+- [x] Hermetic fixtures: an in-memory CA, generated certificates and a loopback peer the test
+      controls; no fixture keys on disk
+- [x] `gosec` activated; `probe-is-service-agnostic` and the new lint verified empirically
+
+**Deliberately not done in 2.3:** no transport chain, no `GraphBuilder` orchestration, no
+`BlockedBy`, no findings, no service knowledge, no mTLS, no ALPN, no trust-material loading
+from disk, no CLI flag.
+
+**No `Handshaker` seam was added, and the backlog item is closed rather than deferred.** Every
+case — verified, unknown authority, hostname mismatch, expired, not-yet-valid, version
+mismatch, plaintext peer, hang-up, deadline, cancellation — is reproducible against a real
+`crypto/tls` server on a loopback listener the test creates. An interface with no test
+consumer is the speculative abstraction the architecture forbids, so the reason DNS and TCP
+have seams (they reach the network) simply does not apply here. See ADR 0023.
+
+**Lint reassessment, decided from evidence:**
+
+- **`gosec` — enabled.** It now has crypto to check. Verified by removing the suppression:
+  it flags G402 on the single line that honours a caller's explicit request to skip
+  verification. That line keeps a targeted `nolint` with its reason; the pre-existing G602
+  false positive in a Phase 1 test helper was removed by rewriting the helper with
+  `slices.Equal` rather than by suppressing it.
+- **`noctx` — still enabled**, still clean.
+- **`bodyclose` — still off.** Run against the current tree it reports nothing, because no
+  code uses `net/http`. **Reopen when** something does.
+
+Questions 2.3 surfaced:
+
+- [x] **Redaction could not recognize a bare hostname in an attribute — settled.** The
+      documented "known limit" of ADR 0018 stopped being theoretical the moment a probe
+      recorded certificate names. Fixed structurally by declaring identity in the value's type
+      (**ADR 0022**), not by a shape heuristic, which cannot separate `broker.internal` from
+      `TLS1.3`. `docs/SECURITY.md` records what is left of the limit.
+- [ ] **Two handshakes to one address under different server names** would collide on one
+      identifier. No caller does it, so no component was added on speculation. Recorded with
+      the other identifier-scoping cases in ADR 0019.
 
 ### What the rest of Phase 2 may implement
 
-- [ ] TLS handshake probe with chain, SAN and expiry observations, taking ownership of a
-      connection the TCP probe established
 - [ ] Generic transport chain, orchestrating DNS → TCP → TLS execution inside the probe
       boundary, including address iteration order and whether to stop at the first success
 - [ ] Transport-local timeout and budget handling for the chain as a whole
 - [ ] Short-circuit execution producing `SKIPPED` evidence and `BlockedBy` relationships
-- [ ] Remaining hermetic test seam: `Handshaker`
 
 **Watch this boundary.** Connection ownership transfer is the invariant most easily lost by
 accident: if a probe is written as "connect, measure, close", the adapter is forced to open

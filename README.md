@@ -5,8 +5,8 @@
 ## Project status
 
 **Phase 1 — Core Foundations is complete, and Phase 2 is in progress. The tool is not usable
-yet**: it can resolve a name and open a TCP connection and record what it saw, and nothing
-consumes that yet, because no chain, adapter or CLI exists.
+yet**: it can resolve a name, open a connection, complete a TLS handshake and record what it
+saw, and nothing consumes that yet, because no chain, adapter or CLI exists.
 
 What is implemented, with zero runtime dependencies:
 
@@ -18,10 +18,11 @@ What is implemented, with zero runtime dependencies:
 - `internal/probe` — the evidence identifier encoding every probe shares
 - `internal/probe/dns` — the DNS probe, the first real I/O producer (Phase 2.1)
 - `internal/probe/tcp` — the TCP probe and connection ownership transfer (Phase 2.2)
+- `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 
-What is not implemented: the TLS probe, the transport chain, the short-circuit execution
-engine, service adapters, Kafka, PostgreSQL, topology execution, renderers and the CLI. Those
-directories contain no Go code.
+What is not implemented: the transport chain that sequences the three probes, the
+short-circuit execution engine, service adapters, Kafka, PostgreSQL, topology execution,
+renderers and the CLI. Those directories contain no Go code.
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
 > It reconstructs the mental model, the locked invariants, the rejected alternatives and the
@@ -123,9 +124,9 @@ long-term monitoring, LLM-based core diagnosis, and generic rule scripting DSLs.
 ## Repository layout
 
 Only `internal/domain`, `internal/security`, `internal/security/redaction`,
-`internal/diagnosis`, `internal/probe`, `internal/probe/dns`, `internal/probe/tcp` and
-`test/security` contain Go code. Every other `internal/`, `cmd/` and `test/` directory below
-is scaffold and is empty.
+`internal/diagnosis`, `internal/probe`, `internal/probe/dns`, `internal/probe/tcp`,
+`internal/probe/tls` and `test/security` contain Go code. Every other `internal/`, `cmd/` and
+`test/` directory below is scaffold and is empty.
 
 ```text
 svcdoctor/
@@ -140,7 +141,7 @@ svcdoctor/
 │   ├── probe/
 │   │   ├── dns/                   # Generic DNS facts; phase 2.1
 │   │   ├── tcp/                   # Generic TCP facts + connection ownership; phase 2.2
-│   │   └── tls/                   # Generic TLS facts; phase 2.3
+│   │   └── tls/                   # Generic TLS facts + handshake ownership; phase 2.3
 │   ├── adapter/
 │   │   ├── kafka/                 # Kafka protocol + topology semantics; phase 3
 │   │   └── postgres/              # Reserved for phase 4

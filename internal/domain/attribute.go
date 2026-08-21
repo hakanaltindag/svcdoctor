@@ -33,6 +33,11 @@ const (
 	AttrKindTime
 	// AttrKindStringList holds an ordered list of strings.
 	AttrKindStringList
+	// AttrKindHost holds one value that identifies a network peer: a DNS name,
+	// an IP literal, or a host:port reference.
+	AttrKindHost
+	// AttrKindHostList holds an ordered list of such values.
+	AttrKindHostList
 )
 
 // attrKindNames is indexed by AttrKind. Keep it aligned with the const block
@@ -45,6 +50,8 @@ var attrKindNames = [...]string{
 	AttrKindDuration:   "duration",
 	AttrKindTime:       "time",
 	AttrKindStringList: "stringList",
+	AttrKindHost:       "host",
+	AttrKindHostList:   "hostList",
 }
 
 // Valid reports whether k is a defined kind. AttrKindInvalid is not.
@@ -125,6 +132,40 @@ func StringListAttr(v ...string) AttrValue {
 	return AttrValue{kind: AttrKindStringList, list: list}
 }
 
+// HostAttr holds one value that identifies a network peer: a DNS name, an IP
+// literal, or a host:port reference.
+//
+// # Why this is not just a string
+//
+// A producer knows whether a value identifies somebody. Structural redaction
+// does not, and cannot always work it out: "broker.internal" and "TLS1.3" are
+// both dotted strings, and a redactor that guessed would either leak the first
+// or destroy the second. Recording the producer's knowledge in the value's type
+// makes the question decidable rather than heuristic, which is the same reason
+// the whole union is closed.
+//
+// Use it for any value that names a host, an address or an endpoint. The
+// redactor replaces every such value with a stable pseudonym, so correlation
+// survives and identity does not.
+//
+// An ordinary StringAttr is still checked opportunistically, but only a value
+// recorded through this constructor is guaranteed to be recognized. See
+// ADR 0022.
+func HostAttr(v string) AttrValue {
+	return AttrValue{kind: AttrKindHost, str: v}
+}
+
+// HostListAttr holds an ordered list of peer identities, one per entry.
+//
+// One identity per entry is required rather than merely tidy: redaction
+// replaces whole values, so two names joined into one string would survive
+// together. The list is copied.
+func HostListAttr(v ...string) AttrValue {
+	list := make([]string, len(v))
+	copy(list, v)
+	return AttrValue{kind: AttrKindHostList, list: list}
+}
+
 // Kind reports which category of value v holds.
 func (v AttrValue) Kind() AttrKind { return v.kind }
 
@@ -156,6 +197,21 @@ func (v AttrValue) Time() (time.Time, bool) {
 	return v.ts, v.kind == AttrKindTime
 }
 
+// Host returns the peer identity and whether v holds one.
+func (v AttrValue) Host() (string, bool) {
+	return v.str, v.kind == AttrKindHost
+}
+
+// HostList returns a copy of the peer identities and whether v holds them.
+func (v AttrValue) HostList() ([]string, bool) {
+	if v.kind != AttrKindHostList {
+		return nil, false
+	}
+	out := make([]string, len(v.list))
+	copy(out, v.list)
+	return out, true
+}
+
 // StringList returns a copy of the list and whether v holds one.
 //
 // The copy prevents a reader from mutating recorded evidence through the
@@ -174,7 +230,7 @@ func (v AttrValue) StringList() ([]string, bool) {
 // This is for logs and debugging. The canonical form is MarshalJSON.
 func (v AttrValue) String() string {
 	switch v.kind {
-	case AttrKindString:
+	case AttrKindString, AttrKindHost:
 		return v.str
 	case AttrKindInt:
 		return strconv.FormatInt(v.num, 10)
@@ -184,7 +240,7 @@ func (v AttrValue) String() string {
 		return time.Duration(v.num).String()
 	case AttrKindTime:
 		return v.ts.Format(time.RFC3339Nano)
-	case AttrKindStringList:
+	case AttrKindStringList, AttrKindHostList:
 		return "[" + strings.Join(v.list, ", ") + "]"
 	default:
 		return "AttrValue(" + v.kind.String() + ")"
@@ -214,7 +270,7 @@ func (v AttrValue) MarshalJSON() ([]byte, error) {
 	out := attrJSON{Kind: v.kind.String()}
 
 	switch v.kind {
-	case AttrKindString:
+	case AttrKindString, AttrKindHost:
 		out.Value = v.str
 	case AttrKindInt:
 		out.Value = v.num
@@ -224,7 +280,7 @@ func (v AttrValue) MarshalJSON() ([]byte, error) {
 		out.Value = time.Duration(v.num).String()
 	case AttrKindTime:
 		out.Value = v.ts.Format(time.RFC3339Nano)
-	case AttrKindStringList:
+	case AttrKindStringList, AttrKindHostList:
 		list := v.list
 		if list == nil {
 			list = []string{}

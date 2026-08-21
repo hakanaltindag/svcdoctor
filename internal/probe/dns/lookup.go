@@ -22,8 +22,12 @@ import (
 // it as a literal elsewhere is a bug waiting to happen.
 const StepLookup domain.Step = "dns.lookup"
 
-// AttrAnswers holds the canonical addresses a lookup returned, as a string list
-// with one address per entry.
+// AttrAnswers holds the canonical addresses a lookup returned, one address per
+// entry.
+//
+// It is recorded as a host list rather than a string list because the values
+// identify network peers: the producer declares that, so structural redaction
+// never has to infer it (ADR 0022).
 //
 // This is the only attribute the DNS probe records. Counts and family
 // breakdowns are derivable from the list, and a derived attribute is a second
@@ -162,7 +166,7 @@ func (o observation) evidence() (domain.Evidence, error) {
 	var attributes map[domain.AttributeKey]domain.AttrValue
 	if len(answers) > 0 {
 		attributes = map[domain.AttributeKey]domain.AttrValue{
-			AttrAnswers: domain.StringListAttr(answers...),
+			AttrAnswers: domain.HostListAttr(answers...),
 		}
 	}
 

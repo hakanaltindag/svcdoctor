@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -74,15 +75,7 @@ func idsOf(nodes []Evidence) []EvidenceID {
 }
 
 func equalIDs(a, b []EvidenceID) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return slices.Equal(a, b)
 }
 
 func TestEmptyGraph(t *testing.T) {
