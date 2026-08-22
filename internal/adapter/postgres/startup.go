@@ -127,9 +127,16 @@ func Startup(
 
 	t := target{endpoint: session.endpoint, address: session.address}
 
+	// The step's own budget, derived from the caller's context so that whichever
+	// is earlier wins and the caller's remains the outer ceiling. Cancelled
+	// immediately after the exchange rather than deferred: the connection
+	// survives this call on the passing path, and a derived context outliving
+	// the exchange it bounds would expire inside somebody else's.
+	exchangeCtx, cancel := stepContext(ctx, params.ExchangeTimeout)
 	startedAt := time.Now()
-	auth, fields, err := exchangeStartup(ctx, conn, params)
+	auth, fields, err := exchangeStartup(exchangeCtx, conn, params)
 	duration := time.Since(startedAt)
+	cancel()
 
 	state, failure := classifyStartup(ctx, auth, fields, err)
 
@@ -252,6 +259,24 @@ func classifyStartup(
 
 	if !fields.IsZero() {
 		return domain.StateFail, sqlStateFailure(fields.SQLState)
+	}
+
+	if isTimeout(err) {
+		// **svcdoctor's own budget, not the peer's failure.** The step's
+		// deadline is applied to the socket by wire.bindDeadline, so it comes
+		// back as a net.Error timeout rather than as context.DeadlineExceeded —
+		// the caller's context is still alive, and the two checks above cannot
+		// see it. Without this branch the timeout fell through to
+		// wireFailureClass, whose default is PROTOCOL_UNEXPECTED_RESPONSE, and a
+		// slow endpoint was reported as one that answered wrongly.
+		//
+		// The peer's own facts are read first, above, so an ErrorResponse that
+		// arrived before the deadline still wins. Nothing here reclassifies a
+		// network-reported timeout: the read path has no kernel deadline of its
+		// own, so a timeout on it is always the one this step set. The same
+		// branch, in the same position, is what establish.go and authenticate.go
+		// already do.
+		return domain.StateUnknown, domain.FailureExecLocalTimeout
 	}
 	_ = auth
 	return domain.StateFail, wireFailureClass(err)

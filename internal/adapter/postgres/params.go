@@ -144,6 +144,23 @@ type StartupParams struct {
 	// Database is the database to select. Optional; a server given none
 	// defaults to one named after the user.
 	Database string
+
+	// ExchangeTimeout optionally bounds the exchange, derived from the caller's
+	// context. Zero means only the caller's context bounds the work.
+	//
+	// The name matches AuthParams, the other step that bounds exactly one
+	// exchange; Params.StepTimeout is spelled differently because it bounds two
+	// — the negotiation and the handshake that may follow it.
+	//
+	// **It was absent until Phase 4.11d, and the absence was a defect.** A
+	// caller whose own context carried no deadline had nothing bounding this
+	// step at all, so a peer that accepted the connection and never answered the
+	// StartupMessage held the run open indefinitely — measured, against a
+	// loopback listener, with a step timeout configured and ignored. Every
+	// sibling step in this package took its budget from the same
+	// PostgresParams.StepTimeout; this one silently dropped it, because there
+	// was no field for it to arrive in.
+	ExchangeTimeout time.Duration
 }
 
 func (p StartupParams) validate() error {
@@ -151,6 +168,9 @@ func (p StartupParams) validate() error {
 		return ErrInvalidInput
 	}
 	if !printable(p.User) || !printable(p.Database) {
+		return ErrInvalidInput
+	}
+	if p.ExchangeTimeout < 0 {
 		return ErrInvalidInput
 	}
 	return nil

@@ -120,12 +120,18 @@ type Result struct {
 func (r Result) Report() domain.Report { return r.report }
 
 // Incomplete reports that the run stopped before measuring everything it set out
-// to, because the caller's context ended — a cancellation or an exhausted
-// execution budget.
+// to, because svcdoctor's own execution limit ended it — a cancellation, the
+// caller's deadline, or a per-step budget expiring.
 //
-// It is not a statement about the target. The evidence that was collected is in
-// the report and remains true; what is missing was never attempted. docs/SCOPE.md
-// maps this to exit code 4, and that mapping happens above this package.
+// It is not a statement about the target, and it is orthogonal to the report's
+// status. A run can be `PROBLEMS_FOUND` and complete, `OK` and incomplete, or
+// either and neither: status answers *was a target-side ERROR condition
+// diagnosed*, and this answers *did svcdoctor finish measuring*. The evidence
+// that was collected is in the report and remains true; what is missing was
+// never determined. docs/SCOPE.md maps this to exit code 4, and that mapping
+// happens above this package.
+//
+// See incompleteRun for the exact predicate and why it is that one.
 func (r Result) Incomplete() bool { return r.incomplete }
 
 // DiagnosePostgres measures one PostgreSQL endpoint and reports what it found.
@@ -168,21 +174,10 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 	// them from drifting. See logicalTarget.
 	target := logicalTarget{host: params.Host, port: params.Port}
 
-	if err := measurePostgres(ctx, builder, target, params); err != nil {
+	established, err := measurePostgres(ctx, builder, target, params)
+	if err != nil {
 		return Result{}, err
 	}
-
-	// **One reconciliation, from one source.** A run is incomplete exactly when
-	// the caller's context ended before the work did — a cancellation or an
-	// exhausted budget — whether that happened between paths, before the
-	// credentialed step, or inside Negotiate, Startup, Authenticate or
-	// EstablishSession. Reading it once here catches all of them, where
-	// assignments scattered through the stages would each have to remember to.
-	//
-	// It is derived from nothing else: not from findings, not from severity, not
-	// from the report's status, not from how many paths were found, and not from
-	// which one was selected.
-	incomplete := ctx.Err() != nil
 
 	// The graph is complete. Everything after this point is a pure
 	// transformation of it, and nothing below performs I/O.
@@ -190,6 +185,14 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 	if err != nil {
 		return Result{}, fmt.Errorf("freezing the evidence graph: %w", err)
 	}
+
+	// **One reconciliation, from one place.** See incompleteRun for the whole
+	// definition. It is derived from the caller's context, from whether a
+	// session was established, and from the states and failure classes on the
+	// frozen graph — and from nothing else: not from findings, not from
+	// severity, not from the report's status, not from how many paths were
+	// found, and not from which one was selected.
+	incomplete := incompleteRun(ctx, graph, established)
 
 	// Generic transport rules first, then the service's, which is the order the
 	// layers were measured in. **Wiring order does not reach the output** — the
@@ -217,20 +220,87 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 	return Result{report: report, incomplete: incomplete}, nil
 }
 
+// incompleteRun reports that svcdoctor's own execution limit stopped this run
+// short of the outcome it set out to measure.
+//
+// # The definition
+//
+// A run is incomplete when the caller's context ended, **or** when no session
+// was established and some step that was entered ended UNKNOWN because a local
+// budget expired or the run was cancelled.
+//
+// # Why the caller's context alone was not enough
+//
+// It was the whole definition until Phase 4.11d, and it missed the case
+// PostgresParams.StepTimeout exists to create. A per-step budget expiring leaves
+// the caller's context untouched, so a run against an endpoint that never
+// answered a SYN reported `findings: []`, `status: OK` and a complete run —
+// measured. docs/SCOPE.md defines exit code 4 as cancellation **or local
+// execution budget exhaustion**, and the per-step budget is the second of those.
+//
+// ADR 0043 section 6 withholds `TCP_CONNECTION_NOT_ESTABLISHED` on a sweep that
+// did not prove every path fails, and rests that on `Result.Incomplete()` saying
+// the run was cut short. This is what makes that premise true.
+//
+// # Why a passing session settles it, and nothing weaker
+//
+// A run that reached ReadyForQuery answered the question it was asked, and local
+// uncertainty on a path it did not use does not unmake that: ADR 0041 measures
+// every path deliberately and continues exactly one, so an unselected path is
+// expected to end without a conclusion. Anything weaker than a passing session
+// is not a substitute — a session node that is itself UNKNOWN because the read
+// budget expired is precisely the case this must catch.
+//
+// # Why UNKNOWN and not SKIPPED
+//
+// UNKNOWN means a step was entered and could not be determined. A SKIPPED node
+// carrying a local class means an address was never tried, which the transport
+// chain records only after seeing the caller's context already done — so that
+// case is covered by the first clause and counting it here would say nothing
+// new.
+//
+// # What it must never depend on
+//
+// Not finding severity, not the report's status, not the number of paths, not
+// which path was selected, and not any identifier's spelling: the predicate
+// reads State and FailureClass through domain accessors and nothing else. A
+// target-side failure at any layer, a rejected credential, an absent database, a
+// credential withheld by policy and a run configured with no credential are all
+// complete runs — each of them is an answer.
+func incompleteRun(ctx context.Context, graph domain.Graph, established bool) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	if established {
+		return false
+	}
+	for _, node := range graph.Nodes() {
+		if node.State() != domain.StateUnknown {
+			continue
+		}
+		switch node.FailureClass() {
+		case domain.FailureExecLocalTimeout, domain.FailureExecCancelled:
+			return true
+		}
+	}
+	return false
+}
+
 // measurePostgres performs every network stage and records what happened.
 //
-// It reports only whether the run could be performed. Whether it *finished* is
-// read from the context once, by the caller — see DiagnosePostgres.
+// It reports whether the run could be performed, and whether it reached an
+// established session. Whether it *finished* is reconciled once, by the caller —
+// see incompleteRun.
 func measurePostgres(
 	ctx context.Context, builder *domain.GraphBuilder, target logicalTarget, params PostgresParams,
-) error {
+) (bool, error) {
 	// The run records what it was asked about before it measures anything. This
 	// is the only evidence this package creates, and it is created here — after
 	// validation, before measurement — so that a cancelled run still carries the
 	// target it was asked about alongside whatever it managed to measure.
 	requested, err := recordRequestedTarget(builder, target, time.Now())
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// DNS and TCP for every resolved address. TLS is deliberately **not**
@@ -253,7 +323,7 @@ func measurePostgres(
 		Parent:      requested,
 	})
 	if err != nil {
-		return fmt.Errorf("transport discovery: %w", err)
+		return false, fmt.Errorf("transport discovery: %w", err)
 	}
 	// Whatever ownership was never transferred into a protocol stage is released
 	// here, on every path out of this function. A connection nobody took is a
@@ -262,7 +332,7 @@ func measurePostgres(
 
 	candidates, err := discover(ctx, builder, sweep.Continuations(), params)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// A run that carries a credential prefers a path on which that credential
@@ -279,7 +349,7 @@ func measurePostgres(
 		}
 	}
 	if chosen == -1 {
-		return nil
+		return false, nil
 	}
 
 	selected := candidates[chosen].result
@@ -287,7 +357,7 @@ func measurePostgres(
 		// The budget ended before the credentialed step. Nothing is attempted
 		// and nothing is recorded: unattempted work is not a target failure.
 		_ = selected.Close()
-		return nil
+		return false, nil
 	}
 
 	return continuePath(ctx, builder, selected, params)
@@ -328,6 +398,11 @@ func discover(
 		result, err := postgres.Startup(ctx, builder, session, postgres.StartupParams{
 			User:     params.Role,
 			Database: params.Database,
+			// The same budget every other stage receives. It was missing until
+			// Phase 4.11d, and its absence was not visible here: the field did
+			// not exist, so nothing looked wrong at this call site while the
+			// step ran unbounded.
+			ExchangeTimeout: params.StepTimeout,
 		})
 		// A negotiation that left nothing usable, and a startup that failed,
 		// both recorded their evidence and closed what they held. Closing the
@@ -371,12 +446,21 @@ func discover(
 // a second attempt against whatever counts them, and would obscure the peer's
 // clearest assertion — which is the reason ADR 0036 section 4 refused to
 // reproduce `sslmode=prefer`.
+//
+// # What the bool means
+//
+// That a session was established: the run reached ReadyForQuery on this path.
+// It is typed control flow rather than a second reading of the graph, and it is
+// the one fact incompleteRun needs that the evidence states per node and not per
+// run. Every non-passing outcome — a rejected credential, an absent database, an
+// authentication svcdoctor could not perform, a read budget that expired — is
+// false here and fully recorded as evidence, which stays the canonical account.
 func continuePath(
 	ctx context.Context,
 	builder *domain.GraphBuilder,
 	selected *postgres.StartupResult,
 	params PostgresParams,
-) error {
+) (bool, error) {
 	// A run carrying no credential still enters the authentication step. It used
 	// to return here, which left nothing in the graph and made a run against an
 	// endpoint demanding SCRAM report itself healthy — and made that graph
@@ -389,22 +473,25 @@ func continuePath(
 			ExchangeTimeout: params.StepTimeout,
 		})
 	if err != nil {
-		return fmt.Errorf("authenticating: %w", err)
+		return false, fmt.Errorf("authenticating: %w", err)
 	}
 	if authenticated == nil {
 		// A recorded non-passing outcome, and the connection is already closed.
 		// No session is established over an authentication that did not pass.
-		return nil
+		return false, nil
 	}
 
 	// Terminal: the session step consumes the connection and closes it on every
-	// outcome, and returns none.
-	if _, err := postgres.EstablishSession(ctx, builder, authenticated, postgres.SessionParams{
+	// outcome. A nil result is a recorded non-passing outcome, which is an answer
+	// about the endpoint and not an incomplete run — unless the node itself says
+	// a local budget ended it, which incompleteRun reads from the graph.
+	session, err := postgres.EstablishSession(ctx, builder, authenticated, postgres.SessionParams{
 		ReadTimeout: params.StepTimeout,
-	}); err != nil {
-		return fmt.Errorf("establishing session: %w", err)
+	})
+	if err != nil {
+		return false, fmt.Errorf("establishing session: %w", err)
 	}
-	return nil
+	return session != nil, nil
 }
 
 // authMethodNone is the normalized name for an endpoint that demands no
