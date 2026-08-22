@@ -25,3 +25,26 @@ services:
       - hba_file=/etc/pg-hba.conf
       - -c
       - password_encryption=scram-sha-256
+
+  # A second listener with TLS switched off, so `SSLRequest` really receives an
+  # 'N' from a real server. It is the only way to measure POSTGRES_TLS_DECLINED
+  # without simulating the answer, and simulating it would prove nothing about
+  # the negotiation.
+  #
+  # Deliberately minimal: this server exists to say no to one byte. It shares no
+  # volume with the TLS server and needs no roles beyond the default.
+  postgres-plaintext:
+    image: postgres:18
+    container_name: svcd-pg-plaintext
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app-pw
+      POSTGRES_DB: appdb
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "55433:5432"
+    command:
+      - -c
+      - ssl=off
+      - -c
+      - password_encryption=scram-sha-256

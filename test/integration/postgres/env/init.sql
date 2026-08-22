@@ -21,3 +21,14 @@ CREATE ROLE norights LOGIN PASSWORD 'pw-norights';
 
 SET password_encryption = 'md5';
 CREATE ROLE md5user LOGIN PASSWORD 'md5-pw';
+
+SET password_encryption = 'scram-sha-256';
+
+-- Refused by pg_hba before authentication is requested. Its password is never
+-- evaluated, which is the whole point of the scenario.
+CREATE ROLE rejectuser LOGIN PASSWORD 'pw-rejectuser';
+
+-- The redaction canaries. Both names appear nowhere else in the repository, so
+-- finding either in a shareable report is unambiguous, and both reach the graph
+-- as identity attributes on the startup node.
+CREATE ROLE svcdcanaryrole LOGIN PASSWORD 'svcd-canary-pw-9Q7x';

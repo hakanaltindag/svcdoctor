@@ -118,10 +118,11 @@ postgres-up: ## Start the PostgreSQL validation server
 	@$(PG_COMPOSE) up -d
 	@printf 'waiting for postgres'
 	@for i in $$(seq 1 60); do \
-		if docker exec svcd-pg pg_isready -q -U app -d appdb 2>/dev/null; then \
+		if docker exec svcd-pg pg_isready -q -U app -d appdb 2>/dev/null \
+			&& docker exec svcd-pg-plaintext pg_isready -q -U app -d appdb 2>/dev/null; then \
 			printf ' ready\n'; exit 0; fi; \
 		printf '.'; sleep 1; \
-	done; printf '\nserver did not become ready\n'; exit 1
+	done; printf '\nservers did not become ready\n'; exit 1
 
 postgres-down: ## Stop the validation server and delete its volume
 	@$(PG_COMPOSE) down -v --remove-orphans
