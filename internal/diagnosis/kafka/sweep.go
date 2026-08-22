@@ -124,6 +124,47 @@ func (s sweep) terminalIsTLS() bool {
 	return true
 }
 
+// reachability is what a sweep can truthfully say about the transport the run
+// required, and it exists so that the one thing the graph cannot know is
+// unrepresentable rather than merely undocumented.
+//
+// A sweep whose lookup produced no address mints no TCP node and therefore no
+// TLS node, so **its plan is unknowable** (ADR 0034 section 4). The verdict does
+// not need it — nothing was reachable at L1 either way — but user-facing prose
+// does, and naming a layer there would state a fact the evidence does not carry:
+// a sweep that never resolved may well have required TLS. `measured` false means
+// `terminal` must not be read.
+type reachability struct {
+	terminal domain.Layer
+	measured bool
+}
+
+// reachabilityOf reads the sweep's transport requirement off its own shape.
+func (s sweep) reachabilityOf() reachability {
+	if len(s.paths) == 0 {
+		return reachability{}
+	}
+	if s.terminalIsTLS() {
+		return reachability{terminal: domain.LayerTLS, measured: true}
+	}
+	return reachability{terminal: domain.LayerTCP, measured: true}
+}
+
+// describe renders the sweep's transport outcome as a clause.
+//
+// The wording distinguishes two things the earlier phrasing ran together:
+// *arriving at* a layer and *completing* it. "no path reached L2" beside a
+// summary naming L2 as the failing layer reads as a contradiction, and on a
+// sweep that resolved nothing it also asserted a terminal layer nobody can know.
+// Both forms below are true of exactly the graphs that produce them.
+func (r reachability) describe() string {
+	if !r.measured {
+		return "no transport path to it could be measured: the advertised hostname " +
+			"yielded no address to connect to"
+	}
+	return "no measured path to it completed " + r.terminal.String() + " (" + r.terminal.Label() + ")"
+}
+
 // reachedTerminal reports whether p completed the layer the run required.
 func (p transportPath) reachedTerminal(terminalIsTLS bool) bool {
 	if terminalIsTLS {

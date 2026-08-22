@@ -209,3 +209,88 @@ func TestRecommendationTextIsValid(t *testing.T) {
 		t.Errorf("the discriminator is not accepted by the model: %v", err)
 	}
 }
+
+// TestDetailNamesATerminalLayerOnlyWhenOneWasMeasured is the Phase 3.6.5 fix,
+// pinned so it cannot regress.
+//
+// ADR 0034 section 4 states that a sweep whose lookup produced no address has an
+// **unknowable** plan: it minted no TCP node, so nothing records whether a
+// handshake would have been required. The verdict does not need to know — the
+// endpoint was unreachable at L1 either way — but prose that named a terminal
+// layer there would assert a fact the evidence does not carry, and would assert
+// the *wrong* one for every TLS-required cluster whose DNS is broken.
+//
+// So the detail names a layer exactly when a transport path was measured.
+func TestDetailNamesATerminalLayerOnlyWhenOneWasMeasured(t *testing.T) {
+	layers := []string{"L1", "L2", "L3", "L4", "L5", "L6"}
+
+	t.Run("no path measured: no layer is named", func(t *testing.T) {
+		b := newBuilder(t)
+		exchange := b.metadata(domain.StatePass)
+		advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
+		b.lookup(advertisement, "broker-2.internal", domain.StateFail, domain.FailureDNSNXDomain)
+
+		f := only(t, AdvertisedEndpointUnreachable(b.freeze()))
+		for _, layer := range layers {
+			if strings.Contains(f.Detail(), layer) {
+				t.Errorf("detail names %s on a sweep that measured no transport path, "+
+					"where the required layer is unknowable: %q", layer, f.Detail())
+			}
+		}
+		if !strings.Contains(f.Detail(), "no address") {
+			t.Errorf("detail does not say why nothing was measured: %q", f.Detail())
+		}
+	})
+
+	t.Run("paths measured: the terminal layer is named with its label", func(t *testing.T) {
+		cases := []struct {
+			name string
+			want string
+			add  func(*builder, domain.EvidenceID)
+		}{
+			{"plaintext plan", "L2 (tcp)", func(b *builder, ad domain.EvidenceID) {
+				l := b.lookup(ad, "broker-2.internal", domain.StatePass, domain.FailureNone)
+				b.connect(l, "10.20.0.1", 9093, domain.StateFail, domain.FailureTCPConnectionRefused)
+			}},
+			{"tls plan, connection refused", "L3 (tls)", func(b *builder, ad domain.EvidenceID) {
+				l := b.lookup(ad, "broker-2.internal", domain.StatePass, domain.FailureNone)
+				c := b.connect(l, "10.20.0.1", 9093, domain.StateFail, domain.FailureTCPConnectionRefused)
+				b.skippedHandshake(c, "10.20.0.1", 9093)
+			}},
+			{"tls plan, handshake rejected", "L3 (tls)", func(b *builder, ad domain.EvidenceID) {
+				l := b.lookup(ad, "broker-2.internal", domain.StatePass, domain.FailureNone)
+				c := b.connect(l, "10.20.0.1", 9093, domain.StatePass, domain.FailureNone)
+				b.handshake(c, "10.20.0.1", 9093, domain.StateFail, domain.FailureTLSHostnameMismatch)
+			}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				b := newBuilder(t)
+				exchange := b.metadata(domain.StatePass)
+				advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
+				tc.add(b, advertisement)
+
+				f := only(t, AdvertisedEndpointUnreachable(b.freeze()))
+				if !strings.Contains(f.Detail(), tc.want) {
+					t.Errorf("detail = %q, want it to name %q", f.Detail(), tc.want)
+				}
+			})
+		}
+	})
+}
+
+// TestDetailDoesNotContradictTheSummary guards the ambiguity the review found.
+//
+// "no path reached L2" beside a summary naming L2 as the earliest evidenced
+// failing layer reads as a contradiction: the first sentence appears to deny that
+// the run ever got to the layer the second sentence says it failed at. The verb
+// carries the whole distinction — a path arrives at a layer and then fails to
+// *complete* it — so the word is pinned rather than left to a future edit.
+func TestDetailDoesNotContradictTheSummary(t *testing.T) {
+	eachShape(t, func(t *testing.T, _ domain.Graph, f domain.Finding) {
+		if strings.Contains(f.Detail(), "reached L") {
+			t.Errorf("detail says a layer was not \"reached\" where it means not "+
+				"\"completed\": %q", f.Detail())
+		}
+	})
+}

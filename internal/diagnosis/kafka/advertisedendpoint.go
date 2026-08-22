@@ -156,7 +156,7 @@ func evaluate(g domain.Graph, advertisement domain.Evidence) (domain.Finding, bo
 		kind = verdictIncomplete
 	}
 
-	return build(advertisement, exchange, owners, failures, terminalIsTLS, kind)
+	return build(advertisement, exchange, owners, failures, s.reachabilityOf(), kind)
 }
 
 // metadataExchange returns the kafka.metadata node that carried the
@@ -204,15 +204,12 @@ func failedOwners(owners []domain.Evidence) []domain.Evidence {
 func build(
 	advertisement, exchange domain.Evidence,
 	owners, failures []domain.Evidence,
-	terminalIsTLS bool,
+	reach reachability,
 	v verdict,
 ) (domain.Finding, bool) {
 	broker := brokerPhrase(advertisement)
 	earliest := earliestFailure(failures)
-	terminal := domain.LayerTCP
-	if terminalIsTLS {
-		terminal = domain.LayerTLS
-	}
+	outcome := reach.describe()
 
 	in := domain.FindingInput{
 		Code: CodeAdvertisedEndpointUnreachable,
@@ -253,10 +250,10 @@ func build(
 				"earliest evidenced failure %s", broker, earliest)
 		in.Detail = fmt.Sprintf(
 			"The Kafka Metadata exchange succeeded and advertised this endpoint, "+
-				"and no measured path to it reached %s.\n"+
+				"and %s.\n"+
 				"Reachability is relative to network position: this states what "+
 				"this vantage point observed, not the health of the cluster.",
-			terminal)
+			outcome)
 	case verdictIncomplete:
 		// A different claim, and therefore a different severity: at least one
 		// path failed and the rest were never attempted. That is a real problem
@@ -272,12 +269,13 @@ func build(
 				"at least one path failed with %s and the remaining paths were not measured",
 			broker, earliest)
 		in.Detail = fmt.Sprintf(
-			"The Kafka Metadata exchange succeeded and advertised this endpoint. "+
-				"At least one measured path to it failed before reaching %s, and the "+
-				"remaining paths were not measured, so unreachability is not proven.\n"+
+			"The Kafka Metadata exchange succeeded and advertised this endpoint, "+
+				"and %s. At least one of those outcomes is a positively observed "+
+				"failure and the rest were never finished, so unreachability is "+
+				"not proven.\n"+
 				"Reachability is relative to network position: this states what "+
 				"this vantage point observed, not the health of the cluster.",
-			terminal)
+			outcome)
 	case verdictNone:
 		return domain.Finding{}, false
 	}
