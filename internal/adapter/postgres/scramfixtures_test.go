@@ -9,10 +9,14 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 )
 
 // A scripted SCRAM peer, not a PostgreSQL server.
@@ -69,6 +73,11 @@ type scramScript struct {
 	// trailing is written immediately after whatever respondFinal wrote, in the
 	// same burst, so a test can prove svcdoctor left it unread.
 	trailing []byte
+
+	// postAuth writes directly to the connection after the authentication
+	// burst, so a session test can pace frames, stall mid-block, or close.
+	// Called instead of nothing; trailing is written first if both are set.
+	postAuth func(conn net.Conn)
 }
 
 func (s scramScript) mechanismList() []string {
@@ -155,6 +164,10 @@ func (p *pgPeer) serveSCRAM(conn net.Conn, s scramScript) {
 	}
 	out.Write(s.trailing)
 	_, _ = conn.Write(out.Bytes())
+
+	if s.postAuth != nil {
+		s.postAuth(conn)
+	}
 
 	p.drain(conn)
 }
@@ -344,8 +357,48 @@ func backendKeyFrame() []byte {
 	return pgFrame('K', body)
 }
 
-// readyForQueryFrame builds a ReadyForQuery message.
-func readyForQueryFrame() []byte { return pgFrame('Z', []byte{'I'}) }
+// readyForQueryFrame builds a ReadyForQuery message with a status byte.
+func readyForQueryFrame(status byte) []byte { return pgFrame('Z', []byte{status}) }
+
+// noticeFrame builds a NoticeResponse from field pairs.
+func noticeFrame(pairs ...string) []byte {
+	var body []byte
+	for i := 0; i+1 < len(pairs); i += 2 {
+		body = append(body, pairs[i][0])
+		body = append(body, pairs[i+1]...)
+		body = append(body, 0)
+	}
+	body = append(body, 0)
+	return pgFrame('N', body)
+}
+
+// rawFrame builds a message of an arbitrary type, for the frames a real server
+// never sends here.
+func rawFrame(kind byte, body []byte) []byte { return pgFrame(kind, body) }
+
+// healthySession is the frame burst a real PostgreSQL 18.6 backend sends after
+// AuthenticationOk, reduced to the four parameters svcdoctor retains plus two it
+// must drop.
+func healthySession() []byte {
+	var out []byte
+	out = append(out, paramStatusFrame("in_hot_standby", "off")...)
+	out = append(out, paramStatusFrame("session_authorization", canaryRole)...)
+	out = append(out, paramStatusFrame("server_version", canaryServerVersion)...)
+	out = append(out, paramStatusFrame("search_path", canarySearchPath)...)
+	out = append(out, paramStatusFrame("default_transaction_read_only", "off")...)
+	out = append(out, paramStatusFrame("is_superuser", "on")...)
+	out = append(out, backendKeyFrame()...)
+	out = append(out, readyForQueryFrame('I')...)
+	return out
+}
+
+// Canaries planted in the parameters svcdoctor must drop. High entropy, so a
+// leak matrix asserts exact absence rather than "looks redacted".
+const (
+	canaryRole          = "payments_writer_QK7z"
+	canarySearchPath    = `"$user", schema_QK7z_internal`
+	canaryServerVersion = "18.6 (Debian 18.6-1.pgdg13+2)"
+)
 
 // --- assertions ------------------------------------------------------------
 
@@ -379,4 +432,24 @@ func (p *pgPeer) requireNoCredentialBytes(t *testing.T) {
 	if got := p.afterStartup(); len(got) != 0 {
 		t.Fatalf("peer received %d bytes after startup, want 0: %q", len(got), got)
 	}
+}
+
+// readSource reads a production source file for the architecture guards.
+func readSource(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return string(body)
+}
+
+// redactReport transforms the builder's graph into a shareable report.
+func redactReport(t *testing.T, builder *domain.GraphBuilder) domain.Report {
+	t.Helper()
+	shareable, err := redaction.Redact(pgReportFrom(t, builder))
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+	return shareable
 }

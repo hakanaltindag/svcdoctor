@@ -921,7 +921,7 @@ func TestPhase45BytesSurviveAuthentication(t *testing.T) {
 	trailing = append(trailing, paramStatusFrame("in_hot_standby", "off")...)
 	trailing = append(trailing, paramStatusFrame("server_version", "18.6")...)
 	trailing = append(trailing, backendKeyFrame()...)
-	trailing = append(trailing, readyForQueryFrame()...)
+	trailing = append(trailing, readyForQueryFrame('I')...)
 
 	result, builder, _ := verifiedTLS(t, scramScript{trailing: trailing})
 

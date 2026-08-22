@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -688,4 +689,102 @@ func errorReplyWithout(sqlState, omit string) []byte {
 		kept = append(kept, pairs[i], pairs[i+1])
 	}
 	return frameOf('E', errorBody(kept...))
+}
+
+// TestSessionEstablishmentExecutesNoSQL is the scope guard for Phase 4.5b.
+//
+// ADR 0039 section 17 re-verified the no-SQL decision rather than inheriting it:
+// every fact the session step needs arrives as a ParameterStatus, and the one
+// that would need a statement — the session-local transaction_read_only — is
+// deferred as a *fact*, not obtained by weakening the rule. This makes that a
+// property of the source.
+//
+// The scan is over identifiers and string literals in the two files that own the
+// window, so a comment explaining why there is no SQL does not trip it.
+func TestSessionEstablishmentExecutesNoSQL(t *testing.T) {
+	forbiddenCalls := map[string]string{
+		"Query":       "the session step issues no statement",
+		"QueryRow":    "the session step issues no statement",
+		"Exec":        "the session step issues no statement",
+		"ExecContext": "the session step issues no statement",
+		"Prepare":     "the session step issues no statement",
+	}
+	// The needles are statement-shaped rather than word-shaped. A bare
+	// "transaction_read_only" was tried and removed: it is a substring of
+	// `default_transaction_read_only`, which is a ParameterStatus key this phase
+	// legitimately retains, so the guard flagged the allowlist itself. "SHOW "
+	// already covers the statement that would fetch the session-local value,
+	// which is the thing actually being prevented.
+	forbiddenText := []string{
+		"SELECT ", "select 1", "SHOW ", "pg_is_in_recovery",
+		"pg_catalog", "pg_stat_",
+	}
+
+	for _, path := range []string{"establish.go", "wire/session.go"} {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+
+		for _, imp := range file.Imports {
+			if imp.Path.Value == `"database/sql"` {
+				t.Errorf("%s imports database/sql", path)
+			}
+		}
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.SelectorExpr:
+				if reason, banned := forbiddenCalls[node.Sel.Name]; banned {
+					t.Errorf("%s:%d calls %s: %s",
+						path, fset.Position(node.Pos()).Line, node.Sel.Name, reason)
+				}
+			case *ast.BasicLit:
+				if node.Kind != token.STRING {
+					return true
+				}
+				for _, needle := range forbiddenText {
+					if strings.Contains(node.Value, needle) {
+						t.Errorf("%s:%d has the string literal %s, which looks like SQL",
+							path, fset.Position(node.Pos()).Line, node.Value)
+					}
+				}
+			}
+			return true
+		})
+	}
+}
+
+// TestSessionResultCarriesNoConnection pins the terminal-ownership decision in
+// the type rather than in a comment.
+//
+// ADR 0039 section 15: the step consumes its connection and closes it on every
+// outcome, because nothing in v0.1 runs after ReadyForQuery. A field or accessor
+// that handed the socket back would make `Terminate` unsendable by its owner and
+// would add a third carrier for one connection.
+func TestSessionResultCarriesNoConnection(t *testing.T) {
+	result := reflect.TypeOf(SessionResult{})
+	for i := range result.NumField() {
+		field := result.Field(i)
+		if strings.Contains(field.Type.String(), "net.Conn") {
+			t.Errorf("SessionResult.%s carries a connection", field.Name)
+		}
+	}
+
+	pointer := reflect.TypeOf(&SessionResult{})
+	for i := range pointer.NumMethod() {
+		method := pointer.Method(i)
+		for out := range method.Type.NumOut() {
+			if strings.Contains(method.Type.Out(out).String(), "net.Conn") {
+				t.Errorf("SessionResult.%s returns a connection", method.Name)
+			}
+		}
+		switch method.Name {
+		case "Endpoint", "Evidence":
+		default:
+			t.Errorf("SessionResult gained the method %s; the type is deliberately "+
+				"two accessors wide (ADR 0039 section 15)", method.Name)
+		}
+	}
 }
