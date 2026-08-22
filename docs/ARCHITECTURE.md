@@ -602,10 +602,25 @@ work: PostgreSQL's `postgres.ssl_request` is at L3 and would be swallowed. That 
 step-typing is what leaves PostgreSQL's in-band handshake service-owned, since its
 `tls.handshake` node parents to the negotiation rather than to TCP.
 
+**Implemented in Phase 4.9a-pre.** `internal/vocabulary` is the leaf that gives the four
+step names one spelling — the anchor's plus the three transport steps a rule walks —
+because diagnosis may not import a probe and `internal/domain` deliberately holds no step
+constants. `internal/app` mints the anchor in one authorized function and passes its
+identifier as the sweep's `Parent`; the Phase 4.8b ban on evidence construction there is
+narrowed to that one site rather than removed, and the call count is asserted.
+
+Two properties were verified by measurement rather than argument. Against a real Kafka
+graph, the naive descendant walk is shown to capture the advertised sweep and the
+authorized walk is shown not to — so the hazard above is a fact about this repository, not
+a hypothetical. And against a real PostgreSQL run, both renderings of the requested
+endpoint pseudonymize to the same value, with the raw hostname proven present locally and
+absent from the shareable document.
+
 **What this does not do.** It authorizes no finding. Whether a generic transport finding
 exists, what it may claim, and its severity, confidence and vantage semantics are
-undecided; ADR 0017's deferral stands for all of them. And `Origin` remains deferred:
-nothing here lets any layer ask how an arbitrary subject entered a run.
+undecided; ADR 0017's deferral stands for all of them, and a test in
+`internal/diagnosis/transport` fails the moment a rule appears there. And `Origin` remains
+deferred: nothing here lets any layer ask how an arbitrary subject entered a run.
 
 ## 6. Diagnosis
 

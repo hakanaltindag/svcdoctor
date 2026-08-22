@@ -2,7 +2,18 @@
 
 ## Status
 
-Accepted as **structure**. No production code is implemented here.
+**Accepted, and implemented in Phase 4.9a-pre.**
+
+`internal/vocabulary` holds the four canonical step names; `internal/app` mints
+the anchor in one authorized function and declares the sweep's cause through
+`transport.Params.Parent`. Measured against real servers: one anchor, subject
+`127.0.0.1:55432`, the requested `dns.lookup` parented directly to it, and every
+Phase 4.8b invariant intact — broad discovery, one authentication, every
+continuation closed.
+
+The dependency set stays one, `security.Reveal` **two**, `FailureClass` 39,
+`FindingCode` **14** and `schemaVersion` **1**. No CLI, no renderer, no Kafka
+composition, and `internal/diagnosis/transport` still holds no production rule.
 
 This record decides the one missing structural fact that Phase 4.9a stopped on. It
 authorizes an L0 requested-target anchor node, a narrow evidence-authority
@@ -16,6 +27,30 @@ severity, confidence, vantage, partial-success and incomplete-measurement policy
 It narrows ADR 0041's evidence-authority boundary, closes half of ADR 0017's
 deferral, and tightens `transport.Params.Parent` at one position. It rewrites
 nothing.
+
+### Implementation note (Phase 4.9a-pre)
+
+Three things the record did not anticipate, none of which changes it.
+
+**The vocabulary leaf needed a name, and none of the existing conventions fit.**
+§11 required a service-neutral leaf and left the name open. `internal/transport`
+would have collided with `internal/probe/transport`, and `internal/service/…`
+would have implied a service. It is `internal/vocabulary`: a leaf importing
+`internal/domain` only, holding four step names and no behaviour, guarded by a
+module-wide scan proving each string appears in exactly one production file.
+
+**`internal/app` needed one more import than expected.** Minting an identifier
+means escaping it, and ADR 0019 put that encoding in `internal/probe` precisely so
+two producers cannot disagree. The run borrows the rule rather than copying it, so
+`internal/probe` joined the composition root's allow-list — the encoding only, no
+probe.
+
+**The `internal/diagnosis/transport` phase guard had to be split.** It was written
+to scan the module for smuggled transport finding codes, and depguard denied the
+package `os`. That denial is correct — diagnosis reads a frozen graph — so the
+local "no production file here" half stayed, using `go/build`, and the
+module-wide half moved to `internal/vocabulary`. The mutation that motivated it
+is still caught, verified after the move rather than assumed.
 
 ## Problem
 

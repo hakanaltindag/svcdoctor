@@ -53,7 +53,7 @@ does not overturn it, and both remain authoritative.
 | 0039 | A PostgreSQL session is established at ReadyForQuery, and that proves less than it looks like | **Accepted, implemented in Phase 4.5b**, §2 and §15 amended by implementation | Completes the slice 0036 designed. Confirms the ReadyForQuery boundary and **corrects 0036 §5** — `57P03` is pre-auth. Adds `RESOURCE_NOT_FOUND`, which 0036 §16 authorized and 4.3 deferred; declines a capacity class |
 | 0040 | A PostgreSQL rule anchors only at a `postgres.*` step | Accepted (policy), implemented in Phase 4.6b | The 0034 analogue for PostgreSQL. Authorizes the service vocabulary leaf 0042 §11 reuses generically |
 | 0041 | A run discovers broadly and authenticates narrowly | **Accepted, implemented in Phase 4.8b** | First record about the application. Closes the selection deferral 0028 left open; partially supersedes 0011 on command-tree shape. Narrowed by 0042 §3, which opens one hole in its evidence-authority ban |
-| 0042 | A run records the target it was asked about, and a sweep declares its cause | Accepted (structure) | Closes the ownership and subject gaps Phase 4.9a stopped on. Narrows 0041, half-closes 0017's deferral, amends 0032 at the sweep root, and leaves 0034's advertised ownership structurally unreachable. Authorizes no finding |
+| 0042 | A run records the target it was asked about, and a sweep declares its cause | **Accepted, implemented in Phase 4.9a-pre** | Closes the ownership and subject gaps Phase 4.9a stopped on. Narrows 0041, half-closes 0017's deferral, amends 0032 at the sweep root, and leaves 0034's advertised ownership structurally unreachable. Authorizes no finding |
 
 ## Decisions that govern work not yet written
 
@@ -281,7 +281,11 @@ A deferral is a decision too, and each names the condition that should reopen it
   target, so "generic diagnosis owns everything below the anchor" would have walked straight
   into 0034's evidence; ownership is therefore direct parentage at the sweep root and a
   step-typed walk of bounded depth, which also leaves PostgreSQL's in-band handshake with its
-  adapter. It authorizes no finding, and says so.
+  adapter. Phase 4.9a-pre implemented it: `internal/vocabulary` gives the four step names one
+  spelling, `internal/app` mints the anchor in one authorized function, and the Kafka hazard is
+  now measured rather than argued — against a real advertised sweep, the naive descendant walk
+  is shown to capture it and the authorized walk is shown not to. It authorizes no finding, and
+  says so.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

@@ -1831,7 +1831,7 @@ compares a real graph against the ADR 0040 acceptance matrix. Any row a real gra
 describe reopens ADR 0040.
 
 
-### Product/CLI release gate — generic transport diagnosis ownership: OPEN (structurally unblocked)
+### Product/CLI release gate — generic transport diagnosis ownership: OPEN (structure now built)
 
 **Not Phase 4.6b scope, and not a PostgreSQL question.** Recorded here because it is the one
 place the PostgreSQL slice is architecturally correct and incomplete as a product.
@@ -1854,12 +1854,13 @@ generic finding had nothing truthful to be *about*. **Phase 4.9a-pre answered bo
 (**ADR 0042**) with an L0 requested-target anchor and direct-parent sweep ownership, without
 `Origin`, without identifier parsing and without touching `diagnosis.Rule`.
 
-**The gate is still open.** What remains is policy, not structure, and it is deliberately not
-inferable from the anchor decision.
+**The gate is still open.** The structure exists and is measured; what remains is policy, and
+it is deliberately not inferable from the anchor. **Phase 4.9a is next**, and it starts from a
+graph that can already answer "is this the operator's sweep?" without `Origin`, without an
+identifier parse and without a service switch.
 
 - [x] Decide whether run intent can reach a rule at all, and how — ADR 0042
-- [ ] Implement the anchor (Phase 4.9a-pre implementation), including the generic vocabulary
-      leaf ADR 0042 §11 requires
+- [x] Implement the anchor, including the generic vocabulary leaf ADR 0042 §11 requires
 - [ ] Resume Phase 4.9a: decide whether generic transport findings exist, their codes, and
       their kind/severity/confidence/vantage semantics
 - [ ] Decide the partial-success and incomplete-measurement rules — a sweep where one path
@@ -1995,7 +1996,7 @@ destination and was the one ADR 0034 §3 had already rejected by name as unimple
 became implementable only after Phase 4.9a-pre. **No ADR was written and no file changed**; a
 record saying "still blocked" would have been a record of a non-decision.
 
-### Phase 4.9a-pre — Requested-target anchor: DECIDED, NOT IMPLEMENTED
+### Phase 4.9a-pre — Requested-target anchor: COMPLETE
 
 **ADR 0042.** One L0 evidence node, minted by the composition root, whose subject is the
 operator's logical endpoint and whose child is the sweep it caused. It closes both gaps above
@@ -2012,18 +2013,29 @@ because that node parents to `postgres.ssl_request` rather than to `tcp.connect`
 
 Layer-bounding was tried and fails: `postgres.ssl_request` is L3.
 
-- [ ] The anchor node, minted in one named function in `internal/app`
-- [ ] The narrowed evidence-authority guard — `NewFinding`, `AddBlockedBy` and every attribute
-      constructor stay banned package-wide; `NewEvidence` permitted in one place only
-- [ ] The generic vocabulary leaf (ADR 0042 §11) — the anchor step name plus the three
-      transport step names a rule walks
-- [ ] `transport.Params.Parent` documentation tightened at the sweep root (ADR 0032 amendment)
-- [ ] The 18 acceptance guards and 20 mutations in ADR 0042 §15-16, including the full-depth
-      Kafka fixture that distinguishes direct-child from descendant ownership
-- [ ] A non-vacuous redaction canary proving `report.target.requested` and the anchor subject
-      pseudonymize identically
+- [x] The anchor node, minted by `recordRequestedTarget` in `internal/app/target.go`
+- [x] `logicalTarget` — one typed value projecting to both the anchor subject and
+      `Report.Target`, so IPv6 bracketing is decided once and cannot drift
+- [x] The narrowed evidence-authority guard — `NewFinding`, `AddBlockedBy`, `AddParent` and
+      every attribute constructor stay banned package-wide; `NewEvidence`/`AddEvidence`
+      permitted in one named function, and the call count is asserted to be exactly one
+- [x] `internal/vocabulary` (ADR 0042 §11) — the anchor step plus the three transport steps,
+      with the probes aliasing rather than redeclaring, and a module-wide scan proving each
+      string appears in exactly one production file
+- [x] `transport.Params.Parent` carries the sweep's declared cause; `internal/app` adds no edge
+- [x] The Kafka hazard measured, not argued — against a real advertised sweep, the naive
+      descendant walk is shown to capture it and the authorized walk is shown not to
+- [x] PostgreSQL in-band TLS proven outside the boundary, on a faked network and on a real
+      TLS upgrade in the integration gate
+- [x] A non-vacuous redaction canary: both projections pseudonymize identically, the raw
+      hostname is proven present locally and absent from the shareable document
+- [x] 21 mutations applied for real, each caught by a named guard and each restored
+
+**One thing the record did not anticipate:** `internal/app` now imports `internal/probe` for
+the identifier encoding ADR 0019 owns. The encoding only — no probe, no dial, no resolver.
 
 **No schema change, no `Origin`, no `Rule` signature change, no new dependency.**
+`security.Reveal` stays 2, `FailureClass` 39, `FindingCode` 14, `schemaVersion` 1.
 
 ### Phase 5 — CLI, renderers and productization: NOT STARTED
 
