@@ -2,7 +2,19 @@
 
 ## Status
 
-Accepted as **policy**. No rule is implemented here.
+**Accepted, and implemented in Phase 4.9b.**
+
+`internal/diagnosis/transport` holds two rules and three codes, wired into
+`internal/app.DiagnosePostgres` beside the four PostgreSQL rules. A run that
+cannot resolve its target now reports `DNS_NAME_NOT_RESOLVED` and
+`PROBLEMS_FOUND` where it previously reported nothing and `OK`; a run whose every
+address refuses reports `TCP_CONNECTION_NOT_ESTABLISHED`.
+
+`FindingCode` went from 14 to **17**. `FailureClass` stays 39, `schemaVersion`
+**1**, `security.Reveal` **two**, the dependency set one. No CLI, no renderer, no
+Kafka composition, and no TLS claim of any kind.
+
+Two things the record did not anticipate are noted at the end of the decision.
 
 This record decides what svcdoctor may conclude from the generic transport
 evidence of an operator-requested target, so that the next phase can implement
@@ -16,6 +28,25 @@ record (§15).
 It closes ADR 0017's generic transport deferral **for DNS and TCP only**, and
 consumes ADR 0042 as its structural prerequisite. ADR 0034, ADR 0040 and ADR 0041
 are unchanged.
+
+### Implementation note (Phase 4.9b)
+
+Two things, neither of which changes the policy.
+
+**The prose guard caught the record's own draft detail text.** ADR 0043 section 8
+forbids naming a firewall, route or network policy as a cause. The first
+implementation of the TCP detail named them in order to *deny* them — "svcdoctor
+did not observe a listener, a route, a firewall or a network policy" — and the
+mechanical guard rejected it, correctly. Denying a cause plants it: a reader who
+meets the word in a diagnosis reaches for it. The detail now says what is known
+and what is not, and names nothing it did not observe. The guard was kept blunt
+rather than taught about negation.
+
+**One mutation turned out to be structurally impossible.** The plan required
+proving that non-deterministic evidence-reference order is caught. It cannot be:
+`domain.NewFinding` deduplicates and sorts references, so a rule that collected
+them through a map produces byte-identical output. That is recorded as a property
+of the domain rather than counted as a test.
 
 ## Problem
 

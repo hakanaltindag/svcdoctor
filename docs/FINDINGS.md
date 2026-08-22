@@ -37,11 +37,11 @@ TCP_CONNECTION_REFUSED
 TLS_CERTIFICATE_EXPIRED
 ```
 
-> **Three generic codes are authorized and none is implemented yet.** ADR 0043 fixes
-> `DNS_NAME_NOT_RESOLVED`, `DNS_RESOLUTION_FAILED` and `TCP_CONNECTION_NOT_ESTABLISHED` for the
-> operator-requested target; section 7 carries them. The codes svcdoctor *produces* today are
-> still the two `KAFKA_ADVERTISED_ENDPOINT_*` codes and the twelve `POSTGRES_*` codes in
-> section 6.
+> **Three generic codes exist, implemented in Phase 4.9b.** `DNS_NAME_NOT_RESOLVED`,
+> `DNS_RESOLUTION_FAILED` and `TCP_CONNECTION_NOT_ESTABLISHED` are produced by
+> `internal/diagnosis/transport` for the operator-requested target; section 7 carries them.
+> With the two `KAFKA_ADVERTISED_ENDPOINT_*` and the twelve `POSTGRES_*` codes in section 6,
+> svcdoctor produces **seventeen**.
 >
 > The blocker was run intent — "is this a Kafka diagnosis or a bare endpoint check?" — which
 > `diagnosis.Rule` cannot see, receiving only a `Graph`. ADR 0042 put it in the graph as an L0
@@ -400,9 +400,9 @@ boundary of each, and `docs/validation/POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` for 
 
 ## 7. The three generic transport findings
 
-Fixed by **ADR 0043** and **not yet implemented**. They are the first findings owned by
-`internal/diagnosis/transport/`, and the first that speak about the operator's target rather
-than about a service.
+Fixed by **ADR 0043** and **implemented in Phase 4.9b** as `internal/diagnosis/transport` —
+two rules, `DNS` and `TCP`, wired into the run beside the four PostgreSQL rules. They are the
+first findings that speak about the operator's target rather than about a service.
 
 They are possible because ADR 0042 records the requested target as an L0 evidence node and
 parents the sweep it caused to it. A rule enumerates those anchors and descends by typed step
@@ -456,3 +456,8 @@ the finding reports a conclusion about the target — which was reached.
 **Generic TLS is deferred, not forgotten.** No production run produces a `tls.handshake` node
 whose direct parent is a requested `tcp.connect`, so a TLS policy today would govern evidence
 that cannot occur. See ADR 0043 sections 14 and 15.
+
+**One guard is worth knowing about before adding a fourth code.** `internal/vocabulary` holds a
+module-wide allow-list of exactly these three, and `internal/diagnosis/transport` asserts the
+same three locally. A new generic code has to be added to both, which is the point: it cannot
+arrive as a local constant, and every `TLS_` code is still rejected outright.

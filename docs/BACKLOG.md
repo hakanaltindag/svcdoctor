@@ -1854,9 +1854,10 @@ generic finding had nothing truthful to be *about*. **Phase 4.9a-pre answered bo
 (**ADR 0042**) with an L0 requested-target anchor and direct-parent sweep ownership, without
 `Origin`, without identifier parsing and without touching `diagnosis.Rule`.
 
-**Phase 4.9a decided DNS and TCP** (**ADR 0043**): three codes, one aggregation unit, withheld
-on partial success and on incomplete measurement. Implementing them closes **two of the gate's
-three named failures** — a name that does not resolve and a refused port.
+**Phase 4.9a decided DNS and TCP and Phase 4.9b implemented them** (**ADR 0043**): three codes,
+one aggregation unit, withheld on partial success and on incomplete measurement. **Two of the
+gate's three named failures are closed** — a name that does not resolve and a refused port both
+now produce an ERROR finding and `PROBLEMS_FOUND` where they produced silence and `OK`.
 
 **The gate stays open on the third.** An untrusted certificate is still diagnosed by nobody,
 and for two separate reasons:
@@ -1874,10 +1875,9 @@ and for two separate reasons:
 - [x] Decide generic DNS and TCP findings, their codes and their semantics — ADR 0043
 - [x] Decide the partial-success and incomplete-measurement rules — withhold on both,
       ADR 0043 §6
-- [ ] **Implement the three ADR 0043 rules** in `internal/diagnosis/transport/`, and narrow
-      `internal/vocabulary`'s `TestNoGenericTransportFindingCodeExists` from a blanket ban to
-      an allow-list of exactly those three — still rejecting every `TLS_` code, so §14's
-      deferral keeps a mechanical guard
+- [x] **Implement the three ADR 0043 rules** in `internal/diagnosis/transport/`, and narrow
+      the module-wide code ban to an allow-list of exactly those three — still rejecting every
+      `TLS_` code, so §14's deferral keeps a mechanical guard
 - [ ] **PostgreSQL in-band TLS diagnosis** — its own decision phase; ADR 0043 §15 records the
       measured gap and deliberately does not widen generic ownership to reach it
 - [ ] **Generic TLS policy** — blocked on a producer; ADR 0043 §14
@@ -2050,7 +2050,7 @@ the identifier encoding ADR 0019 owns. The encoding only — no probe, no dial, 
 **No schema change, no `Origin`, no `Rule` signature change, no new dependency.**
 `security.Reveal` stays 2, `FailureClass` 39, `FindingCode` 14, `schemaVersion` 1.
 
-### Phase 4.9a — Generic requested-target DNS/TCP policy: DECIDED, NOT IMPLEMENTED
+### Phase 4.9a/4.9b — Generic requested-target DNS/TCP diagnosis: COMPLETE
 
 **ADR 0043.** Three codes — `DNS_NAME_NOT_RESOLVED`, `DNS_RESOLUTION_FAILED`,
 `TCP_CONNECTION_NOT_ESTABLISHED` — all `CONFIRMED` / `ERROR` / `HIGH` / `vantageDependent`,
@@ -2071,7 +2071,30 @@ Three decisions worth remembering when the rules are written:
   emits the weaker `DNS_NO_ADDRESS`, and the finding inherits that restraint: it never claims a
   name does not exist.
 
-Implementation is authorized. TLS is not — see the release gate above.
+**Phase 4.9b implemented it.** `internal/diagnosis/transport` holds two rules and three codes,
+wired into `internal/app.DiagnosePostgres` beside the four PostgreSQL rules. `FindingCode` 14 →
+17; nothing else moved.
+
+- [x] Two rules, `DNS` and `TCP`, importing `internal/domain` and `internal/vocabulary` only
+- [x] The full ADR 0043 acceptance matrix, plus the shapes a rule must refuse to recognize —
+      an anchor child that is not a lookup, two lookups under one anchor, an anchor-shaped node
+      with the wrong layer or subject kind
+- [x] A prose guard rejecting eleven cause-claiming phrases, with a control proving it can see
+      them. It caught the record's own draft detail text, which named a firewall in order to
+      deny it
+- [x] Permutation tests over evidence-reference order, and a two-anchor ordering test that
+      pins multi-target support as a composition change rather than a rule rewrite
+- [x] Kafka forward compatibility: on a real graph, the bootstrap sweep would be owned and the
+      advertised sweep would not, asserted without importing the rules
+- [x] Redaction: the finding subject, the report target and the anchor subject pseudonymize to
+      one value; the prose carries no identity
+- [x] 18 of 19 mutations caught by named guards; the nineteenth is structurally impossible —
+      `domain.NewFinding` sorts and deduplicates references, so map-order cannot reach output
+
+**Two guards were narrowed rather than deleted.** `internal/vocabulary`'s blanket ban on
+generic finding codes became an allow-list of exactly three, still rejecting every `TLS_` code;
+`internal/diagnosis/transport`'s "this package is empty" guard became the architecture suite
+that replaced it.
 
 ### Phase 5 — CLI, renderers and productization: NOT STARTED
 

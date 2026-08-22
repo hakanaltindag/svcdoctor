@@ -617,9 +617,16 @@ endpoint pseudonymize to the same value, with the raw hostname proven present lo
 absent from the shareable document.
 
 **What the anchor authorized, and what it did not.** ADR 0043 then decided the policy for
-**DNS and TCP**: three findings, subjected to the anchor's logical endpoint, withheld when
-any path succeeded and when measurement was incomplete. That closes ADR 0017's deferral for
-those two layers.
+**DNS and TCP**, and Phase 4.9b implemented it as `internal/diagnosis/transport`: two rules,
+three findings, subjected to the anchor's logical endpoint, withheld when any path succeeded
+and when measurement was incomplete. That closes ADR 0017's deferral for those two layers.
+
+The package is the first whose subject is not a service fact, which makes it the only place
+where "scan the graph for failed transport nodes" is even expressible — so its guards are
+structural rather than behavioural: no `Parents` call, no self-recursive traversal, no service
+name in a predicate or a literal, and imports limited to the evidence model and the
+vocabulary. A prose guard checks the sentences too, because a rule can reach the right
+conclusion and then explain it wrongly, and a reader acts on the sentence.
 
 **It stays open for TLS, for a reason rather than an opinion.** No production run yields a
 `tls.handshake` node whose direct parent is a requested `tcp.connect` — PostgreSQL negotiates
