@@ -249,6 +249,33 @@ const (
 	// FailureExecInsufficientPrivilege means the check needs a privilege svcdoctor
 	// does not hold. Not healthy, and not a target failure either.
 	FailureExecInsufficientPrivilege
+	// FailureExecRequiredInputMissing means the step could not run because an
+	// input that step required was not supplied to the run.
+	//
+	// That is the whole of the claim, and it is about the run rather than about
+	// the peer. It does **not** state that the target is broken, that the missing
+	// input is invalid or wrong anywhere else, that whoever started the run made
+	// a mistake, that the step was attempted, or that the peer refused, answered
+	// or observed anything at all. Nothing was sent.
+	//
+	// It is service-neutral and names no kind of input. A run that reaches an
+	// authentication step without authentication material, and a future step that
+	// needs a certificate, a token or a file it was never given, reach the same
+	// condition; the step's own evidence says which input was wanted.
+	//
+	// **It is none of the three classes it sits beside**, and the distinctions
+	// are what a reader acts on:
+	//
+	//   - FailureExecSkippedByPolicy: the input exists and a policy refused to
+	//     use it. Something was available and was deliberately not used.
+	//   - FailureExecUnsupportedBySvcdoctor: svcdoctor cannot perform the
+	//     operation at all, whatever it was given.
+	//   - FailureExecInsufficientPrivilege: the operation was attempted with an
+	//     identity that was not enough.
+	//
+	// Here the operation is one svcdoctor can perform, no policy objected, and
+	// the run had nothing to perform it with.
+	FailureExecRequiredInputMissing
 	// FailureExecSkippedByPolicy means a policy prevented the step, for example
 	// the credential forwarding policy.
 	FailureExecSkippedByPolicy
@@ -307,6 +334,7 @@ var failureClassNames = [...]string{
 	FailureExecCancelled:                 "EXEC_CANCELLED",
 	FailureExecUnsupportedBySvcdoctor:    "EXEC_UNSUPPORTED_BY_SVCDOCTOR",
 	FailureExecInsufficientPrivilege:     "EXEC_INSUFFICIENT_PRIVILEGE",
+	FailureExecRequiredInputMissing:      "EXEC_REQUIRED_INPUT_MISSING",
 	FailureExecSkippedByPolicy:           "EXEC_SKIPPED_BY_POLICY",
 	FailureExecSkippedPrerequisiteFailed: "EXEC_SKIPPED_PREREQUISITE_FAILED",
 	FailureExecDepthLimit:                "EXEC_DEPTH_LIMIT",

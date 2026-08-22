@@ -202,7 +202,11 @@ func TestFailureClassNamesCoverAllClasses(t *testing.T) {
 	// section 8) — and Phase 4.6a.5 added FailureAuthPeerVerificationFailed,
 	// because a mutual mechanism's two directions had been normalized into one
 	// class and one of them was inverted by it (ADR 0040 section 5.1).
-	const wantCount = 40
+	// Phase 4.11b added FailureExecRequiredInputMissing, the 40th, because a run
+	// that reaches a step without an input that step needs had no way to say so:
+	// the alternative was a graph indistinguishable from one cancelled at the
+	// same point (ADR 0046).
+	const wantCount = 41
 
 	if len(failureClassNames) != wantCount {
 		t.Fatalf("failureClassNames has %d entries, want %d", len(failureClassNames), wantCount)
