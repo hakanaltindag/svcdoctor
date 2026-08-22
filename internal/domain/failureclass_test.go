@@ -191,13 +191,16 @@ func TestToolGapsAreNotTargetFailures(t *testing.T) {
 // TestFailureClassNamesCoverAllClasses fails if a class is added without a name
 // and catches duplicated strings.
 func TestFailureClassNamesCoverAllClasses(t *testing.T) {
-	// FailureNone plus 37 classes. Updating this number is meant to be a
+	// FailureNone plus 38 classes. Updating this number is meant to be a
 	// deliberate act: the count exists so that adding a class without a name, or
 	// adding one at all, is a decision somebody made on purpose. Phase 2.2 added
-	// FailureTCPConnectionFailed, Phase 2.3 added FailureTLSPeerNotTLS, and
-	// Phase 4.3 added FailureAuthzNotPermitted for a refusal that evaluates no
-	// credential (ADR 0036 section 16).
-	const wantCount = 38
+	// FailureTCPConnectionFailed, Phase 2.3 added FailureTLSPeerNotTLS, Phase 4.3
+	// added FailureAuthzNotPermitted for a refusal that evaluates no credential
+	// (ADR 0036 section 16), and Phase 4.5b added FailureResourceNotFound — the
+	// second class ADR 0036 section 16 authorized, held back until PostgreSQL
+	// session establishment became its first reachable producer (ADR 0039
+	// section 8).
+	const wantCount = 39
 
 	if len(failureClassNames) != wantCount {
 		t.Fatalf("failureClassNames has %d entries, want %d", len(failureClassNames), wantCount)

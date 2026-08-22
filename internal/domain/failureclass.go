@@ -176,6 +176,32 @@ const (
 	// and the same shape of pre-authentication refusal exists elsewhere.
 	FailureAuthzNotPermitted
 
+	// Resources.
+
+	// FailureResourceNotFound means the named resource an operation targeted is
+	// not available as an existing resource, according to the peer.
+	//
+	// That is the whole of the claim, and every word of it is load-bearing.
+	// **According to the peer**: the peer asserted the absence with a code whose
+	// own meaning is absence, and a producer never infers this class from a
+	// generic error plus a plausible position. **The named resource an operation
+	// targeted**: the name came from the run's own input, so the class says
+	// something about what was asked for, not about the peer's inventory in
+	// general.
+	//
+	// It is deliberately silent about cause. It does **not** state that the
+	// resource never existed, that it was deliberately removed, that it was
+	// renamed, that the peer's own catalog or storage is healthy, or that no
+	// corruption occurred. A peer routinely answers the same way for several of
+	// those, and svcdoctor cannot tell them apart from the wire. Naming a likely
+	// cause is a hypothesis, and a hypothesis is diagnosis work over frozen
+	// evidence.
+	//
+	// It is not authorization: nothing was denied, because there was nothing to
+	// be denied on. It is not a protocol failure: the exchange was well formed
+	// and the peer answered it.
+	FailureResourceNotFound
+
 	// Execution and policy.
 
 	// FailureExecLocalTimeout means svcdoctor's own budget expired. It is not
@@ -239,6 +265,8 @@ var failureClassNames = [...]string{
 	FailureAuthzDenied:            "AUTHZ_DENIED",
 	FailureAuthzScopeInsufficient: "AUTHZ_SCOPE_INSUFFICIENT",
 	FailureAuthzNotPermitted:      "AUTHZ_NOT_PERMITTED",
+
+	FailureResourceNotFound: "RESOURCE_NOT_FOUND",
 
 	FailureExecLocalTimeout:              "EXEC_LOCAL_TIMEOUT",
 	FailureExecCancelled:                 "EXEC_CANCELLED",
