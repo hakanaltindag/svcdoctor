@@ -51,10 +51,11 @@ does not overturn it, and both remain authoritative.
 | 0037 | A principal or named resource is identity, and redaction must pseudonymize it | Accepted, **implemented in Phase 4.1** | Refines 0022 with a second identity category. Meets a reopen condition 0030 recorded. First report schema field added since v1 |
 | 0038 | PostgreSQL SCRAM-SHA-256, and the two facts that must both be true before authentication passes | **Accepted, implemented in Phase 4.4b**, §8 and §21 amended by implementation | Applies 0028's contract, 0029's mechanisms and 0030's ordering to a second protocol and adds no policy. Fixes the success boundary at *signature verified* **and** *AuthenticationOk*, both measured. Narrows scope to printable-ASCII passwords rather than adding a SASLprep dependency |
 | 0039 | A PostgreSQL session is established at ReadyForQuery, and that proves less than it looks like | **Accepted, implemented in Phase 4.5b**, §2 and §15 amended by implementation | Completes the slice 0036 designed. Confirms the ReadyForQuery boundary and **corrects 0036 §5** — `57P03` is pre-auth. Adds `RESOURCE_NOT_FOUND`, which 0036 §16 authorized and 4.3 deferred; declines a capacity class |
-| 0040 | A PostgreSQL rule anchors only at a `postgres.*` step | Accepted (policy), implemented in Phase 4.6b | The 0034 analogue for PostgreSQL. Authorizes the service vocabulary leaf 0042 §11 reuses generically |
+| 0040 | A PostgreSQL rule anchors only at a `postgres.*` step | Accepted (policy), implemented in Phase 4.6b, **one bullet superseded by 0044** | The 0034 analogue for PostgreSQL. Authorizes the service vocabulary leaf 0042 §11 reuses generically. Its refusal of `POSTGRES_TLS_*` findings is reversed by 0044; the twelve findings it fixed are untouched |
 | 0041 | A run discovers broadly and authenticates narrowly | **Accepted, implemented in Phase 4.8b** | First record about the application. Closes the selection deferral 0028 left open; partially supersedes 0011 on command-tree shape. Narrowed by 0042 §3, which opens one hole in its evidence-authority ban |
 | 0042 | A run records the target it was asked about, and a sweep declares its cause | **Accepted, implemented in Phase 4.9a-pre** | Closes the ownership and subject gaps Phase 4.9a stopped on. Narrows 0041, half-closes 0017's deferral, amends 0032 at the sweep root, and leaves 0034's advertised ownership structurally unreachable. Authorizes no finding |
 | 0043 | svcdoctor says what it could not reach, and no more than that | **Accepted, implemented in Phase 4.9b** | Closes 0017's generic transport deferral **for DNS and TCP only**. Consumes 0042 as its ownership prerequisite; leaves 0034, 0040 and 0041 unchanged. Defers generic TLS for want of a producer, and records PostgreSQL's in-band TLS gap without fixing it |
+| 0044 | A handshake belongs to whoever asked for it | Accepted (policy) | Gives PostgreSQL the in-band `tls.handshake` node, read from the parent edge the negotiation already recorded. **Supersedes one bullet of 0040** — the refusal of `POSTGRES_TLS_*` findings — and argues the reversal. 0041, 0042 and 0043 unchanged; generic TLS still deferred |
 
 ## Decisions that govern work not yet written
 
@@ -306,6 +307,22 @@ A deferral is a decision too, and each names the condition that should reopen it
   will be wrong by the time it can. Phase 4.9b implemented it: two rules, three codes, and a
   prose guard that rejected the record's own first draft of the TCP detail for naming a
   firewall in order to deny it.
+
+- **0044** closes the last transport silence in a PostgreSQL run, and it is the first record in
+  this repository to overturn a predecessor's reasoning rather than narrow it. 0040 had declined
+  `POSTGRES_TLS_*` findings on the grounds that one *"would add nothing the node does not already
+  state, which is the duplicate test"* — and that reasoning proves too much: applied consistently
+  it deletes `POSTGRES_TLS_DECLINED` and all three of 0043's codes, because every finding restates
+  evidence. The duplicate test in 0034 is a test between *findings*. What a finding adds is not
+  information but standing: `SummaryStatus` derives from findings and never from evidence, so a
+  node cannot make a report say `PROBLEMS_FOUND`, and the measured result of the absence was
+  `status: OK` on a run that failed at L3. The deferral was also written when *no* transport layer
+  had an owner, so the silence was uniform; 0043 gave L1 and L2 owners and turned it into an
+  inconsistency. Its ownership rule generalizes past PostgreSQL in one sentence — generic evidence
+  belongs to the layer that caused the probe to run, read from the parent edge, never from the step
+  name — and its most-argued detail is the one that looks like an oversight: it does **not** copy
+  0043's partial-success withholding, because a PostgreSQL finding claims something about *this
+  endpoint*, and another endpoint working does not make that claim false.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

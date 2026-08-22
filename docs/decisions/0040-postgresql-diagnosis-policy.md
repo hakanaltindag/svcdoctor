@@ -1358,3 +1358,33 @@ holds or derives a secret, and depguard denies it `internal/security` outright.
   security-posture or certificate-posture claim, say. Then §3's scoping and
   guards G4/G5 are exercised for the first time, and the record should confirm
   they held rather than assume it.
+
+## Amendment (Phase 4.9c): the TLS refusal is superseded
+
+The "What this does not own" section declines `POSTGRES_TLS_*` findings over the
+`tls.handshake` node, on the grounds that one *"would add nothing the node does not
+already state, which is the duplicate test."*
+
+**ADR 0044 reverses that bullet and only that bullet.** Two things were wrong with
+the reasoning, and one thing changed afterwards:
+
+- The duplicate test in ADR 0034 §3 is a test between **two findings**, not between
+  a finding and its evidence. Applied as it was applied here it would also delete
+  `POSTGRES_TLS_DECLINED` and every generic transport finding, because each of them
+  restates an evidence node.
+- A finding is not a restatement. `SummaryStatus` is derived from findings and never
+  from evidence, so no node can make a report say `PROBLEMS_FOUND`; severity,
+  confidence, vantage dependence and recommendations exist only on findings. The
+  measured consequence of the refusal was `status: OK` on a run that failed at L3.
+- When this record was written, no transport layer had a diagnosis owner, so the
+  silence at L3 was uniform. ADR 0043 gave L1 and L2 owners, which turned a
+  consistent deferral into an inconsistency.
+
+**Everything else here stands.** The twelve findings, their triggers, their claims,
+their vantage grounds and the anchoring rule are unchanged. ADR 0044 anchors at a
+`tls.handshake` node whose direct parent is a PASS `postgres.ssl_request`, which is
+a parent-edge test rather than a new anchor step, and the two rule sets remain
+disjoint by construction.
+
+The remaining `postgres.ssl_request` gap — an `E` answer, a malformed reply, a peer
+close — is **not** closed by ADR 0044 and stays recorded here.

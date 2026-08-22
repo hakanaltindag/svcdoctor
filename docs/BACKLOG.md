@@ -1865,10 +1865,10 @@ and for two separate reasons:
 - **Generic TLS has no producer.** No production run yields a `tls.handshake` node whose direct
   parent is a requested `tcp.connect`: PostgreSQL negotiates in band, and Kafka has no
   composition root. Policy for evidence that cannot occur would be wrong by the time it could.
-- **PostgreSQL's in-band TLS is unowned.** Measured: `postgres.ssl_request` PASS, `tls.handshake`
-  FAIL, `findings: 0`, `status: OK`, `firstBrokenLayer: L3`. ADR 0040 anchors PostgreSQL rules
-  only at `postgres.*`; ADR 0042 gives generic diagnosis only handshakes parented to a requested
-  `tcp.connect`. Both are right and the node falls between them.
+- **PostgreSQL's in-band TLS is decided but not implemented.** Measured: `postgres.ssl_request`
+  PASS, `tls.handshake` FAIL, `findings: 0`, `status: OK`, `firstBrokenLayer: L3`. **ADR 0044**
+  gives it to PostgreSQL, read from the parent edge the negotiation already recorded — five codes,
+  per-endpoint claims, no widening of ADR 0043's generic walk. Implementation is Phase 4.9d.
 
 - [x] Decide whether run intent can reach a rule at all, and how — ADR 0042
 - [x] Implement the anchor, including the generic vocabulary leaf ADR 0042 §11 requires
@@ -2095,6 +2095,57 @@ wired into `internal/app.DiagnosePostgres` beside the four PostgreSQL rules. `Fi
 generic finding codes became an allow-list of exactly three, still rejecting every `TLS_` code;
 `internal/diagnosis/transport`'s "this package is empty" guard became the architecture suite
 that replaced it.
+
+### Phase 4.9c — PostgreSQL in-band TLS diagnosis policy: DECIDED, NOT IMPLEMENTED
+
+**ADR 0044.** Five codes — `POSTGRES_TLS_UPGRADE_NOT_HONORED`,
+`POSTGRES_TLS_IDENTITY_MISMATCH`, `POSTGRES_TLS_CHAIN_NOT_TRUSTED`,
+`POSTGRES_TLS_CERTIFICATE_NOT_VALID_NOW`, `POSTGRES_TLS_HANDSHAKE_FAILED` — all
+`CONFIRMED` / `ERROR` / `HIGH` / `vantageDependent: true`, subject the concrete `ip:port`,
+evidence the negotiation node plus the handshake node.
+
+Four things worth remembering when the rule is written:
+
+- **It overturns an Accepted decision, deliberately.** ADR 0040 declined `POSTGRES_TLS_*`
+  findings because one "would add nothing the node does not already state". That argument
+  proves too much — it deletes `POSTGRES_TLS_DECLINED` and all three ADR 0043 codes — and the
+  ground shifted when ADR 0043 gave L1 and L2 owners. The reversal is argued in ADR 0044 §2 and
+  noted in ADR 0040.
+- **It does not copy ADR 0043's partial-success withholding.** A PostgreSQL finding claims
+  something about *this endpoint*; another endpoint working does not make it false. One failing
+  handshake, one finding, even on a dual-stack target where the other family works.
+- **The predicate requires the negotiation to have PASSED**, which is what separates this from
+  `POSTGRES_TLS_DECLINED` and structurally excludes the SKIPPED handshake node the adapter mints
+  when the negotiation failed.
+- **Expired and not-yet-valid share one code.** They pose one question, and
+  `tls.peer_not_before` / `tls.peer_not_after` answer which end.
+
+Implementation is authorized as Phase 4.9d. Generic TLS is **not** — it still has no producer
+and needs its own record.
+
+### PostgreSQL BASIC closure checklist
+
+Everything recorded anywhere in the repository as a PostgreSQL BASIC gap, so that closure is a
+check rather than a memory:
+
+- [ ] **ADR 0044 implementation** (Phase 4.9d) — the five in-band TLS codes
+- [ ] **No credential configured** — a run against an endpoint that demands authentication while
+      carrying no credential presents nothing and records no authentication node. There is no
+      finding saying so. Recorded in ADR 0041's implementation note; it is diagnosis work and has
+      no rule
+- [ ] **`postgres.ssl_request` failures other than a decline** — an `E` answer, a malformed reply,
+      a peer close. ADR 0040 declined findings for shapes it had not measured; an `E` answer is a
+      peer refusing to negotiate and is worth a claim once one is measured
+- [ ] **Confirm no `SummaryStatusOK`-with-failed-evidence case remains** for PostgreSQL, by
+      enumerating every FAIL-producing step and checking each has an owner
+- [ ] **Integration coverage review** — which acceptance rows are unit-only by nature and which
+      are unit-only because the environment cannot serve them (ADR 0044 marks certificate
+      validity rows as the latter)
+
+Deliberately **not** on this list, because they are not BASIC: replica/read-only/superuser and
+version facts (ADR 0040 §20), capacity and availability (ADR 0039 §10), peer implementation
+identification (ADR 0040 §18), and certificate expiry on a *passing* handshake, which is expiry
+monitoring rather than diagnosis (ADR 0044).
 
 ### Phase 5 — CLI, renderers and productization: NOT STARTED
 

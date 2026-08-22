@@ -387,12 +387,14 @@ Five properties of the set are worth reading before the record itself:
   `POSTGRES_CREDENTIALS_REJECTED` and `POSTGRES_PEER_VERIFICATION_FAILED` rest on different
   classes rather than on a predicate that inspects a SQLSTATE. This is a generic
   authentication invariant, not a PostgreSQL one — see ADR 0040 section 5.1.
-- **No PostgreSQL finding fires on `dns.lookup`, `tcp.connect` or `tls.handshake`.** Those are
-  generic transport nodes. ADR 0043 gives the first two an owner — see section 7 — so a
-  PostgreSQL run failing at L1 or L2 will produce a generic finding once those rules exist.
-  **`tls.handshake` under `postgres.ssl_request` remains unowned**: it is not generic, because
-  its parent is a service node, and no PostgreSQL rule anchors there. That gap is measured in
-  ADR 0043 section 15 and is still a release-gate item in `docs/BACKLOG.md`.
+- **No PostgreSQL finding fires on `dns.lookup` or `tcp.connect`.** Those are generic transport
+  nodes and ADR 0043 owns them — see section 7.
+- **`tls.handshake` under `postgres.ssl_request` is PostgreSQL's, decided by ADR 0044 and not
+  yet implemented.** It is not generic, because its parent is a service node: the handshake
+  exists only because PostgreSQL negotiated the upgrade. Five codes, per-endpoint claims, and a
+  predicate that requires the negotiation itself to have passed — which is what keeps it
+  disjoint from `POSTGRES_TLS_DECLINED`. ADR 0044 supersedes this record's earlier refusal and
+  argues why.
 
 See ADR 0040 for the trigger, claim, must-not-claim list, evidence set and recommendation
 boundary of each, and `docs/validation/POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` for the evidence.
