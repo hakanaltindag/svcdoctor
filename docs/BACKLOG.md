@@ -1026,7 +1026,10 @@ dependency, no `GraphBuilder` change.
 - [x] **The existing `StepTimeout` is the only budget.** It already bounds every DNS, TCP and
       TLS call, which is the one place a topology sweep can block. A per-advertisement or
       phase-global budget would bound the same work twice with numbers that can disagree.
-      **Reopen when** a blocking case appears that `StepTimeout` does not cover
+      **Reopen when** a blocking case appears that `StepTimeout` does not cover.
+      *One did, and it was not a topology sweep:* `postgres.startup` had no field to receive
+      this budget in and ran unbounded until Phase 4.11d (ADR 0047). The rule held; a step had
+      quietly opted out of it
 - [x] **A cancelled run leaves unreached advertisements with no evidence at all.** Nothing was
       measured about them, and a node claiming otherwise would report svcdoctor's budget as a
       remote failure. **Reopen** never
@@ -2212,6 +2215,42 @@ produced by a graph in which *nothing failed*, which is why `SummaryStatus` stay
 the exit-code question belongs to the renderer rather than to severity. And `Authenticate` lost
 an invocation error: a zero credential used to be the caller's defect, which is precisely what
 kept a real diagnostic outcome out of the report.
+
+### Phase 4.11d — local execution budget correctness: COMPLETE
+
+**ADR 0047**, decided and implemented. No `FindingCode`, no `FailureClass`, no schema field and
+no dependency changed: `FindingCode` stays **24**, `FailureClass` **40**, `schemaVersion` **1**,
+`security.Reveal` **two**.
+
+Phase 4.11c's closure gate reproduced three defects, all in one seam — a per-step budget
+expiring while the caller's context stays alive:
+
+- [x] `postgres.startup` ran **unbounded**. `StartupParams` had no timeout field, so
+      `PostgresParams.StepTimeout` was dropped at a call site that looked complete, and a peer
+      that accepted TCP and never answered the StartupMessage held the run open indefinitely.
+      It now takes `ExchangeTimeout`, like every sibling step
+- [x] A local deadline at `postgres.ssl_request` was published as
+      `FAIL` + `PROTOCOL_UNEXPECTED_RESPONSE` with an ERROR finding. The classifier lacked the
+      `isTimeout(err)` guard `authenticate.go` and `establish.go` already had, in the same
+      position. Both it and `classifyStartup` now have it; the other two were already correct
+- [x] `Result.Incomplete()`, derived from `ctx.Err()` alone, called a run that never reached L3
+      finished — leaving `docs/SCOPE.md`'s exit-4 contract ("cancellation **or local execution
+      budget exhaustion**") false and ADR 0043 §6's premise broken
+- [x] The decision, and the only genuinely new one: **a run is incomplete when svcdoctor's own
+      execution limit prevented it from reaching the outcome it set out to measure.** Not "any
+      local `UNKNOWN` anywhere" — ADR 0041 measures every address and continues one, so that
+      rule would report an ordinary dual-stack run as truncated while it holds a passing session
+- [x] Computed in `internal/app.incompleteRun` from `State`/`FailureClass` through domain
+      accessors plus one typed control-flow value. No finding, severity, `SummaryStatus`, path
+      count, `EvidenceID` parse, step name or `Origin`
+- [x] Status and incompleteness stay orthogonal, and severity was not used as an exit-code lever
+- [x] An interrupted step keeps its measured duration, which means how long svcdoctor waited —
+      never that the endpoint was slow. No threshold and no latency finding
+- [x] Real loopback-socket regression tests, because none of the three reproduced through
+      `net.Pipe` or a stub dialer; 13 mutations applied, 12 caught, all restored
+
+**Next: re-run the Phase 4.11c closure gate.** PostgreSQL BASIC is **not** marked complete by
+this phase, and no closure documentation was written.
 
 ### Phase 5 — CLI, renderers and productization: NOT STARTED
 

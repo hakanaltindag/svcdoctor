@@ -357,6 +357,20 @@ A deferral is a decision too, and each names the condition that should reopen it
   lever for forcing an exit code. Whether a run that never reached a session should *look* clean
   in a terminal is a renderer question, and 0046 says so rather than solving it with severity.
 
+- **[0047](0047-local-execution-incompleteness.md) — A run svcdoctor cut short says so, and a run
+  that got its answer does not.** Three defects shared one seam: a per-step budget expiring leaves
+  the caller's context alive. `postgres.startup` had no field to receive a budget in and so ran
+  unbounded; the SSL-negotiation classifier lacked the local-deadline guard its siblings had, and
+  published svcdoctor's own timeout as the endpoint's protocol failure; and `Incomplete()`, derived
+  from `ctx.Err()` alone, called a run that never reached L3 finished. Two of those are corrections.
+  The decision is the third: *when does a local timeout make the whole run incomplete?* Not "any
+  local UNKNOWN anywhere" — ADR 0041 measures every address and continues one, so that rule would
+  report an ordinary dual-stack run as truncated while it holds a passing session. A run is
+  incomplete when svcdoctor's own limit stopped it reaching what it set out to measure, and a
+  session that reached `ReadyForQuery` settles the question. It narrows 0041's acceptance 36 and
+  makes 0043 §6's premise true. Status and incompleteness stay orthogonal, and severity was not
+  used as a lever.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention
