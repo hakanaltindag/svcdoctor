@@ -1640,16 +1640,70 @@ bytes**, and the second and last production `security.Reveal` call site.
 **No `domain` change, no `FailureClass` added, no report schema change, no redaction change,
 no Kafka change.** Two attribute keys under the existing `postgres.` namespace.
 
-### Phase 4.5 — Session and ReadyForQuery: NOT STARTED
+### Phase 4.5a — Session decision and protocol verification: COMPLETE
 
-Completes the vertical slice.
+No Go code. `security.Reveal` count, dependency graph, `FailureClass` count and report
+schema all unchanged. ADR 0039 and `docs/validation/POSTGRES_PHASE45_SESSION_STUDY.md` are
+the output.
 
-- [ ] `postgres.session` (L5): `AuthenticationOk` → `ParameterStatus` → `ReadyForQuery`
-- [ ] `3D000`, `42501`, `53300`, `57P03` classified
-- [ ] `ParameterStatus` recorded from a fixed allowlist; `session_authorization` and
-      `search_path` are excluded as identity
-- [ ] `Terminate` sent before closing a session that reached `ReadyForQuery`
-- [ ] Transaction status byte recorded
+- [x] The `AuthenticationOk` → `ReadyForQuery` window measured frame by frame on 18.6, 14.24,
+      a real streaming standby, and pgBouncer 1.25.2
+- [x] `ReadyForQuery` confirmed as the session boundary; `3D000`, `42501` and `53300` all
+      reproduced after `AuthenticationOk`, each as **frame 1 with zero `ParameterStatus`**
+- [x] **ADR 0036 §5 corrected**: `57P03` arrives *pre-authentication* from
+      `BackendInitialize`, so it is a `postgres.startup` fact
+- [x] **pgBouncer served a complete passing session with its backend stopped** — which fixes
+      what a passing session node may claim
+- [x] `ParameterStatus` inventory: 15 keys on 18.6, 13 on 14.24. `server_version_num` is sent
+      by neither; `search_path` is 18.6-only
+- [x] Allowlist decided: four keys kept, `session_authorization` and `search_path` dropped as
+      identity, nine dropped for want of a consumer
+- [x] `in_hot_standby` verified `on` against a real standby — and
+      `default_transaction_read_only` measured `off` there, so the two are independent
+- [x] `BackendKeyData` decided: parsed for length, discarded whole
+- [x] No SQL re-verified against the facts actually needed
+
+### Phase 4.5b — Session and ReadyForQuery: COMPLETE
+
+Implements ADR 0039 and completes the PostgreSQL vertical slice. **The terminal step:**
+svcdoctor sends `Terminate` and closes, and no connection is returned.
+
+- [x] `postgres.session` (L5), parented to whatever `AuthenticatedSession.Evidence()` names
+- [x] PASS **only** on `ReadyForQuery`; authentication is never rewritten by a session failure
+- [x] `RESOURCE_NOT_FOUND` added — the second class ADR 0036 §16 authorized, held back since
+      Phase 4.3 for want of a reachable producer. `FailureClass` count 38 → 39
+- [x] `3D000` → `RESOURCE_NOT_FOUND`; `42501` → `AUTHZ_DENIED`; everything else, `53300`
+      included, → `PROTOCOL_UNEXPECTED_RESPONSE` with the SQLSTATE recorded
+- [x] **Step-scoped classification**, with the cross-step matrix pinned: the same `3D000` or
+      `42501` at `postgres.startup` or `postgres.authentication` stays weak
+- [x] Refactor guard: a shared global SQLSTATE table breaks the suite
+- [x] Four-key `ParameterStatus` allowlist enforced **structurally** —
+      `wire.SessionParameters` has four fields and no map, so a dropped key has nowhere to go
+- [x] Cardinality guard: a fifth key fails a test
+- [x] `session_authorization` and `search_path` dropped at the wire boundary, with canaries
+- [x] `BackendKeyData` validated for length and discarded whole; PID and secret both absent
+      from LOCAL_FULL and SHAREABLE reports
+- [x] `postgres.transaction_status` recorded; a non-`idle` value is a fact, not a failure
+- [x] Partial observations retained per attribute on FAIL and UNKNOWN, per the TLS precedent
+- [x] Repeated allowlisted keys take the last value (ADR 0039 amendment A)
+- [x] `NoticeResponse` skipped structurally; its payload is never decoded
+- [x] Unknown frame types refused — no generic skip-unknown logic
+- [x] `Terminate` sent after `ReadyForQuery` only; a failure to write it does not unmake the
+      session
+- [x] Terminal ownership: no live connection returned, closed on every outcome, no redial
+- [x] **No SQL**, enforced by an AST guard over the session sources
+- [x] 14 mutation guards, each verified to compile and flip a test
+- [x] `make integration-postgres`: 12 scenarios against real PostgreSQL 18.6, including
+      `3D000` and `42501` after `AuthenticationOk`
+
+**A latent `bindDeadline` race was fixed** in `internal/adapter/postgres/wire` (ADR 0039
+amendment C). Phase 4.5b is the first path that writes to a connection after a bounded read,
+which is why it surfaced now. `internal/adapter/kafka/wire` holds the same copy and was
+deliberately **not** changed — no Kafka path triggers it, and the fix belongs to the phase
+that owns that package.
+
+**No report schema change, no `AttrKind`, no redaction change, no new dependency, no new
+`security.Reveal` site.**
 
 ### Phase 4.6 — Diagnosis policy ADR: NOT STARTED
 

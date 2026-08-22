@@ -50,6 +50,7 @@ does not overturn it, and both remain authoritative.
 | 0036 | A PostgreSQL session is one connection, and it is usable only at ReadyForQuery | Accepted (policy), implemented from Phase 4.3, **§4 amended by measurement** | First PostgreSQL record. Applies 0020, 0021 and 0024 to a protocol that negotiates TLS in-band; narrows 0029's channel authority; supplies the blocker carrier 0030 named; depends on 0037 |
 | 0037 | A principal or named resource is identity, and redaction must pseudonymize it | Accepted, **implemented in Phase 4.1** | Refines 0022 with a second identity category. Meets a reopen condition 0030 recorded. First report schema field added since v1 |
 | 0038 | PostgreSQL SCRAM-SHA-256, and the two facts that must both be true before authentication passes | **Accepted, implemented in Phase 4.4b**, §8 and §21 amended by implementation | Applies 0028's contract, 0029's mechanisms and 0030's ordering to a second protocol and adds no policy. Fixes the success boundary at *signature verified* **and** *AuthenticationOk*, both measured. Narrows scope to printable-ASCII passwords rather than adding a SASLprep dependency |
+| 0039 | A PostgreSQL session is established at ReadyForQuery, and that proves less than it looks like | **Accepted, implemented in Phase 4.5b**, §2 and §15 amended by implementation | Completes the slice 0036 designed. Confirms the ReadyForQuery boundary and **corrects 0036 §5** — `57P03` is pre-auth. Adds `RESOURCE_NOT_FOUND`, which 0036 §16 authorized and 4.3 deferred; declines a capacity class |
 
 ## Decisions that govern work not yet written
 
@@ -57,6 +58,9 @@ Some accepted records decide how something will be built rather than describe
 something that exists. That is intentional, and they are binding when that work
 starts: **0008** (Kafka wire client), **0009** (service registration), **0011**
 (CLI shape).
+
+**0039 has left this list.** Phase 4.5b implemented it, so it now describes code. Two of its
+sections were settled by that implementation and the settlements are recorded inside it.
 
 **0038 has left this list.** It decided PostgreSQL authentication before any existed;
 Phase 4.4b implemented it, so it now describes code. Two of its sections were corrected by
@@ -195,6 +199,18 @@ A deferral is a decision too, and each names the condition that should reopen it
   narrowing in the record: printable-ASCII passwords are handled and everything else is
   refused as a gap in svcdoctor, because that failure mode is visible and a disagreeing
   second SASLprep implementation's is not.
+
+- **0039** finishes the PostgreSQL slice and spends most of its length narrowing a claim
+  rather than making one. `ReadyForQuery` is confirmed as the boundary, with the three
+  post-authentication failures 0036 predicted all reproduced — and one of its predictions
+  corrected: `57P03` arrives *before* authentication, from `BackendInitialize`, so it is a
+  startup fact and not a session one. The decisive measurement is elsewhere. With its
+  PostgreSQL backend **stopped**, pgBouncer served a complete passing session from cache —
+  fifteen parameters, a fabricated backend key, `ReadyForQuery`. So the boundary proves that
+  a PostgreSQL-protocol session was established at an endpoint, and nothing about what is
+  behind it. Eleven of the fifteen `ParameterStatus` values are dropped, two of them because
+  they are identity; `BackendKeyData` is read for its length and discarded whole, secret and
+  process ID alike.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
