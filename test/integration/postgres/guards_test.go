@@ -74,22 +74,23 @@ func parseFile(t *testing.T, path string) *ast.File {
 	return f
 }
 
-// TestNoProductionCompositionRootExists is the guard this whole phase turns on.
+// TestNoCLIOrRendererExists guards what is still deliberately absent.
 //
-// Phase 4.8a validates the vertical slice from a **test** composition boundary.
-// A production one needs decisions the repository has deliberately not made —
-// which continuation may be authenticated and why, whether more than one ever
-// is, where the whole-run budget lives, whether a run emits a shareable report.
-// ADR 0028 §1 defers them to application orchestration; ADR 0041 is where they
-// get decided.
+// **This guard changed in Phase 4.8b, on purpose.** In Phase 4.8a it also
+// covered `internal/app`, because a production composition root needed decisions
+// the repository had not made — which continuation may be authenticated and why,
+// whether more than one ever is, where the whole-run budget lives, whether a run
+// emits a shareable report. ADR 0041 decided all of them, and Phase 4.8b built
+// the composition root it authorized. So `internal/app` is now expected to hold
+// code, and asserting its emptiness would assert the opposite of the decision.
 //
-// So `internal/app` and `cmd/svcdoctor` must stay empty. If this test fails, the
-// question is not how to fix the test.
-func TestNoProductionCompositionRootExists(t *testing.T) {
+// What remains absent is the product boundary: no CLI, no renderer. A run
+// returns a report and stops there; turning that into rendered output and a
+// process exit status is Phase 5, and `internal/app` must not start doing it.
+func TestNoCLIOrRendererExists(t *testing.T) {
 	root := repoRoot(t)
 
 	for _, dir := range []string{
-		filepath.Join(root, "internal", "app"),
 		filepath.Join(root, "cmd", "svcdoctor"),
 		filepath.Join(root, "internal", "render"),
 	} {
@@ -99,8 +100,34 @@ func TestNoProductionCompositionRootExists(t *testing.T) {
 		}
 		for _, e := range entries {
 			if strings.HasSuffix(e.Name(), ".go") {
-				t.Errorf("%s contains %s; production composition is deferred to ADR 0041",
-					dir, e.Name())
+				t.Errorf("%s contains %s; the CLI and renderers are Phase 5", dir, e.Name())
+			}
+		}
+	}
+}
+
+// TestTheCompositionRootIsPostgreSQLOnly pins the scope ADR 0041 authorized.
+//
+// Phase 4.8b builds one concrete PostgreSQL run. It does not build a service
+// registry, a generic adapter interface or a Kafka composition — those are
+// Phase 5, and ADR 0009 declines the abstraction until two services prove a
+// shared contract rather than merely existing.
+func TestTheCompositionRootIsPostgreSQLOnly(t *testing.T) {
+	root := filepath.Join(repoRoot(t), "internal", "app")
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("reading the composition root: %v", err)
+	}
+
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		for _, imported := range parseFile(t, filepath.Join(root, e.Name())).Imports {
+			path := strings.Trim(imported.Path.Value, `"`)
+			if strings.Contains(path, "adapter/kafka") || strings.Contains(path, "diagnosis/kafka") {
+				t.Errorf("%s imports %s; Kafka composition is not this phase", e.Name(), path)
 			}
 		}
 	}
