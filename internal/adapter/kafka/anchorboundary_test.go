@@ -274,3 +274,63 @@ func TestKafkaMintsNoRequestedTargetAnchor(t *testing.T) {
 			"should measure it instead of simulating one", found)
 	}
 }
+
+// TestAKafkaBootstrapSweepWouldBeDiagnosableAndAnAdvertisedOneWouldNot is the
+// forward-compatibility assertion for ADR 0043.
+//
+// Kafka has no composition root, so no generic finding can be produced for a
+// bootstrap run today. What can be checked now is the property those rules will
+// depend on when it exists: that the bootstrap sweep and the advertised sweep are
+// distinguishable by the same structural test, on a real graph, with no service
+// knowledge involved.
+//
+// The test states it as the rules do — direct parentage of the sweep root — and
+// deliberately does not import internal/diagnosis/transport. Diagnosis may not
+// import an adapter, and an adapter test reaching for a rule would invert the
+// dependency the boundary exists to keep.
+func TestAKafkaBootstrapSweepWouldBeDiagnosableAndAnAdvertisedOneWouldNot(t *testing.T) {
+	target := discoveredTopology(t, advertisedBroker(1, "broker-1.internal", 9093))
+	peer := newAdvertisedPeer(t)
+	resolver := newHostResolver().resolving(t, "broker-1.internal", "10.20.0.1")
+	_ = measure(t, target, tcpPlan(resolver, newAdvertisedDialer(peer)))
+
+	bootstrapLookup := probe.EvidenceID(vocabulary.StepDNSLookup, "primary.internal")
+	anchor := anchorFor(t, target.builder, "primary.internal:9092", bootstrapLookup)
+	graph := freeze(t, target.builder)
+
+	// The rules' ownership test, written out: a sweep is the operator's exactly
+	// when its DNS root is a direct child of a requested-target anchor.
+	ownedBy := func(lookup domain.EvidenceID) bool {
+		for _, id := range graph.Children(anchor) {
+			if id == lookup {
+				node, ok := graph.Node(id)
+				return ok && node.Step() == vocabulary.StepDNSLookup
+			}
+		}
+		return false
+	}
+
+	if !ownedBy(bootstrapLookup) {
+		t.Error("the bootstrap sweep is not owned by the requested target; once Kafka " +
+			"composition exists, generic DNS/TCP diagnosis would say nothing about it")
+	}
+
+	broker := brokerByNode(t, target, 1, "broker-1.internal")
+	advertisedLookup := domain.EvidenceID(scopedLookupID(t, broker))
+	if ownedBy(advertisedLookup) {
+		t.Error("the advertised sweep is owned by the requested target; generic diagnosis " +
+			"would duplicate KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE")
+	}
+
+	// And the bootstrap sweep has the shape the rules descend through, so the
+	// ownership test is not passing on an empty subtree.
+	connects := 0
+	for _, id := range graph.Children(bootstrapLookup) {
+		if node, ok := graph.Node(id); ok && node.Step() == vocabulary.StepTCPConnect {
+			connects++
+		}
+	}
+	if connects == 0 {
+		t.Error("the bootstrap sweep has no connection nodes; the assertion is vacuous")
+	}
+}
