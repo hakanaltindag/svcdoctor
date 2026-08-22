@@ -752,6 +752,56 @@ forcing a process exit code. Whether a run that never reached a session should
 *look* clean in a terminal is a renderer question, and the record says so instead
 of answering it with severity.
 
+### 5.8 Kafka BASIC: decided in Phase 6.0, not implemented
+
+Five records fix Kafka's prerequisites before any composition root exists. Each is
+**Accepted**; none describes shipped code. `internal/adapter/kafka` has no production
+importer today, so no Kafka stage is product-reachable.
+
+**Discovery does not widen secret authority (ADR 0050).**
+
+> Discovery may create evidence; discovery must not create secret authority.
+
+A Metadata response is evidence obtained from the authenticated bootstrap peer, never
+authorization to send a credential elsewhere. A credential is presented on exactly one
+connection — the selected bootstrap path — and advertised broker measurement stays
+credential-free DNS, TCP and TLS, as ADR 0033 already had it. Verified TLS to the
+bootstrap endpoint proves endpoint identity, not transferable cluster-wide authority;
+Kafka has no cluster-identity assertion a client can verify. Authenticating a discovered
+broker requires a new explicit authority decision, not a side effect of another phase.
+
+**Run completeness is asymmetric (ADR 0051).** PASS is existential — one working address
+resolves a logical advertisement. FAIL is universal — the negative claim *this endpoint
+was not reachable* holds only when no selectable path was left unmeasured. A refused
+address beside an address that timed out locally therefore leaves the run **incomplete**,
+while a passing address beside one that timed out does not. `Result.Incomplete()` is
+reused; no schema change.
+
+**The product outcome is what was obtained (ADR 0052).** Kafka has no session, so the
+renderer's terminal line becomes a per-service `outcome`, and Kafka's is
+`Kafka metadata obtained` — narrower than *cluster* metadata, because the request is
+Metadata v1 with `Topics = []` and returns no topic, partition, replica or ISR state.
+Topology is a separate count of advertised broker endpoints **reached**, past tense, with
+`not measured` never collapsed into `not reached`, and never `usable` — nothing
+authenticates a discovered broker.
+
+**Generic requested-target TLS is endpoint-scoped (ADR 0053).** DNS and TCP claims concern
+a logical address set and withhold on partial success; a certificate is presented by one
+endpoint, so a sibling succeeding cannot falsify what this one presented. Five codes,
+carrying no service prefix and none mirroring a `FailureClass`. Kafka bootstrap composition
+is its first production producer, which is why it is sequenced before that composition
+(§12.1).
+
+**SCRAM's shared core is constrained in advance (Phase 6.2).** The RFC 5802 derivation is
+already implemented for PostgreSQL in `internal/adapter/postgres/wire/scram.go` using the
+standard library only, so completing Kafka SCRAM adds **no module dependency**. Extracting
+it into a shared package is acceptable in principle and subject to a dedicated security
+review before implementation. The shared core must not import `internal/security` or `net`,
+must not call `security.Reveal`, perform I/O, log plaintext, put plaintext in errors or
+retain connection state; it accepts plaintext only as a short-lived argument and returns
+derived protocol material. `Reveal` stays in wire packages and its call-site count is
+unchanged by extraction unless a separate security record authorizes otherwise.
+
 ## 6. Diagnosis
 
 Diagnosis consumes normalized evidence only.
@@ -1082,6 +1132,42 @@ Additional claim rules:
 - Unknown version blocks version-dependent claims.
 
 Short-circuiting is part of correctness, not merely an optimization.
+
+### 12.1 Evidence that can fail does not ship before something can explain it
+
+**Decided in ADR 0054. Accepted as policy; mechanical enforcement is deferred.**
+
+> A production-reachable FAIL-producing evidence stage must not be introduced unless
+> every reachable FAIL outcome has a diagnosis owner, or an Accepted ADR explicitly
+> records evidence-only behaviour as intentional and explains why it is safe.
+
+> UNKNOWN and SKIPPED outcomes must have an explicit visibility policy whenever their
+> absence from the findings list could make a report appear complete or healthy when it
+> is neither. The policy may be a finding, run-level visibility such as
+> `Result.Incomplete()`, or a recorded decision that the evidence node alone suffices —
+> but not silence by default.
+
+The invariant exists because the opposite failed repeatedly during PostgreSQL closure:
+`findings: 0` beside `status: OK` and a broken L3 (closed by ADR 0044), requested-target
+transport failures with no owner (ADR 0043), a missing credential producing a graph in
+which every step passed (ADR 0046), and a local timeout visible as nothing at all
+(ADR 0047). Each was found late, by audit rather than by the phase that added the
+producer, because a missing finding fails no test and looks exactly like a healthy target.
+
+Two consequences bind planning:
+
+- **Owner before producer.** When a phase would introduce a producer whose failures have
+  no owner, the owner lands first, in its own phase. This is why generic requested-target
+  TLS diagnosis is sequenced before `DiagnoseKafka` composition.
+- **The escape hatch is a record, not an omission.** Evidence-only is legitimate — ADR 0033's
+  advertised sweep was deliberately evidence-only for two phases — provided an Accepted ADR
+  argues it and states a reopen condition.
+
+Enforcement is a **per-service closure test**, specified in ADR 0054 §5 and not yet written:
+it enumerates production-reachable FAIL, UNKNOWN and SKIPPED outcomes per step and fails on
+any that is reachable with neither an owner nor a recorded exemption. A static lint cannot
+substitute, because reachability of a `FailureClass` from a composition root is not decidable
+from the import graph.
 
 ## 13. Execution budget, cancellation, and concurrency
 
