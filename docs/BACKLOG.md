@@ -2249,10 +2249,70 @@ expiring while the caller's context stays alive:
 - [x] Real loopback-socket regression tests, because none of the three reproduced through
       `net.Pipe` or a stub dialer; 13 mutations applied, 12 caught, all restored
 
-**Next: re-run the Phase 4.11c closure gate.** PostgreSQL BASIC is **not** marked complete by
-this phase, and no closure documentation was written.
+**Next: re-run the Phase 4.11c closure gate.** PostgreSQL BASIC was not marked complete by that
+phase, and no closure documentation was written there. It was re-run — see below.
 
-### Phase 5 — CLI, renderers and productization: NOT STARTED
+### Phase 4.11c-R2 — final PostgreSQL BASIC closure gate: PASSED
+
+**POSTGRESQL BASIC COMPLETE — FEATURE FREEZE AUTHORIZED.**
+
+The gate was read-only and re-derived every conclusion from committed source rather than from
+the previous phase reports. Recorded here because the gate itself wrote nothing.
+
+- [x] Five critical gates green: total FAIL ownership; no-credential cannot be silent; the
+      SSLRequest floor cannot be silent; execution/timing/redaction correct; generic TLS
+      **proven** unnecessary
+- [x] Zero unowned reachable FAIL outcomes. Every service floor is total over FAIL, and the
+      SSLRequest pair is total over its four reachable classes
+- [x] All three Phase 4.11d fixes reproduced independently against real loopback peers, not
+      by reading the tests that shipped with them
+- [x] Generic TLS proven from source, not deferred by assertion: `transport.Params.TLS` is nil
+      on the PostgreSQL path, its only production setter is Kafka's advertised sweep, and the
+      in-band handshake is parented to `postgres.ssl_request`. `tlsClaims` is total over the
+      TLS probe's six reachable FAIL classes
+- [x] `Σ(stage durations)` measured **not** equal to `run.Duration()` — 473µs of orchestration
+      gap on a 122ms run. Multi-path timings stay per subject with no averaging
+- [x] Determinism verified under address-order permutation
+- [x] Invariants unchanged: `FindingCode` 24, `FailureClass` 40, `Reveal` 2, dependencies 1,
+      `schemaVersion` 1
+
+**Feature freeze.** Bug fixes, security fixes, correctness fixes, CLI/renderer consumption,
+tests and documentation need no reopen. A new PostgreSQL probe stage, BASIC finding,
+target-health inference, timeout semantics, protocol fallback, retry, BASIC SQL query,
+performance interpretation or latency threshold does — recorded here with its condition.
+Generic TLS stays deferred; PostgreSQL DEEP stays separate.
+
+### Phase 5.0/5.0a — CLI and output decisions: COMPLETE
+
+**ADR 0048** (CLI and output boundary) and **ADR 0049** (credential input), both Accepted and
+neither implemented. No production Go code, no dependency, no schema change.
+
+- [x] Action-first tree confirmed; `inspect` and `diagnose kafka` deliberately not exposed
+- [x] `cmd` / `internal/cli` / `internal/app` / `internal/render` ownership fixed; the renderer
+      receives a report plus one boolean, never `app.Result`
+- [x] JSON is the canonical `domain.Report`; `Result.Incomplete()` stays out of the schema per
+      `docs/REPORT_SCHEMA.md` §8, and machines learn it from exit code 4
+- [x] stdout carries the artifact on 0, 1 and 4; stderr only on 2 and 3
+- [x] Exit precedence unchanged from `docs/SCOPE.md`: `3 > 2 > 4 > 1 > 0`
+- [x] WARN+OK and incomplete rendering made normative; `status OK` never prints bare
+- [x] Standard library only — no CLI framework, no colour library, no colour in v0.1
+- [x] `--password-file` / `--password-stdin`, mutually exclusive, no precedence, no literal flag
+
+### Phase 5 — CLI, renderers and productization: DECIDED, NOT IMPLEMENTED
+
+Sequence, JSON before the terminal renderer because JSON is a thin wrapper over an already
+canonical marshaller and therefore exercises the whole CLI spine with almost no presentation
+code:
+
+- **5.1** CLI spine + JSON: `cmd/svcdoctor`, `internal/cli`, local vantage, signal context,
+  flags, `ExitCode`, canonical JSON output. Retire `TestNoCLIOrRendererExists` and replace it
+  with positive boundary guards; add the `render-is-presentation-only` depguard rule when
+  `internal/render` gains its first Go file
+- **5.2** credential input (ADR 0049) and `--shareable`
+- **5.3** terminal renderer: stage tree, findings, session status, incompleteness, durations,
+  multi-path, golden tests
+- **5.4** release validation: real PostgreSQL through the actual binary — exit codes,
+  stdout/stderr discipline, JSON automation, text output, redaction, signals, security
 
 The action-first tree ADR 0041 fixed: `svcdoctor diagnose <service>`, with `inspect`
 reserved and its output contract deferred.

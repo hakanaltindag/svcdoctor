@@ -89,15 +89,23 @@ Optional only after explicit decision:
 
 ## CLI shape
 
-The primary interface is a service-specific subcommand:
+The primary interface is **action-first**:
 
 ```text
-svcdoctor kafka ...
-svcdoctor postgres ...
+svcdoctor diagnose postgres ...
+svcdoctor diagnose kafka ...
+svcdoctor inspect  postgres ...
 ```
 
-Subcommands come from explicit service registration at the composition root. Service type is
-never inferred from port numbers. See ADR 0011.
+ADR 0041 fixed this shape and partially supersedes ADR 0011's service-first tree; ADR 0011's
+reason for service-scoped flags survives, because `diagnose postgres --user` and
+`diagnose kafka --bootstrap` share nothing. Commands come from explicit wiring at a single
+composition point, never from a runtime registry, and service type is never inferred from port
+numbers.
+
+**v0.1 exposes one leaf command, `svcdoctor diagnose postgres`.** `inspect` is reserved with a
+deferred output contract, and `diagnose kafka` waits on a Kafka composition root. See ADR 0048
+for the full CLI and output boundary, and ADR 0049 for credential input.
 
 ## Outputs
 

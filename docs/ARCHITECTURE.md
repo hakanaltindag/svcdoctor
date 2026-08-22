@@ -160,7 +160,8 @@ is application orchestration and does not belong in a probe.
 
 **Application orchestration is decided and built for PostgreSQL.** `internal/app` holds the
 composition root; `cmd/svcdoctor` and `internal/render` still hold no Go code, and
-`test/integration/postgres` fails if either gains any. **ADR 0041** defines the run boundary
+`test/integration/postgres` fails if either gains any — a guard Phase 5.1 replaces with
+positive boundary checks when the CLI arrives. **ADR 0041** defines the run boundary
 it implements: one command is one run; the run owns the root context, one
 `GraphBuilder`, every continuation, the selection of at most one credential-bearing path,
 closure of the rest, the freeze, diagnosis and the `LOCAL_FULL` report — and owns no
@@ -183,6 +184,30 @@ only caller is a test."* The decisions a production root needs are collected in 
 The same split governs timeouts. A per-probe or per-chain deadline is transport-local. The
 whole-run execution budget, cancellation propagation, and the partial-run exit code in
 section 13 belong to the application boundary.
+
+**Below the application root, the output boundary is fixed by ADR 0048.** It is one chain, and
+each arrow crosses exactly once:
+
+```text
+internal/cli  →  internal/app  →  app.Result (Report + Incomplete)
+                                      ↓
+                   internal/cli selects the output security mode
+                   (LOCAL_FULL, or SHAREABLE_REDACTED via internal/security/redaction)
+                                      ↓
+                              internal/render
+```
+
+The command layer owns process outcome; the renderer owns presentation and owns nothing else.
+A renderer chooses no exit code, performs no diagnosis, applies no redaction and imports no
+adapter, probe, app or diagnosis package. Diagnosis always runs on the truthful `LOCAL_FULL`
+report, so redaction can never change what was concluded — only what a shared copy reveals.
+
+Two consequences of that chain are load-bearing rather than incidental, and ADR 0048 states
+them normatively. `SummaryStatus` and `Result.Incomplete()` are orthogonal, so a renderer must
+present the target-side status, whether a session was established, and whether execution
+completed as three separate facts. And `Result.Incomplete()` is not part of the report: a
+report cannot observe its own partiality (`docs/REPORT_SCHEMA.md` §8), so machine consumers
+learn it from the process exit code.
 
 This distinction is a boundary clarification, not a new decision: it follows from section 14
 and from the invariant that probes collect facts. `docs/BACKLOG.md` applies it to the phase
