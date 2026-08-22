@@ -7,13 +7,13 @@ Neither shows the product, and until Phase 3.6.5 nobody could see one without wr
 harness. This document closes that gap.
 
 **Scope, so this does not rot into fiction.** The examples are finding-level JSON, taken from
-real output of `internal/diagnosis/kafka.AdvertisedEndpointUnreachable` over real graphs. They
+real output of the rules in `internal/diagnosis/kafka` over real graphs. They
 are illustrative, not normative: **the tests are authoritative**, and where this file and
 `internal/diagnosis/kafka/*_test.go` disagree, the tests are right and this file is stale. Full
 reports are deliberately not reproduced — they are large, they are mostly evidence, and a
 pasted copy would drift within a phase.
 
-Only one finding exists today. This file grows one section per finding code.
+This file grows one section per finding code.
 
 ---
 
@@ -122,6 +122,79 @@ actionability depends on which address a real client picks, which svcdoctor does
 `ERROR` or `CRITICAL` finding", not "healthy". The failing address is fully recorded in the
 evidence graph; what was withheld is a conclusion, not the data. A consumer that gates only on
 `status` will not see this, by design — it is not a problem svcdoctor can prove.
+
+---
+
+## `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE`
+
+The counterpart: Metadata answered, and the endpoint it reported for a broker cannot be used at
+all. See ADR 0035.
+
+### Confirmed — the cluster advertised a broker with no host
+
+```json
+{
+  "code": "KAFKA_ADVERTISED_ENDPOINT_UNUSABLE",
+  "kind": "CONFIRMED",
+  "severity": "ERROR",
+  "confidence": "HIGH",
+  "layer": "L6",
+  "subject": { "kind": "ENDPOINT", "ref": ":9093" },
+  "summary": "Kafka advertised broker node 9 without a usable network endpoint",
+  "detail": "The Kafka Metadata exchange succeeded, and the host and port it reported for this broker do not name somewhere a client could connect. Both values are recorded on the referenced advertisement exactly as they arrived.\nThis is a property of what the cluster reported rather than of this vantage point: any client reading the same Metadata response receives the same endpoint.",
+  "evidenceRefs": [
+    "kafka.broker_advertised/kafka-bootstrap.prod.internal:9092/10.4.1.10/9/:9093",
+    "kafka.metadata/kafka-bootstrap.prod.internal:9092/10.4.1.10"
+  ],
+  "recommendations": [
+    { "action": "Check how this broker's advertised host and port are configured, and whether anything rewrites Kafka Metadata responses between the broker and this client" }
+  ],
+  "vantageDependent": false
+}
+```
+
+Three things are worth reading closely.
+
+**`vantageDependent` is `false`, and it is the only finding so far where it is.** The defect is
+in the values the cluster reported, so no other network position sees anything different.
+`false` is encoded rather than omitted precisely so that a reader is told this positively —
+it is the difference between "try from somewhere else" and "there is nothing to try".
+
+**The subject is `:9093`, and it is not repaired.** That is what the cluster advertised: a port
+with no host. Substituting a plausible hostname would invent the target the cluster failed to
+name. It also means the subject is an `ENDPOINT` that is not a usable endpoint, which is
+correct — the producer chose that kind and diagnosis does not overrule it.
+
+**Two references, and neither is transport.** Phase 3.4 runs no sweep for an advertisement it
+cannot turn into a target, so there is no DNS, TCP or TLS node to cite and none is invented.
+
+The subcase — missing host versus impossible port — is deliberately absent from the prose. A
+machine reads it from the cited advertisement's `kafka.broker.advertised_host` and
+`kafka.broker.advertised_port` attributes; a human reads it off the subject at a glance.
+
+The accompanying summary block:
+
+```json
+{ "status": "PROBLEMS_FOUND", "firstBrokenLayer": "L6",
+  "findingCountsBySeverity": { "info": 0, "warn": 0, "error": 1, "critical": 0 },
+  "skippedEvidenceCount": 0, "unknownEvidenceCount": 0 }
+```
+
+Here `firstBrokenLayer` is **L6, the same as the finding's `layer`** — because the advertisement
+node is the only `FAIL` in the run and it is an L6 node. Compare the reachability example above,
+where the finding is `L6` and the first broken layer is `L2`. Both reports are consistent;
+`docs/REPORT_SCHEMA.md` section 7.5 says why.
+
+### The two Kafka findings never both fire
+
+```text
+advertisement PASS  ->  a usable endpoint existed, transport ran   ->  UNREACHABLE (or nothing)
+advertisement FAIL  ->  no endpoint could be formed, nothing ran   ->  UNUSABLE
+```
+
+The reachability rule requires `PASS` and the usability rule requires `FAIL`, so one
+advertisement can never carry both codes. Nothing suppresses anything; the predicates are
+complementary on a single field.
 
 ---
 

@@ -65,10 +65,19 @@ not observe which address a client would select, and an unfinished measurement n
 remote failure — it becomes a `HYPOTHESIS` at `WARN`, or nothing at all. `Origin` was examined
 a third time and stays deferred (ADR 0034).
 
-- `internal/diagnosis/kafka` — `AdvertisedEndpointUnreachable`, the rule behind
-  `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` (Phase 3.6)
+- `internal/diagnosis/kafka` — the Kafka rules: `AdvertisedEndpointUnreachable` behind
+  `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` (Phase 3.6), and `UnusableAdvertisement` behind
+  `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE` (Phase 3.7)
 - `internal/service/kafka` — a leaf holding the three Kafka constants both the adapter and the
   rule name. It imports `internal/domain` and nothing else
+
+**A second finding covers what the first deliberately cannot.** When Metadata reports a broker
+with no host, or a port outside the range a port can occupy, no endpoint exists to measure and
+"unreachable" would be false — nothing was reached because nothing was tried.
+`KAFKA_ADVERTISED_ENDPOINT_UNUSABLE` states that narrower claim, and it is the first finding
+marked `vantageDependent: false`: the defect is in the values the cluster reported, so no other
+network position sees anything different. It stops short of naming a cause, because Metadata
+says what a broker reports and never how it arrived at it (ADR 0035).
 
 **The rule anchors at the advertisement and walks down.** It enumerates the advertisement
 nodes and follows derivation edges to the sweep each one caused; it never meets a transport

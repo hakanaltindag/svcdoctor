@@ -38,7 +38,8 @@ TLS_CERTIFICATE_EXPIRED
 ```
 
 > **These remain naming examples. No generic transport rule is authorized, and none exists.**
-> The only finding code svcdoctor produces today is `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`.
+> The finding codes svcdoctor produces today are `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`
+> and `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE`.
 > ADR 0034 gives advertised-endpoint transport failures to the Kafka rule outright, so a
 > generic rule firing on the same evidence would duplicate it. Whether generic transport
 > findings should exist *at all* is still open, and it is blocked on a fact rather than on
@@ -219,7 +220,7 @@ Layer order is defined in `docs/ARCHITECTURE.md` section 2:
 L0 config -> L1 DNS -> L2 TCP -> L3 TLS -> L4 protocol -> L5 auth -> L6 topology
 ```
 
-## 6. Initial known finding
+## 6. Known findings
 
 ### `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`
 
@@ -288,3 +289,37 @@ test in general form.
 selects that path succeeds), no partial-reachability finding, no cluster-level aggregate, and
 no `KAFKA_CLUSTER_UNHEALTHY`, `KAFKA_BROKER_DOWN` or `KAFKA_NETWORK_BROKEN`. Each is recorded
 with the fact whose absence blocks it.
+
+---
+
+### `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE`
+
+The second Kafka finding, and the counterpart to the one above. Settled and implemented
+together by **ADR 0035**, because every structural question it could have raised was already
+answered by ADR 0034.
+
+| | |
+|---|---|
+| **Trigger** | The `kafka.metadata` exchange is PASS, and the advertisement it carried is FAIL with `PROTOCOL_UNEXPECTED_RESPONSE` — the producer's record that the reported host and port do not name somewhere a client could connect |
+| **Claim** | The cluster answered Metadata, and the endpoint it reported for this broker cannot be used. Never that a configuration is wrong: Metadata says what a broker reports, not how it arrived at it |
+| **Kind / severity / confidence** | `CONFIRMED` / `ERROR` / `HIGH`. ERROR on the same per-subject reading as the reachability finding — a broker no client can connect to prevents correct use of that broker — and not by inheritance from it |
+| **Vantage** | **`vantageDependent: false`**, and this is the sharpest contrast with the finding above. The defect is in the values that arrived, so every client reading the same response receives the same unusable pair from any position. Saying `true` would invite a retry that cannot help |
+| **Subject** | The advertisement's own subject, unrepaired: `:9093` for a missing host, `broker.internal:-1` for an impossible port |
+| **Evidence** | The `kafka.metadata` node and the `kafka.broker_advertised` node. No transport evidence, because none exists — Phase 3.4 runs no sweep for an advertisement it cannot turn into a target |
+| **Layer** | `L6`, and here it coincides with `summary.firstBrokenLayer`, because the advertisement is the only FAIL node in such a run. In the reachability finding the two differ; `docs/REPORT_SCHEMA.md` section 7.5 explains why both are correct |
+
+**The two Kafka findings are mutually exclusive by construction.** An advertisement is PASS
+exactly when it names a usable endpoint and FAIL exactly when it does not; the reachability
+rule requires PASS and this one requires FAIL. No engine suppression exists, and none is needed.
+
+**The subcase is structural, not prose.** `kafka.broker.advertised_host` and
+`kafka.broker.advertised_port` on the cited node distinguish "no host" from "impossible port"
+exactly, so the summary states one stable claim and does not vary across them. Section 3.1
+item 13 is the reason: a consumer that needs the distinction reads the evidence, never the
+sentence.
+
+**Not covered, and recorded as a gap rather than as coverage:** an entry whose text cannot be a
+subject reference at all — a control character, invalid UTF-8, leading whitespace — produces
+**no evidence node**, and survives only as `kafka.metadata.unrepresentable_entry_count` on the
+exchange. A finding with nothing to reference is not expressible under ADR 0014. See ADR 0035
+section 1.

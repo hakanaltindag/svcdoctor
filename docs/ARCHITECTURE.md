@@ -452,8 +452,9 @@ with the generic transport chain — DNS, TCP and TLS — and nothing else
 Phase 3.5 decided what may be concluded from advertised-endpoint reachability
 evidence, before any rule was written (**ADR 0034**); Phase 3.6 implemented that
 decision as `internal/diagnosis/kafka.AdvertisedEndpointUnreachable`, svcdoctor's
-first rule. One idea in it generalizes past Kafka and belongs here rather than in
-a service record:
+first rule, and Phase 3.7 added `UnusableAdvertisement` beside it (**ADR 0035**).
+One idea in them generalizes past Kafka and belongs here rather than in a service
+record:
 
 > **A diagnosis rule that starts at a service fact and walks derivation edges
 > downward has its context by construction. A rule that starts at a transport
@@ -473,6 +474,14 @@ unchanged for a generic transport rule, and why svcdoctor authorizes the first
 and declines the second. The same asymmetry will apply to PostgreSQL: a rule
 anchored at a discovered replica endpoint can state its impact; an unanchored
 transport rule still cannot.
+
+**Two anchored rules partition their input rather than competing for it.** The
+second Kafka rule needed no arbitration with the first, and that is a property of
+the anchor rather than of good manners: both start at the same kind of node and
+branch on one field of it that the producer already commits to, so their trigger
+conditions are complementary by construction. A third rule over the same node
+should establish the same thing about itself, on the graph where the mechanisms
+that enforce it come apart — the ordinary cases hide which one is doing the work.
 
 Two consequences worth keeping visible:
 

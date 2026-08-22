@@ -46,6 +46,7 @@ does not overturn it, and both remain authoritative.
 | 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4 |
 | 0033 | An advertised endpoint is measured once per advertisement, and only at L1-L3 | Accepted | The consumer 0031 was built to feed and the first caller of 0032. Answers the execution-dedup question by deliberately not deduplicating |
 | 0034 | A Kafka rule owns advertised-endpoint reachability, anchored at the advertisement | Accepted (policy), implemented in Phase 3.6 | Revisits the two questions 0017 deferred and answers them for service-anchored rules. Authorizes one finding code and fixes every field of it; `internal/diagnosis/kafka` implements it and invents nothing |
+| 0035 | An unusable broker advertisement is its own claim, and it is not vantage-dependent | Accepted | Takes the case 0034 §14 placed out of scope. First finding with `vantageDependent: false`; records a pre-existing redaction defect it surfaced and declines to fix it here |
 
 ## Decisions that govern work not yet written
 
@@ -130,6 +131,19 @@ A deferral is a decision too, and each names the condition that should reopen it
   transport policy, and a node that positively records "no TLS was attempted".
   The last is the one that would give a plaintext policy refusal a truthful
   blocker; today it correctly has none.
+
+- **0035** takes the one case 0034 explicitly deferred and is deliberately small: the
+  structural work — anchoring, the ownership test, per-subject severity, the leaf
+  vocabulary package — all existed already, so policy and rule land together. Its
+  substance is three things 0034's reasoning does *not* transfer to. **Vantage
+  dependence is false**, because the defect is in the values that arrived rather
+  than in the path to them, and copying `true` would have invited a retry that
+  cannot help. **The claim stops short of a cause**: Metadata says what a broker
+  reports, never how it arrived at it, so `advertised.listeners` is never named.
+  And the two Kafka findings are shown to be **mutually exclusive by
+  construction** rather than merely different, on the graph where the two
+  mechanisms that enforce it come apart. It also records a redaction defect it
+  surfaced and did not cause, and declines to fix it in a diagnosis phase.
 
 - **0034** is a policy record: it decides what may be concluded from 0033's
   evidence and implements nothing itself; Phase 3.6 implements it exactly. It closes the generic-versus-service overlap

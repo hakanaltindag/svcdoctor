@@ -55,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule, 3.6.5 diagnosis output review complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule, 3.6.5 diagnosis output review, 3.7 unusable advertisement diagnosis complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -1093,9 +1093,11 @@ code, no severity enum change, no schema change, no adapter or probe behaviour c
       **Reopen when** svcdoctor diagnoses admin operations
 - [ ] **A TLS-all-failed sweep is reported as unreachable**, with the failing layer and class
       in the summary. **Reopen when** a certificate-shaped Kafka finding refines it out
-- [ ] **An unusable advertisement produces no reachability finding.** A configuration finding
+- [x] **An unusable advertisement produces no reachability finding.** A configuration finding
       for "the cluster advertises an endpoint no client can act on" is genuinely independent
-      and deserves its own decision. **Reopen when** that decision is taken
+      and deserves its own decision. **That decision was taken in Phase 3.7 (ADR 0035)**, which
+      added `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE`. The reachability rule is unchanged: the two
+      are mutually exclusive by construction
 
 ### Phase 3.6 — Kafka advertised endpoint diagnosis rule (complete)
 
@@ -1206,6 +1208,68 @@ partial-success semantics changed.
 - [ ] **A shareable report's `evidenceRefs` become opaque** (`evidence-004`), so raw shareable
       JSON is materially harder to read than raw local JSON. Correct per ADR 0018 and worth
       knowing before someone reads one without a renderer
+
+### Phase 3.7 — Kafka unusable advertisement diagnosis (complete)
+
+**The second Kafka finding**, taking the case ADR 0034 §14 placed out of scope. Policy and rule
+land in the same phase — see **ADR 0035** — because every structural question was already
+settled and only three small ones were open.
+
+- [x] `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE` in `internal/diagnosis/kafka`, anchored at
+      `kafka.broker_advertised`. `CONFIRMED` / `ERROR` / `HIGH`, subject reused unrepaired,
+      two evidence references and no transport evidence, one recommendation, no discriminator
+- [x] **`vantageDependent: false` — the first finding in the repository where it is.** The
+      defect is in the values that arrived, not in the path to them, so no other network
+      position sees anything different. Copying `true` from the reachability rule would have
+      been an actively misleading field inviting a retry that cannot help
+- [x] **The claim stops short of a cause.** Metadata says what a broker reports, never how it
+      arrived at it — a proxy or a service mesh produces the same bytes — so
+      `advertised.listeners` is never named, in the code, the summary, the detail or the
+      recommendation
+- [x] **The two Kafka findings are mutually exclusive by construction**, not by suppression:
+      the reachability rule requires a PASS advertisement and this one requires FAIL. Pinned on
+      the drift graph where the two enforcing mechanisms come apart
+- [x] **No new field, enum, attribute or moved constant.** The subcase — missing host versus
+      impossible port — is already distinguishable from `kafka.broker.advertised_host` and
+      `kafka.broker.advertised_port` on the cited node, so prose does not duplicate it
+- [x] Ten mutations run; **two escaped and exposed real test gaps**, both closed (below)
+
+**Two test gaps a mutation run found, and what they were hiding:**
+
+- [x] **The state check was untestable behind the class check.** Every withholding case was
+      also rejected by the failure class, so deleting `State() != FAIL` changed no result. An
+      `UNKNOWN` advertisement carrying the expected class now isolates it — "not determined"
+      must never become "determined to be unusable"
+- [x] **Exclusivity was guaranteed by the wrong mechanism.** In every real graph the
+      reachability rule stays silent for two reasons at once — the advertisement is not PASS
+      *and* there is no sweep — so the state check could be removed undetected. A drift graph
+      with a sweep beneath an unusable advertisement separates them
+
+**Deliberately not done:** no aggregate finding, no generic protocol finding, no Kafka failure
+class, no structured reason field, no engine change, no schema change, no domain change, no
+`Origin`, no dependency change, no new `security.Reveal` call site, and no change to the Phase
+3.6 rule beyond extracting a shared node-identifier helper.
+
+**Open, recorded rather than solved:**
+
+- [ ] **A pre-existing redaction defect, surfaced here and not caused here.** A broker
+      advertising `host="" port=0` produces the subject `:0`. Redaction classifies it as a
+      hostname, then `verifyNoResidual` scans the encoded report for the literal `:0` — which
+      every report contains, in `"info":0` among the severity counts and in any timestamp with
+      a zero in its seconds field. The scan matches its own punctuation and **redaction fails
+      closed on a transformation that succeeded**, so no shareable report can be produced for
+      such a run. It fails closed rather than leaking, which is the right direction, but it
+      blocks a legitimate report. Pinned by a test named as a known defect. **Not fixed here:**
+      widening the residual scan is a change to a security-critical component and deserves its
+      own decision rather than a patch inside a diagnosis phase
+- [ ] **An unrepresentable advertisement has no finding, and cannot have one yet.** An entry
+      whose text cannot be a subject reference — a control character, invalid UTF-8, leading
+      whitespace — produces **no evidence node** and survives only as
+      `kafka.metadata.unrepresentable_entry_count` on the exchange. A finding with nothing to
+      reference is not expressible under ADR 0014. **Reopen when** that case needs diagnosing
+- [ ] **An `ENDPOINT` subject that is not a usable endpoint.** Reusing the producer's kind is
+      right — the alternative invents a target — but the oddity is real. **Reopen when** a
+      subject kind for a reported-but-unusable target is justified on its own evidence
 
 ### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
 
