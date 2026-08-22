@@ -96,7 +96,7 @@ var (
 //
 // A context alone cannot stop a Read that is already waiting, so the context's
 // deadline is applied to the socket and a watcher expires it if the context ends
-// first. The returned function clears both.
+// first. The returned function stops the watcher and clears the deadline.
 //
 // Clearing is load-bearing here rather than tidy. The connection this runs over
 // is handed to a TLS handshake and then to a later protocol step; a deadline
@@ -104,13 +104,47 @@ var (
 // misattributed to them. internal/adapter/kafka/wire makes the same arrangement
 // for the same reason, and the two are deliberately separate copies: a shared
 // helper would be a generic transport utility living in a service package.
+//
+// # Release waits for the watcher, and that is not tidiness
+//
+// An earlier version returned as soon as it had closed `done` and cleared the
+// deadline. That left a race with teeth: if the caller's context was cancelled at
+// about the same moment — which is exactly what a `defer cancel()` on a derived
+// context does — the watcher goroutine could find **both** channels ready, pick
+// `ctx.Done()`, and set an expired deadline *after* release had cleared it. The
+// connection was then permanently unusable, and nothing afterwards would clear
+// it, because release had already run.
+//
+// It surfaced in Phase 4.5b, on the one path where a write follows a bounded read
+// on the same socket: the Terminate that closes an established session failed with
+// `i/o timeout` against a peer that was plainly still listening. Before that path
+// existed the bug was invisible, because every other caller either closed the
+// connection or handed it straight on.
+//
+// Waiting for the watcher to exit before clearing makes the documented invariant
+// — *on return, this call has left no deadline behind* — actually true, whatever
+// order the runtime chose. The wait is a goroutine exit, not I/O.
+//
+// **The guard is TestHealthySessionSendsTerminate**, in the adapter package: it
+// drives the real path and fails deterministically against the broken version. A
+// unit test at this level was written and then deleted, because it could not be
+// made to reproduce — the watcher is already parked in its select by the time
+// release runs, so a sequential loop, and even thirty-two concurrent ones, passed
+// against code that was demonstrably wrong. A test that cannot fail is not
+// coverage, and leaving it would have claimed protection this level cannot give.
+//
+// internal/adapter/kafka/wire has the same shape and has not been changed here:
+// no Kafka path writes to a connection after a bounded read, so nothing triggers
+// it there. Recorded rather than fixed silently in a phase that does not own it.
 func bindDeadline(ctx context.Context, conn net.Conn) func() {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
 
 	done := make(chan struct{})
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		select {
 		case <-ctx.Done():
 			// Expiring the deadline unblocks whichever side is waiting.
@@ -121,6 +155,9 @@ func bindDeadline(ctx context.Context, conn net.Conn) func() {
 
 	return func() {
 		close(done)
+		// The watcher can no longer touch the connection once this returns, so
+		// the clear below is the final word on its deadline.
+		<-stopped
 		_ = conn.SetDeadline(time.Time{})
 	}
 }
