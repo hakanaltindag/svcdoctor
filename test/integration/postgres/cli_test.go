@@ -420,3 +420,391 @@ func interrupt(t *testing.T, bin string, settle time.Duration) (inv invocation, 
 	code := cmd.ProcessState.ExitCode()
 	return invocation{stdout: stdout.String(), stderr: stderr.String(), code: code}, code < 0
 }
+
+// --- Phase 5.2: credential sources and shareable output -----------------------
+
+// runCLIStdin runs the command with material on its stdin.
+func runCLIStdin(t *testing.T, bin, stdin string, args ...string) invocation {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	code := cmd.ProcessState.ExitCode()
+	if err != nil && code < 0 {
+		t.Fatalf("running the command: %v\nstderr: %s", err, stderr.String())
+	}
+	return invocation{stdout: stdout.String(), stderr: stderr.String(), code: code}
+}
+
+// passwordFile writes credential material for the file source.
+func passwordFile(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+// scramArgs is the invocation that reaches the real SCRAM endpoint.
+func scramArgs(t *testing.T) []string {
+	t.Helper()
+	return []string{"diagnose", "postgres",
+		"--host", pgHost,
+		"--port", strconv.Itoa(pgTLSPort),
+		"--user", scramRole,
+		"--database", database,
+		"--tls-ca-file", certPath(t),
+		"--tls-server-name", pgHost,
+		"--timeout", "30s",
+	}
+}
+
+// authenticationPassed reports whether the run authenticated, structurally.
+func authenticationPassed(t *testing.T, decoded map[string]any) bool {
+	t.Helper()
+	evidence, _ := decoded["evidence"].(map[string]any)
+	nodes, _ := evidence["nodes"].([]any)
+	for _, n := range nodes {
+		node, _ := n.(map[string]any)
+		if node["step"] == string(servicepostgres.StepAuthentication) &&
+			node["state"] == domain.StatePass.String() {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCLICorrectCredentialReachesASession covers both sources against the real
+// SCRAM server.
+//
+// The password contains a space and a tilde on purpose: it is the fixture the
+// adapter uses to prove printable-ASCII handling, and it is exactly the material
+// a TrimSpace would corrupt.
+func TestCLICorrectCredentialReachesASession(t *testing.T) {
+	bin := binary(t)
+
+	tests := []struct {
+		name    string
+		run     func() invocation
+		payload string
+	}{
+		{
+			name:    "from a file",
+			payload: scramPassword,
+			run: func() invocation {
+				return runCLI(t, bin, append(scramArgs(t),
+					"--password-file", passwordFile(t, scramPassword+"\n"))...)
+			},
+		},
+		{
+			name:    "from stdin",
+			payload: scramPassword,
+			run: func() invocation {
+				return runCLIStdin(t, bin, scramPassword,
+					append(scramArgs(t), "--password-stdin")...)
+			},
+		},
+		{
+			// The trailing newline every editor adds must not change the secret.
+			name:    "from a file with no trailing newline",
+			payload: scramPassword,
+			run: func() invocation {
+				return runCLI(t, bin, append(scramArgs(t),
+					"--password-file", passwordFile(t, scramPassword))...)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := tt.run()
+			decoded := inv.canonical(t)
+
+			if !authenticationPassed(t, decoded) {
+				t.Errorf("authentication did not pass; findings = %v", findingCodes(t, decoded))
+			}
+			if !sessionEstablished(t, decoded) {
+				t.Error("no passing session node")
+			}
+			if codes := findingCodes(t, decoded); len(codes) != 0 {
+				t.Errorf("a healthy authenticated run produced %v", codes)
+			}
+			if got := summaryStatus(t, decoded); got != "OK" {
+				t.Errorf("status = %s, want OK", got)
+			}
+			if inv.code != 0 {
+				t.Errorf("exit = %d, want 0", inv.code)
+			}
+			// The credential reached the endpoint and nothing else.
+			if strings.Contains(inv.stdout, tt.payload) {
+				t.Error("the credential reached stdout")
+			}
+			if strings.Contains(inv.stderr, tt.payload) {
+				t.Error("the credential reached stderr")
+			}
+		})
+	}
+}
+
+// TestCLIWrongCredentialIsRejected covers the other authenticated outcome.
+func TestCLIWrongCredentialIsRejected(t *testing.T) {
+	bin := binary(t)
+	const wrong = "CANARY-WRONG-PASSWORD-9d2f"
+
+	for _, source := range []string{"file", "stdin"} {
+		t.Run(source, func(t *testing.T) {
+			var inv invocation
+			if source == "file" {
+				inv = runCLI(t, bin, append(scramArgs(t),
+					"--password-file", passwordFile(t, wrong+"\n"))...)
+			} else {
+				inv = runCLIStdin(t, bin, wrong, append(scramArgs(t), "--password-stdin")...)
+			}
+
+			decoded := inv.canonical(t)
+			codes := findingCodes(t, decoded)
+			want := string(diagnosispostgres.CodeCredentialsRejected)
+			if len(codes) != 1 || codes[0] != want {
+				t.Fatalf("findings = %v, want exactly [%s]", codes, want)
+			}
+			if got := summaryStatus(t, decoded); got != "PROBLEMS_FOUND" {
+				t.Errorf("status = %s, want PROBLEMS_FOUND", got)
+			}
+			if sessionEstablished(t, decoded) {
+				t.Error("a session was established with a wrong credential")
+			}
+			if inv.code != 1 {
+				t.Errorf("exit = %d, want 1", inv.code)
+			}
+			if strings.Contains(inv.stdout, wrong) || strings.Contains(inv.stderr, wrong) {
+				t.Error("the rejected credential appeared in the output")
+			}
+		})
+	}
+}
+
+// TestCLIShareableRedactsARealRun is the shareable projection end to end.
+func TestCLIShareableRedactsARealRun(t *testing.T) {
+	bin := binary(t)
+
+	local := runCLI(t, bin, append(scramArgs(t),
+		"--password-file", passwordFile(t, scramPassword+"\n"))...)
+	shared := runCLI(t, bin, append(scramArgs(t),
+		"--password-file", passwordFile(t, scramPassword+"\n"), "--shareable")...)
+
+	localDoc := local.canonical(t)
+	sharedDoc := shared.canonical(t)
+
+	if got := outputModeOf(t, localDoc); got != "LOCAL_FULL" {
+		t.Errorf("default output mode = %s, want LOCAL_FULL", got)
+	}
+	if got := outputModeOf(t, sharedDoc); got != "SHAREABLE_REDACTED" {
+		t.Errorf("--shareable output mode = %s, want SHAREABLE_REDACTED", got)
+	}
+
+	// The diagnosis survives: the session still passed and the exit is unchanged.
+	if !sessionEstablished(t, sharedDoc) {
+		t.Error("the shareable report lost the passing session")
+	}
+	if local.code != shared.code || shared.code != 0 {
+		t.Errorf("exit local = %d, shareable = %d, want 0 both", local.code, shared.code)
+	}
+
+	// The identities are gone from the shared copy, and were present locally.
+	if !strings.Contains(local.stdout, pgHost) {
+		t.Fatal("the local report does not contain the host; the test proves nothing")
+	}
+	if strings.Contains(shared.stdout, pgHost) {
+		t.Error("the shareable report still contains the endpoint address")
+	}
+	for _, identity := range []string{scramRole, database, scramPassword} {
+		if strings.Contains(shared.stdout, identity) {
+			t.Errorf("the shareable report still contains %q", identity)
+		}
+	}
+
+	// Correlation survives: every evidence reference a finding cites still
+	// resolves to a node in the redacted graph.
+	requireJSONRefsResolve(t, sharedDoc)
+}
+
+// TestCLIShareableKeepsAnErrorReportAtExitOne pins the other status.
+func TestCLIShareableKeepsAnErrorReportAtExitOne(t *testing.T) {
+	bin := binary(t)
+
+	inv := runCLI(t, bin, append(scramArgs(t),
+		"--password-file", passwordFile(t, "CANARY-WRONG\n"), "--shareable")...)
+
+	decoded := inv.canonical(t)
+	if got := outputModeOf(t, decoded); got != "SHAREABLE_REDACTED" {
+		t.Errorf("output mode = %s", got)
+	}
+	if got := summaryStatus(t, decoded); got != "PROBLEMS_FOUND" {
+		t.Errorf("status = %s, want PROBLEMS_FOUND", got)
+	}
+	if inv.code != 1 {
+		t.Errorf("exit = %d, want 1; redaction may not change a conclusion", inv.code)
+	}
+	requireJSONRefsResolve(t, decoded)
+}
+
+// TestCLIInsecureTLSWithholdsTheCredential proves the committed transport policy
+// still owns the decision once the CLI can supply a credential.
+//
+// The channel is unverified, the credential-transport policy refuses it, and the
+// run reports that it withheld rather than that the endpoint refused. Nothing is
+// presented, so the wire's Reveal is never reached.
+func TestCLIInsecureTLSWithholdsTheCredential(t *testing.T) {
+	bin := binary(t)
+
+	inv := runCLI(t, bin, "diagnose", "postgres",
+		"--host", pgHost,
+		"--port", strconv.Itoa(pgTLSPort),
+		"--user", scramRole,
+		"--database", database,
+		"--tls-insecure",
+		"--password-file", passwordFile(t, scramPassword+"\n"),
+		"--timeout", "30s",
+	)
+
+	decoded := inv.canonical(t)
+	codes := findingCodes(t, decoded)
+	want := string(diagnosispostgres.CodeCredentialWithheld)
+	if len(codes) != 1 || codes[0] != want {
+		t.Fatalf("findings = %v, want exactly [%s]", codes, want)
+	}
+	if sessionEstablished(t, decoded) {
+		t.Error("a session was established over a channel the policy refuses")
+	}
+	if strings.Contains(inv.stdout, scramPassword) {
+		t.Error("the withheld credential appeared in the report")
+	}
+	// A withheld credential is svcdoctor's own refusal, not a target-side error.
+	if got := summaryStatus(t, decoded); got != "OK" {
+		t.Errorf("status = %s, want OK", got)
+	}
+	if inv.code != 0 {
+		t.Errorf("exit = %d, want 0", inv.code)
+	}
+}
+
+// TestCLICredentialSourceInvocationErrors covers the refusals through the binary.
+func TestCLICredentialSourceInvocationErrors(t *testing.T) {
+	bin := binary(t)
+	base := []string{"diagnose", "postgres", "--host", "db", "--user", "app"}
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"both sources", []string{"--password-file", "/tmp/x", "--password-stdin"}},
+		{"missing file", []string{"--password-file", "/nonexistent/password"}},
+		{"a directory", []string{"--password-file", t.TempDir()}},
+		{"a literal password flag", []string{"--password", "hunter2"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := runCLI(t, bin, append(append([]string{}, base...), tt.args...)...)
+			if inv.code != 2 {
+				t.Errorf("exit = %d, want 2", inv.code)
+			}
+			if inv.stdout != "" {
+				t.Errorf("stdout = %q, want empty", inv.stdout)
+			}
+			if inv.stderr == "" {
+				t.Error("stderr is empty")
+			}
+			if strings.Contains(inv.stderr, "hunter2") {
+				t.Error("the rejection echoed the value")
+			}
+		})
+	}
+}
+
+// TestCLIOversizedCredentialIsRefused proves the bound through the binary, and
+// that the refusal names neither the material nor its size.
+func TestCLIOversizedCredentialIsRefused(t *testing.T) {
+	bin := binary(t)
+	const canary = "CANARY-OVERSIZED"
+	oversize := canary + strings.Repeat("x", 8192)
+
+	for _, source := range []string{"file", "stdin"} {
+		t.Run(source, func(t *testing.T) {
+			base := []string{"diagnose", "postgres", "--host", "db", "--user", "app"}
+			var inv invocation
+			if source == "file" {
+				inv = runCLI(t, bin, append(base,
+					"--password-file", passwordFile(t, oversize))...)
+			} else {
+				inv = runCLIStdin(t, bin, oversize, append(base, "--password-stdin")...)
+			}
+
+			if inv.code != 2 {
+				t.Errorf("exit = %d, want 2", inv.code)
+			}
+			if inv.stdout != "" {
+				t.Errorf("stdout = %q, want empty", inv.stdout)
+			}
+			if strings.Contains(inv.stderr, canary) {
+				t.Error("the refusal carries the credential")
+			}
+			for _, size := range []string{"8208", "8192", "bytes"} {
+				if strings.Contains(inv.stderr, size) {
+					t.Errorf("the refusal carries %q, a secret-derived value", size)
+				}
+			}
+		})
+	}
+}
+
+func outputModeOf(t *testing.T, decoded map[string]any) string {
+	t.Helper()
+	section, ok := decoded["security"].(map[string]any)
+	if !ok {
+		t.Fatal("the report has no security section")
+	}
+	mode, _ := section["outputMode"].(string)
+	return mode
+}
+
+// requireJSONRefsResolve checks that every evidence reference a finding cites names
+// a node that exists, which is what makes a redacted report still usable.
+func requireJSONRefsResolve(t *testing.T, decoded map[string]any) {
+	t.Helper()
+
+	evidence, _ := decoded["evidence"].(map[string]any)
+	nodes, _ := evidence["nodes"].([]any)
+	known := map[string]bool{}
+	for _, n := range nodes {
+		node, _ := n.(map[string]any)
+		if id, ok := node["id"].(string); ok {
+			known[id] = true
+		}
+	}
+
+	findings, _ := decoded["findings"].([]any)
+	for _, f := range findings {
+		finding, _ := f.(map[string]any)
+		refs, _ := finding["evidenceRefs"].([]any)
+		if len(refs) == 0 {
+			t.Errorf("finding %v cites no evidence", finding["code"])
+		}
+		for _, r := range refs {
+			ref, _ := r.(string)
+			if !known[ref] {
+				t.Errorf("finding %v cites %q, which resolves to no node",
+					finding["code"], ref)
+			}
+		}
+	}
+}

@@ -192,6 +192,34 @@ linters:
                 redaction is structural; a regex scan is a safety net over known
                 values, not the mechanism
 
+        # The command boundary composes; it does not conclude.
+        # docs/ARCHITECTURE.md section 6, ADR 0048 section 3.
+        #
+        # internal/cli names concrete things on purpose — the system resolver and
+        # dialer, the PostgreSQL TLS plan, the local vantage producer, and from
+        # Phase 5.2 internal/security and internal/security/redaction, both
+        # authorized by ADR 0048 section 6 and ADR 0049 section 6.
+        #
+        # What it may never reach is diagnosis, which runs inside the application
+        # over frozen evidence — a command that could call a rule could publish a
+        # finding nobody measured — or a wire package, where the protocol and the
+        # only authorized security.Reveal live. forbidigo already bans the call;
+        # this bans the import that would put it in reach.
+        cli-composes-and-does-not-conclude:
+          files:
+            - "**/internal/cli/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
+              desc: the command boundary consumes a report; producing findings is diagnosis work
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter/postgres/wire
+              desc: a wire package holds the protocol and the authorized Reveal; the CLI reaches neither
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter/kafka
+              desc: no Kafka composition exists, and the CLI exposes no Kafka command
+            - pkg: os/exec
+              desc: the command runs no subprocesses
+            - pkg: net/http
+              desc: the command performs no network I/O of its own
+
         # A renderer explains a finished report and does nothing else.
         # docs/ARCHITECTURE.md section 6.4, ADR 0048 section 3.
         #

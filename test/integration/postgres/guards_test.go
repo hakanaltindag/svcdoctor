@@ -10,6 +10,9 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -112,11 +115,14 @@ func TestTheProductBoundaryExists(t *testing.T) {
 // It must also not reach a wire package, where the protocol and the one
 // authorized security.Reveal live.
 func TestTheCLIReachesOnlyTheApplication(t *testing.T) {
+	// internal/security and internal/security/redaction became authorized CLI
+	// imports in Phase 5.2: the command constructs the credential (ADR 0049) and
+	// owns the output-security choice (ADR 0048 §6). What stays forbidden is
+	// anything that would let it conclude something.
 	forbidden := []string{
 		"internal/diagnosis",
 		"internal/adapter/postgres/wire",
 		"internal/adapter/kafka",
-		"internal/security/redaction",
 	}
 	for path, imports := range importsUnder(t, filepath.Join(repoRoot(t), "internal", "cli")) {
 		for _, imported := range imports {
@@ -160,48 +166,50 @@ func TestTheRendererIsPresentationOnly(t *testing.T) {
 	}
 }
 
-// TestNoCredentialSurfaceExistsYet pins the Phase 5.1 boundary.
+// TestTheCredentialSurfaceIsExactlyTwoFlags replaces the Phase 5.1 guard that
+// asserted no credential surface existed at all.
 //
-// ADR 0049 decides how a secret arrives, and Phase 5.2 implements it. Until then
-// the CLI must have no credential flag and no way to build a Secret — so a run
-// with no credential produces POSTGRES_CREDENTIAL_NOT_CONFIGURED, which is a
-// truthful diagnosis rather than a usage error.
-func TestNoCredentialSurfaceExistsYet(t *testing.T) {
+// Phase 5.2 added one, so asserting its absence would now assert the opposite of
+// ADR 0049. What survives is the part that was actually load-bearing: exactly
+// two sources, both explicit, and none of the three the ADR refuses or defers.
+func TestTheCredentialSurfaceIsExactlyTwoFlags(t *testing.T) {
 	root := filepath.Join(repoRoot(t), "internal", "cli")
 
-	for path, imports := range importsUnder(t, root) {
-		for _, imported := range imports {
-			if strings.HasSuffix(imported, "internal/security") {
-				t.Errorf("%s imports internal/security; Phase 5.1 constructs no credential "+
-					"and must not be able to", path)
-			}
-		}
-	}
-
-	// Code, not comments. This package's comments explain at length *why* there
-	// is no credential flag and why --shareable waits for Phase 5.2, and a guard
-	// that could not tell an explanation from an implementation would forbid
-	// writing the explanation down.
+	var flags []string
 	for _, path := range goFilesIn(t, root) {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
 		code := codeWithoutComments(t, path)
-		for _, forbidden := range []string{
-			"password", "Password", "PGPASSWORD", "shareable", "Shareable",
-			"Reveal", "os.Getenv",
-		} {
-			if strings.Contains(code, forbidden) {
-				t.Errorf("%s references %q in code; credential input is ADR 0049 and "+
-					"Phase 5.2, and --shareable is Phase 5.2", path, forbidden)
+
+		// The declared flag names, read from the fs.X("name", ...) calls.
+		for _, m := range regexp.MustCompile(`fs\.\w+\("([a-z-]+)"`).FindAllStringSubmatch(code, -1) {
+			if strings.Contains(m[1], "password") {
+				flags = append(flags, m[1])
 			}
 		}
+
+		// No environment source, no prompt, and no reach around the injected
+		// input. os.Stdin belongs to cmd/svcdoctor, which passes it in.
+		for _, forbidden := range []string{"os.Getenv", "os.Stdin", "Reveal", "SecretFor"} {
+			if strings.Contains(code, forbidden) {
+				t.Errorf("%s references %q; the credential arrives only through the two "+
+					"declared flags, and the CLI never opens a Secret", path, forbidden)
+			}
+		}
+	}
+
+	sort.Strings(flags)
+	want := []string{"password-file", "password-stdin"}
+	if !slices.Equal(flags, want) {
+		t.Errorf("credential flags = %v, want %v; a literal --password is refused "+
+			"outright by ADR 0049 and further sources are deferred", flags, want)
 	}
 }
 
 // codeWithoutComments returns a file's code with every comment removed, so a
 // guard can forbid an implementation without forbidding the sentence that
-// explains why the implementation is absent.
+// explains why the implementation is shaped as it is.
 func codeWithoutComments(t *testing.T, path string) string {
 	t.Helper()
 
