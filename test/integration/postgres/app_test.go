@@ -20,6 +20,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
+	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
 
 // Phase 4.8b: the **production composition root** under test against real
@@ -775,5 +776,137 @@ func TestAppMixedMethodDivergenceIsNotReproducibleHere(t *testing.T) {
 	// What is assertable here: one credential attempt, whatever the methods.
 	if got := len(nodesAt(report, servicepostgres.StepAuthentication)); got != 1 {
 		t.Errorf("%d authentication nodes, want exactly 1", got)
+	}
+}
+
+// --- the requested-target anchor (ADR 0042) ------------------------------------
+
+// TestAppRecordsTheRequestedTargetAnchor is the ADR 0042 assertion against a
+// real server.
+//
+// The unit tests prove the anchor's shape against a faked network. This proves
+// the production run mints it for real, from real parameters, with real DNS and
+// a real socket underneath — which is the only way to know the wiring survives
+// the path an operator will actually take.
+func TestAppRecordsTheRequestedTargetAnchor(t *testing.T) {
+	result := runApp(t, runParams(t, scramRole, scramPassword, database))
+	report := result.Report()
+	graph := report.Graph()
+
+	anchors := nodesAt(report, vocabulary.StepTargetRequested)
+	if len(anchors) != 1 {
+		t.Fatalf("got %d requested-target nodes, want exactly 1", len(anchors))
+	}
+	anchor := anchors[0]
+
+	t.Logf("anchor          = %s", anchor.ID())
+	t.Logf("anchor subject  = %s", anchor.Subject().Ref())
+	t.Logf("report target   = %s", report.Target().Requested())
+
+	if got := anchor.Layer(); got != domain.LayerInput {
+		t.Errorf("layer = %s, want %s", got, domain.LayerInput)
+	}
+	if got := anchor.Subject().Kind(); got != domain.SubjectKindTarget {
+		t.Errorf("subject kind = %s, want %s", got, domain.SubjectKindTarget)
+	}
+	if got := anchor.State(); got != domain.StatePass {
+		t.Errorf("state = %s, want PASS", got)
+	}
+	if got := anchor.FailureClass(); got != domain.FailureNone {
+		t.Errorf("failure class = %s, want none", got)
+	}
+	if got := anchor.AttributeCount(); got != 0 {
+		t.Errorf("anchor carries %d attributes, want 0", got)
+	}
+	if parents := graph.Parents(anchor.ID()); len(parents) != 0 {
+		t.Errorf("anchor has parents %v, want none", parents)
+	}
+
+	// The single-authority property, on a real run.
+	if anchor.Subject().Ref() != report.Target().Requested() {
+		t.Errorf("anchor subject %q and report target %q disagree",
+			anchor.Subject().Ref(), report.Target().Requested())
+	}
+
+	// The requested sweep declares its cause.
+	lookups := nodesAt(report, vocabulary.StepDNSLookup)
+	if len(lookups) != 1 {
+		t.Fatalf("got %d lookups, want 1", len(lookups))
+	}
+	parents := graph.Parents(lookups[0].ID())
+	if len(parents) != 1 || parents[0] != anchor.ID() {
+		t.Fatalf("lookup parents = %v, want exactly [%s]", parents, anchor.ID())
+	}
+	t.Logf("requested sweep = %s, parent = %s", lookups[0].ID(), parents[0])
+
+	// The concrete path count is what was actually measured, not what the anchor
+	// suggests: one anchor, N paths.
+	connects := nodesAt(report, vocabulary.StepTCPConnect)
+	t.Logf("measured paths  = %d", len(connects))
+	if len(connects) == 0 {
+		t.Error("no tcp.connect node was recorded")
+	}
+	for _, c := range connects {
+		cp := graph.Parents(c.ID())
+		if len(cp) != 1 || cp[0] != lookups[0].ID() {
+			t.Errorf("connect %s parents = %v, want the requested lookup", c.ID(), cp)
+		}
+	}
+
+	// The anchor changes no existing interpretation.
+	if got := report.Summary().FirstBrokenLayer(); got == domain.LayerInput {
+		t.Error("firstBrokenLayer = L0; the anchor must never be a broken layer")
+	}
+	if len(report.Findings()) != 0 {
+		t.Errorf("a healthy run produced %v; ADR 0042 authorizes no finding",
+			codesIn(report))
+	}
+}
+
+// TestAppInBandTLSStaysOutsideRequestedTransport is the ownership boundary on a
+// real TLS upgrade.
+//
+// This is the case a faked network cannot fully reach: a server that actually
+// answers 'S' and completes a handshake. The handshake node must still parent to
+// the negotiation rather than to TCP, which is what keeps PostgreSQL's in-band
+// TLS out of generic requested-target transport.
+func TestAppInBandTLSStaysOutsideRequestedTransport(t *testing.T) {
+	result := runApp(t, runParams(t, scramRole, scramPassword, database))
+	report := result.Report()
+	graph := report.Graph()
+
+	handshakes := nodesAt(report, vocabulary.StepTLSHandshake)
+	if len(handshakes) != 1 {
+		t.Fatalf("got %d handshakes, want 1", len(handshakes))
+	}
+	if handshakes[0].State() != domain.StatePass {
+		t.Fatalf("handshake state = %s, want PASS: this test needs a real upgrade",
+			handshakes[0].State())
+	}
+
+	parents := graph.Parents(handshakes[0].ID())
+	if len(parents) != 1 {
+		t.Fatalf("handshake has %d parents, want 1", len(parents))
+	}
+	parent, ok := graph.Node(parents[0])
+	if !ok {
+		t.Fatalf("parent %s is not in the graph", parents[0])
+	}
+	if parent.Step() != servicepostgres.StepSSLRequest {
+		t.Errorf("handshake parents to %s, want %s; a generic transport handshake "+
+			"hangs off tcp.connect and this one must not",
+			parent.Step(), servicepostgres.StepSSLRequest)
+	}
+
+	// So no tcp.connect node has a handshake child, which is what a bounded
+	// requested-target walk relies on.
+	for _, c := range nodesAt(report, vocabulary.StepTCPConnect) {
+		for _, childID := range graph.Children(c.ID()) {
+			child, ok := graph.Node(childID)
+			if ok && child.Step() == vocabulary.StepTLSHandshake {
+				t.Errorf("%s has a handshake child %s; PostgreSQL negotiates in band "+
+					"and the chain performs no L3 of its own here", c.ID(), childID)
+			}
+		}
 	}
 }
