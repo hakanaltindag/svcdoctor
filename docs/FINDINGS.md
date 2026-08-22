@@ -41,7 +41,7 @@ TLS_CERTIFICATE_EXPIRED
 > `DNS_RESOLUTION_FAILED` and `TCP_CONNECTION_NOT_ESTABLISHED` are produced by
 > `internal/diagnosis/transport` for the operator-requested target; section 7 carries them.
 > With the two `KAFKA_ADVERTISED_ENDPOINT_*` and the twelve `POSTGRES_*` codes in section 6,
-> svcdoctor produces **seventeen**.
+> svcdoctor produces **twenty-two**.
 >
 > The blocker was run intent — "is this a Kafka diagnosis or a bare endpoint check?" — which
 > `diagnosis.Rule` cannot see, receiving only a `Graph`. ADR 0042 put it in the graph as an L0
@@ -389,12 +389,21 @@ Five properties of the set are worth reading before the record itself:
   authentication invariant, not a PostgreSQL one — see ADR 0040 section 5.1.
 - **No PostgreSQL finding fires on `dns.lookup` or `tcp.connect`.** Those are generic transport
   nodes and ADR 0043 owns them — see section 7.
-- **`tls.handshake` under `postgres.ssl_request` is PostgreSQL's, decided by ADR 0044 and not
-  yet implemented.** It is not generic, because its parent is a service node: the handshake
-  exists only because PostgreSQL negotiated the upgrade. Five codes, per-endpoint claims, and a
-  predicate that requires the negotiation itself to have passed — which is what keeps it
-  disjoint from `POSTGRES_TLS_DECLINED`. ADR 0044 supersedes this record's earlier refusal and
-  argues why.
+- **`tls.handshake` under `postgres.ssl_request` is PostgreSQL's**, decided by ADR 0044 and
+  implemented in Phase 4.9d as the `TLS` rule. It is not generic, because its parent is a
+  service node: the handshake exists only because PostgreSQL negotiated the upgrade. Five
+  codes — `POSTGRES_TLS_UPGRADE_NOT_HONORED`, `_IDENTITY_MISMATCH`, `_CHAIN_NOT_TRUSTED`,
+  `_CERTIFICATE_NOT_VALID_NOW`, `_HANDSHAKE_FAILED` — all `CONFIRMED` / `ERROR` / `HIGH` /
+  `vantageDependent: true`, subjected to the concrete endpoint.
+- **These findings are endpoint-scoped, and that is the deliberate difference from section 7.**
+  A generic transport finding claims something about *the requested target*, so one working
+  path withholds it. A PostgreSQL finding claims something about *this endpoint*, so a second
+  address working withholds nothing: a dual-stack target whose IPv4 address presents a bad
+  certificate is a defect every client that selects IPv4 will meet.
+- The predicate requires the negotiation itself to have **passed**, which is what keeps the
+  rule disjoint from `POSTGRES_TLS_DECLINED` and excludes the SKIPPED handshake node the
+  adapter mints when the negotiation failed. ADR 0044 supersedes this record's earlier refusal
+  and argues why.
 
 See ADR 0040 for the trigger, claim, must-not-claim list, evidence set and recommendation
 boundary of each, and `docs/validation/POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` for the evidence.

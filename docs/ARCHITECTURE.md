@@ -628,13 +628,25 @@ name in a predicate or a literal, and imports limited to the evidence model and 
 vocabulary. A prose guard checks the sentences too, because a rule can reach the right
 conclusion and then explain it wrongly, and a reader acts on the sentence.
 
-**It stays open for TLS, for a reason rather than an opinion.** No production run yields a
-`tls.handshake` node whose direct parent is a requested `tcp.connect` — PostgreSQL negotiates
-in band, and Kafka has no composition root — so a TLS policy would govern evidence that
-cannot occur. A related gap sits beside it: PostgreSQL's in-band handshake is owned by
-neither layer, because its parent is a service node and no PostgreSQL rule anchors there.
-Both are recorded in `docs/BACKLOG.md` as release-gate items rather than closed by widening
-the walk, which would reintroduce the Kafka hazard above.
+**It stays open for generic TLS, for a reason rather than an opinion.** No production run
+yields a `tls.handshake` node whose direct parent is a requested `tcp.connect` — PostgreSQL
+negotiates in band, and Kafka has no composition root — so a TLS policy would govern evidence
+that cannot occur. That is recorded in `docs/BACKLOG.md` as a release-gate item rather than
+closed by widening the walk, which would reintroduce the Kafka hazard above.
+
+**The gap beside it is closed, and it generalizes.** PostgreSQL's in-band handshake was owned
+by neither layer: its parent is a service node, so the generic walk cannot reach it, and no
+PostgreSQL rule anchored at a generic step. ADR 0044 gave it to PostgreSQL and stated the
+principle in one sentence — **a generic probe's evidence belongs to the layer that caused the
+probe to run, read from the parent edge that layer already recorded, never from the step name
+of the node itself.** Redis and MySQL inherit it unchanged if they ever negotiate in band.
+
+That is not the provenance inference section 5.5 forbids, and the difference is who wrote the
+edge: the adapter parented the handshake to its negotiation deliberately, to record why the
+execution happened, so a rule reads a stated fact rather than guessing from shape. The two
+ownership rules also differ in scope, deliberately — a generic transport finding claims
+something about *the requested target*, so one working path withholds it; a PostgreSQL finding
+claims something about *this endpoint*, so a second address working withholds nothing.
 
 And `Origin` remains deferred: nothing here lets any layer ask how an arbitrary subject
 entered a run.

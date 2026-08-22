@@ -2,7 +2,21 @@
 
 ## Status
 
-Accepted as **policy**. No rule is implemented here.
+**Accepted, and implemented in Phase 4.9d.**
+
+`internal/diagnosis/postgres.TLS` is the fifth rule in that package, wired into
+`internal/app.DiagnosePostgres` beside the other four. Measured against a real
+server: a certificate carrying no name the run asked for produces
+`POSTGRES_TLS_IDENTITY_MISMATCH`, and a chain the run's trust context does not
+hold produces `POSTGRES_TLS_CHAIN_NOT_TRUSTED` — both subjected to
+`127.0.0.1:55432`, both `PROBLEMS_FOUND`, `firstBrokenLayer` still L3.
+
+`FindingCode` went from 17 to **22**. `FailureClass` stays 39, `schemaVersion`
+**1**, `security.Reveal` **two**, the dependency set one. No CLI, no renderer, no
+Kafka composition, no generic TLS code, and no change to authentication or path
+selection.
+
+Two things the record did not anticipate are noted at the end of this section.
 
 This record decides who owns a failed PostgreSQL in-band TLS handshake and what
 svcdoctor may conclude from it. It adds no production diagnosis code, no finding
@@ -13,6 +27,33 @@ It **supersedes one bullet of ADR 0040** — the one declining `POSTGRES_TLS_*`
 findings over the `tls.handshake` node — and §2 argues that reversal rather than
 performing it quietly. ADR 0041, ADR 0042 and ADR 0043 are unchanged. Generic
 requested-target TLS remains deferred and is **not** authorized here (§13).
+
+### Implementation note (Phase 4.9d)
+
+Two findings from building it, neither of which changes the policy.
+
+**Three of the five codes are unit-only, and honestly so.** The integration
+environment can produce an identity mismatch and an untrusted chain by varying
+*client* configuration against the same real certificate — the identity the run
+verifies, and the trust material it holds. It cannot produce an expired or
+not-yet-valid certificate without reissuing the fixture's own, and
+`POSTGRES_TLS_UPGRADE_NOT_HONORED` requires a peer that agrees to encrypt and then
+does not speak TLS, which no correct server does. Those three stay unit-tested,
+and the acceptance matrix says which is which rather than implying uniform
+coverage.
+
+**A role named `svcdoctor` makes redaction refuse the whole report.** Found while
+writing the redaction proof. Finding prose in this repository says "svcdoctor" —
+`POSTGRES_TLS_DECLINED` has since Phase 4.6b — so when the PostgreSQL role is
+literally that word, the residual scan finds the role's plaintext in a sentence
+that was never about the role, and refuses to emit a shareable report.
+
+That behaviour is correct and is now pinned as intended: the scan cannot know the
+occurrence is coincidental, and ADR 0018 says fail closed. Refusing to share is a
+smaller harm than sharing a report whose promise is false. **It predates this
+record** and is not a property of any finding here; it is recorded so the next
+person to meet it recognizes it rather than suspecting the new rule, and so that
+"fix it" does not quietly become "make the scan cleverer".
 
 ## Problem
 
@@ -28,9 +69,10 @@ target.requested       L0  PASS
 findings: []        status: OK        firstBrokenLayer: L3
 ```
 
-`status: OK` beside a broken layer. It is pinned by a committed test —
-`internal/app/anchor_test.go::TestNoTLSFindingIsProduced` — which asserts the
-handshake fails, that no finding names it, and that `firstBrokenLayer` is L3.
+`status: OK` beside a broken layer. It was pinned by a committed test asserting
+exactly that silence; Phase 4.9d replaced it with
+`TestTheRunReportsAFailedInBandHandshake`, which asserts the finding, and with
+`TestNoGenericTLSFindingIsProduced`, which keeps the *generic* deferral guarded.
 
 The node falls between two correct boundaries:
 
