@@ -371,6 +371,30 @@ A deferral is a decision too, and each names the condition that should reopen it
   makes 0043 §6's premise true. Status and incompleteness stay orthogonal, and severity was not
   used as a lever.
 
+- **[0048](0048-cli-and-output-boundary.md) — The report is the product, and the process status
+  is the only thing said about the run.** The first user-facing boundary, and the risk it exists
+  to manage is that PostgreSQL BASIC's committed semantics are easy to render as a lie: status
+  `OK` is *no target-side error was proven*, not *the session worked*; a WARN can sit on a run
+  that established nothing; incompleteness is orthogonal to status. So the terminal renders
+  status, session and execution as three separate facts, and `status OK` never prints bare.
+  JSON is the canonical `domain.Report` and nothing wrapped, which forces the one genuinely open
+  question — `Result.Incomplete()` is not in the schema, so machines learn it from exit code 4,
+  with a reopen condition for a detached-JSON consumer. stdout carries the artifact on 0, 1 and
+  4; stderr carries only usage and internal failures. Exit precedence stays `docs/SCOPE.md`'s
+  `3 > 2 > 4 > 1 > 0`. No CLI framework and no colour: one leaf command does not justify a second
+  dependency, and meaning that survives `NO_COLOR` did not need colour to begin with.
+
+- **[0049](0049-cli-credential-input.md) — A secret arrives by file or by pipe, and never by
+  argument.** Split from 0048 because the failure mode is different: a bad output decision
+  misleads, a bad secret decision leaks. `--password-file` and `--password-stdin`, mutually
+  exclusive with **no precedence** — ambiguity is exit 2, because a precedence rule is one more
+  thing to misremember during an incident. A literal flag is refused outright (shell history,
+  process table); environment variables and a prompt are deferred with conditions. Two details
+  earn their place: exactly one trailing newline is trimmed and never `TrimSpace`, because a
+  space is legal password material and eating it would surface as a rejected credential; and
+  supplying no credential stays valid input, because `POSTGRES_CREDENTIAL_NOT_CONFIGURED` is a
+  truthful diagnosis rather than a usage error — which is what makes a prompt unnecessary.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention
