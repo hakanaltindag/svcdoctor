@@ -910,3 +910,129 @@ func TestAppInBandTLSStaysOutsideRequestedTransport(t *testing.T) {
 		}
 	}
 }
+
+// --- in-band TLS diagnosis (ADR 0044) ------------------------------------------
+
+// TestAppInBandTLSFailureIsDiagnosed closes the last transport silence, against a
+// real server.
+//
+// Both cases change only **client** configuration — the identity this run asks to
+// verify, and the trust material it was given — against the same real PostgreSQL
+// listener presenting the same real certificate. Nothing about the server is
+// faked or reconfigured to make the failure happen, which is what makes these
+// honest integration cases rather than unit tests wearing a container.
+//
+// The three remaining codes are unit-only and stay that way. An expired or
+// not-yet-valid certificate would require reissuing the fixture's certificate,
+// and `POSTGRES_TLS_UPGRADE_NOT_HONORED` needs a peer that agrees to encrypt and
+// then does not speak TLS — a behaviour no correct server has. Faking either
+// would mean asserting against a server svcdoctor will never meet.
+func TestAppInBandTLSFailureIsDiagnosed(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*app.PostgresParams)
+		want    domain.FindingCode
+		wantCls domain.FailureClass
+	}{
+		{
+			name: "the certificate carries no name this run asked for",
+			mutate: func(p *app.PostgresParams) {
+				p.TLSOptions.ServerName = "not-the-server.invalid"
+			},
+			want:    diagnosispostgres.CodeTLSIdentityMismatch,
+			wantCls: domain.FailureTLSHostnameMismatch,
+		},
+		{
+			name: "the chain does not verify against this run's trust context",
+			mutate: func(p *app.PostgresParams) {
+				p.TLSOptions.RootCAs = nil // the system store, which does not hold the test CA
+			},
+			want:    diagnosispostgres.CodeTLSChainNotTrusted,
+			wantCls: domain.FailureTLSUnknownAuthority,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := runParams(t, scramRole, scramPassword, database)
+			tt.mutate(&params)
+
+			result := runApp(t, params)
+			report := result.Report()
+
+			// The handshake really failed, and for the class this row is about.
+			handshakes := nodesAt(report, vocabulary.StepTLSHandshake)
+			if len(handshakes) != 1 {
+				t.Fatalf("got %d handshake nodes, want 1", len(handshakes))
+			}
+			if got := handshakes[0].State(); got != domain.StateFail {
+				t.Fatalf("handshake state = %s, want FAIL", got)
+			}
+			if got := handshakes[0].FailureClass(); got != tt.wantCls {
+				t.Fatalf("failure class = %s, want %s", got, tt.wantCls)
+			}
+
+			finding := requireSingleFinding(t, report, tt.want)
+			t.Logf("finding = %s", finding.Code())
+			t.Logf("subject = %s", finding.Subject().Ref())
+
+			// Endpoint-scoped: the concrete address, never the logical target.
+			if got := finding.Subject().Ref(); got != handshakes[0].Subject().Ref() {
+				t.Errorf("subject = %q, want the handshake's own endpoint %q",
+					got, handshakes[0].Subject().Ref())
+			}
+			if got := finding.Severity(); got != domain.SeverityError {
+				t.Errorf("severity = %s, want ERROR", got)
+			}
+			if !finding.VantageDependent() {
+				t.Error("vantageDependent = false")
+			}
+
+			// The report stops reading as healthy, and firstBrokenLayer is
+			// unchanged — it was already L3 before this rule existed.
+			if got := report.Summary().Status(); got != domain.SummaryStatusProblemsFound {
+				t.Errorf("status = %s, want PROBLEMS_FOUND", got)
+			}
+			if got := report.Summary().FirstBrokenLayer(); got != domain.LayerTLS {
+				t.Errorf("firstBrokenLayer = %s, want L3", got)
+			}
+
+			// Both halves of the proof, resolvable in the report's own graph.
+			refs := finding.EvidenceRefs()
+			if len(refs) != 2 {
+				t.Fatalf("got %d refs, want the negotiation and the handshake", len(refs))
+			}
+			for _, ref := range refs {
+				if _, ok := report.Graph().Node(ref); !ok {
+					t.Errorf("evidence ref %s is not in the graph", ref)
+				}
+			}
+
+			// Nothing later fired: the run stopped at L3.
+			for _, step := range []domain.Step{
+				servicepostgres.StepStartup, servicepostgres.StepAuthentication,
+				servicepostgres.StepSession,
+			} {
+				for _, n := range nodesAt(report, step) {
+					if n.State() == domain.StatePass {
+						t.Errorf("%s passed after a failed handshake", step)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestAppHealthyRunProducesNoTLSFinding pins that the new rule is silent on a
+// working endpoint.
+func TestAppHealthyRunProducesNoTLSFinding(t *testing.T) {
+	report := runApp(t, runParams(t, scramRole, scramPassword, database)).Report()
+
+	handshakes := nodesAt(report, vocabulary.StepTLSHandshake)
+	if len(handshakes) != 1 || handshakes[0].State() != domain.StatePass {
+		t.Fatalf("expected one passing handshake, got %v", handshakes)
+	}
+	if got := len(report.Findings()); got != 0 {
+		t.Errorf("a healthy run produced %v", codesIn(report))
+	}
+}

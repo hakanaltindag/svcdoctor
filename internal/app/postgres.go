@@ -204,6 +204,7 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 		diagnosistransport.DNS,
 		diagnosistransport.TCP,
 		diagnosispostgres.SSLRequest,
+		diagnosispostgres.TLS,
 		diagnosispostgres.Startup,
 		diagnosispostgres.Authentication,
 		diagnosispostgres.Session,

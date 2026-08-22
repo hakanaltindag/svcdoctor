@@ -521,30 +521,80 @@ func TestCancellationProducesNoTargetFinding(t *testing.T) {
 	}
 }
 
-// TestNoTLSFindingIsProduced pins the deferral on a real run.
+// TestTheRunReportsAFailedInBandHandshake is the ADR 0044 report integration.
 //
-// A PostgreSQL run whose in-band handshake fails still produces nothing. That gap
-// is deliberate and recorded — ADR 0043 section 15 — and it is the reason the
-// transport release gate is not yet closed.
-func TestNoTLSFindingIsProduced(t *testing.T) {
+// This was the last transport silence in a PostgreSQL run. The same graph
+// previously produced `findings: []` beside `status: OK` and `firstBrokenLayer:
+// L3` — a report that read as healthy while naming a broken layer.
+//
+// It runs the production composition, so the wiring is under test as much as the
+// rule.
+func TestTheRunReportsAFailedInBandHandshake(t *testing.T) {
 	result := runWith(t, "db.example.com", 5432,
 		stubResolver{addrs: addrs(t, "10.0.0.1")}, sslThenGarbageDialer{})
 	report := result.Report()
 
-	for _, f := range report.Findings() {
+	findings := report.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want exactly 1: %v", len(findings), findings)
+	}
+	finding := findings[0]
+
+	if got := finding.Code(); got != "POSTGRES_TLS_UPGRADE_NOT_HONORED" {
+		t.Errorf("code = %s, want POSTGRES_TLS_UPGRADE_NOT_HONORED", got)
+	}
+	if got := finding.Severity(); got != domain.SeverityError {
+		t.Errorf("severity = %s, want ERROR", got)
+	}
+	if got := finding.Layer(); got != domain.LayerTLS {
+		t.Errorf("layer = %s, want L3", got)
+	}
+
+	// Endpoint-scoped: the concrete address, not the logical target. This is the
+	// deliberate difference from the generic transport findings, whose subject is
+	// the anchor's logical endpoint.
+	anchor := requireOneAnchor(t, report.Graph())
+	if finding.Subject().Ref() == anchor.Subject().Ref() {
+		t.Errorf("subject %q equals the logical target; a PostgreSQL finding is about "+
+			"the concrete endpoint", finding.Subject().Ref())
+	}
+
+	// The report no longer reads as healthy, and firstBrokenLayer is untouched.
+	if got := report.Summary().Status(); got != domain.SummaryStatusProblemsFound {
+		t.Errorf("status = %s, want PROBLEMS_FOUND", got)
+	}
+	if got := report.Summary().FirstBrokenLayer(); got != domain.LayerTLS {
+		t.Errorf("firstBrokenLayer = %s, want L3", got)
+	}
+
+	for _, ref := range finding.EvidenceRefs() {
+		if _, ok := report.Graph().Node(ref); !ok {
+			t.Errorf("evidence ref %s is not in the graph", ref)
+		}
+	}
+}
+
+// TestNoGenericTLSFindingIsProduced pins the deferral that remains.
+//
+// PostgreSQL now owns its in-band handshake, and generic requested-target TLS is
+// still undecided — no production run even produces a handshake beneath a
+// requested tcp.connect. A bare TLS_ code appearing anywhere would mean that
+// deferral had been closed without a record.
+func TestNoGenericTLSFindingIsProduced(t *testing.T) {
+	result := runWith(t, "db.example.com", 5432,
+		stubResolver{addrs: addrs(t, "10.0.0.1")}, sslThenGarbageDialer{})
+
+	for _, f := range result.Report().Findings() {
 		code := string(f.Code())
 		if len(code) >= 4 && code[:4] == "TLS_" {
 			t.Errorf("finding %s exists; generic TLS is deferred", code)
 		}
 	}
 
-	// The handshake did fail, so this is not vacuous.
-	handshakes := nodesWithStep(report.Graph(), vocabulary.StepTLSHandshake)
+	// Non-vacuous: the handshake really did fail.
+	handshakes := nodesWithStep(result.Report().Graph(), vocabulary.StepTLSHandshake)
 	if len(handshakes) != 1 || handshakes[0].State() != domain.StateFail {
 		t.Fatalf("expected one failed handshake, got %v", handshakes)
-	}
-	if got := report.Summary().FirstBrokenLayer(); got != domain.LayerTLS {
-		t.Errorf("firstBrokenLayer = %s, want L3", got)
 	}
 }
 
