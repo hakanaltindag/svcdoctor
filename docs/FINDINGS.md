@@ -38,8 +38,8 @@ TLS_CERTIFICATE_EXPIRED
 ```
 
 > **These remain naming examples. No generic transport rule is authorized, and none exists.**
-> The finding codes svcdoctor produces today are `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`
-> and `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE`.
+> The finding codes svcdoctor produces today are the two `KAFKA_ADVERTISED_ENDPOINT_*` codes
+> and the twelve `POSTGRES_*` codes listed in section 6.
 > ADR 0034 gives advertised-endpoint transport failures to the Kafka rule outright, so a
 > generic rule firing on the same evidence would duplicate it. Whether generic transport
 > findings should exist *at all* is still open, and it is blocked on a fact rather than on
@@ -326,11 +326,10 @@ section 1.
 
 ---
 
-### Authorized by ADR 0040, not yet implemented
+### The twelve PostgreSQL findings
 
-Phase 4.6a fixed the twelve PostgreSQL finding codes exactly, as ADR 0034 did for Kafka.
-**None of them is produced yet** — `internal/diagnosis/postgres` is empty — so the codes
-svcdoctor emits today are still the two Kafka ones above.
+Fixed by ADR 0040 as ADR 0034 did for Kafka, and **implemented in Phase 4.6b** as
+`internal/diagnosis/postgres` — four rules, one per anchor step.
 
 | Code | Anchor step | Severity | `vantageDependent` |
 |---|---|---|---|

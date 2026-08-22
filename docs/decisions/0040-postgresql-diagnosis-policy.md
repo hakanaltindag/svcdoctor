@@ -2,13 +2,22 @@
 
 ## Status
 
-**Accepted as policy. Implementation pending (Phase 4.6b).**
+**Accepted, and implemented in Phase 4.6b.**
+
+`internal/diagnosis/postgres` implements all twelve codes in four rules, and
+`internal/service/postgres` holds the eight constants §22 authorized, moved from
+the adapter with aliases left behind so no caller changed. Every acceptance row
+in §24 and every mutation in §25 is a test.
 
 The `security.Reveal` count stays **two**, the report `schemaVersion` **1**, the
-dependency set one, and no `AttrKind` and no redaction rule changes. **One
+dependency set one, and no `AttrKind` and no redaction rule changed. **One
 `FailureClass` was added — `AUTH_PEER_VERIFICATION_FAILED`, 38 → 39** — by the
-Phase 4.6a.5 producer correction §5.1 records; that is the only production Go
-change this record has caused, and no diagnosis rule exists yet.
+Phase 4.6a.5 producer correction §5.1 records.
+
+**Two things implementation established that this record did not**, recorded
+under "Amendments from implementation" at the end: why rule-level ordering needs
+its own test even though the engine's sort already guarantees a stable report,
+and where the redaction test had to live.
 
 This is the ADR 0034 analogue for PostgreSQL: it decides what svcdoctor may
 conclude from the evidence Phases 4.1–4.5 produce, so that Phase 4.6b can
@@ -1281,6 +1290,48 @@ in `docs/BACKLOG.md` outside Phase 4.6b scope.
   is available to Kafka SCRAM unchanged when Phase 3.2d unblocks.
 - No report schema change, no `AttrKind`, no redaction change, no new dependency,
   no new `security.Reveal` site, no new `FailureClass`.
+
+## Amendments from implementation (Phase 4.6b)
+
+### A. Rule-level ordering needs its own test, because the engine's sort hides it
+
+§21 said determinism rests on four mechanisms, of which the second —
+`domain.SortFindings` — is a **total** order: severity, layer, code, subject,
+summary, joined evidence references. The last two keys are unique per node, so a
+rule that ranged over a Go map instead of `Graph.Nodes` still produces a
+byte-stable *report*.
+
+That is a real guarantee and it is also a blind spot. The map-order mutation
+(§25 Q) passed every engine-level determinism test, on a multi-node graph,
+repeated. It is caught only by calling each rule directly and asserting its raw
+output order, which is now a test.
+
+Nothing about the policy changes. What changes is where the property is pinned:
+rule-level ordering is defence in depth rather than the mechanism, and it is
+worth having so that a rule stays testable in isolation and the guarantee does
+not rest on one sort remaining total forever.
+
+### B. The redaction test lives in `test/security`, not beside the rules
+
+§23 listed G6 — every finding still true with hostnames, roles and databases
+replaced — among the guards in `internal/diagnosis/postgres`. It cannot be:
+depguard denies `internal/diagnosis/**` the `internal/security` import, and
+`redaction` is under it.
+
+The boundary is not weakened for a test. The redaction check lives in
+`test/security/postgres_finding_redaction_test.go`, which is where the Kafka
+finding-redaction test already lives for the same reason, and which
+`CLAUDE.md`'s test-data convention already asks for. The in-package guards keep
+the parts that need no import: prose carries no identity, no recommendation is
+executable, and the attribute surface is exactly the four keys §22 authorizes.
+
+### C. Two finding codes need a `gosec` suppression
+
+`CodeCredentialsRejected` and `CodeCredentialWithheld` trip G101, "potential
+hardcoded credentials", because the identifier contains *Credential*. They are
+public finding codes. Both carry a single-line `nolint` with the reason, which is
+the repository's standing practice for a suppression; nothing in the package
+holds or derives a secret, and depguard denies it `internal/security` outright.
 
 ## Reopen conditions
 

@@ -555,7 +555,19 @@ result. It never performs I/O to fill the gap.
 
 Cross-service correlation logic and service-specific correlation rules remain separate.
 Cross-service transport correlation lives in `internal/diagnosis/transport/`; service rules
-live in `internal/diagnosis/<service>/`. This allows service-specific knowledge without
+live in `internal/diagnosis/<service>/`.
+
+`internal/diagnosis/kafka/` and `internal/diagnosis/postgres/` exist and hold rules;
+`internal/diagnosis/transport/` is empty and is **not** a gap waiting to be filled — whether
+generic transport findings should exist at all needs run intent, which `diagnosis.Rule`
+cannot see. A run that fails at DNS, TCP or TLS therefore produces complete evidence, a
+correct `firstBrokenLayer`, and no finding. See ADR 0017 and ADR 0040 section 26.1; it is
+tracked as a product release gate in `docs/BACKLOG.md`.
+
+Each service rule package imports `internal/domain` and its own
+`internal/service/<service>/` vocabulary leaf, and nothing else. The leaf exists because
+depguard denies diagnosis the adapter import while the two layers still share step names and
+a few attribute keys; it holds constants and no behaviour. This allows service-specific knowledge without
 contaminating the shared engine.
 
 ### 6.1 Rule contract

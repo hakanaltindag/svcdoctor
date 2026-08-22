@@ -231,7 +231,13 @@ A deferral is a decision too, and each names the condition that should reopen it
   svcdoctor's own capability rather than with the target; the L4 floor's code claimed the peer
   *rejected* something its own trigger disproves; and six `vantageDependent` values asserted a
   position-independence that `pg_hba` source matching disproves. The code count survived; the
-  code set did not. A follow-on pass, **0040 §5.1**, then removed the one code that pass had
+  code set did not. It is now **implemented**: `internal/diagnosis/postgres` holds four rules,
+  one per anchor step, and `internal/service/postgres` the eight constants they share with the
+  adapter. Implementation amended it twice, both worth reading — the engine's finding sort is
+  total, so it hides a map-ordered rule entirely and rule-level ordering needed its own test;
+  and the redaction guard had to move to `test/security`, because depguard denies diagnosis
+  the `internal/security` import and a boundary is not weakened to make a test convenient. A
+  follow-on pass, **0040 §5.1**, then removed the one code that pass had
   marked provisional — by correcting the producer under it rather than shipping around it. The
   adapter had normalized *the peer refused what I presented* and *the peer could not prove
   itself to me* onto one class, and the second is only reachable once the peer has **accepted**

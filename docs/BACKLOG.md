@@ -1780,39 +1780,52 @@ opposite of what happened, and no diagnosis-layer predicate can repair a class t
 **No** `security.Reveal` change (still 2), no new attribute, no `AttrKind`, no redaction
 change, no report-schema change, no dependency change, no Kafka production change.
 
-### Phase 4.6b — Diagnosis rules: AUTHORIZED, NOT STARTED
+### Phase 4.6b — Diagnosis rules: COMPLETE
 
-Implements ADR 0040 exactly. All seventeen authorization-gate questions are answered in it.
+Implements ADR 0040 exactly, inventing nothing. `internal/service/postgres` (eight constants,
+moved with aliases left behind) and `internal/diagnosis/postgres` (four rules, twelve codes).
 
-- [ ] `internal/service/postgres`: eight constants moved from the adapter, no behaviour change
-- [ ] `internal/diagnosis/postgres`: four rules, one per anchor step, the twelve codes of
-      ADR 0040 §6 — no thirteenth
-- [ ] At most one **primary Phase 4.6 diagnosis** per node — mutual exclusivity structural,
+- [x] `internal/service/postgres`: eight constants moved from the adapter, no behaviour change
+- [x] `internal/diagnosis/postgres`: four rules, one per anchor step, the twelve codes of
+      ADR 0040 §6 — no thirteenth, asserted by a count guard
+- [x] At most one **primary Phase 4.6 diagnosis** per node — mutual exclusivity structural,
       not asserted (ADR 0040 §3). Scoped to the primary set: the guards must **not** be
       written as "no node ever carries two findings"
-- [ ] Totality: every `postgres.*` FAIL node in a producible graph yields exactly one primary
+- [x] Totality: every `postgres.*` FAIL node in a producible graph yields exactly one primary
       finding (ADR 0040 §4), subject to the §16 parent precondition
-- [ ] The acceptance matrix (ADR 0040 §24) — 42 rows after correction, every `—` row asserted
-      as a decision, and every row additionally asserting `vantageDependent`
-- [ ] The 25 mutation guards (ADR 0040 §25, A–U and O–O5), each verified to compile before
-      it is trusted; O–O5 are already applied and confirmed by Phase 4.6a.5
-- [ ] Guards G1–G9 (ADR 0040 §23), including the redaction bar (G6: every finding still true
-      with hostnames, roles and databases replaced), the `error_is_native` non-branching guard
-      (G8) and the standalone credential-predicate guard (G9)
-- [ ] `POSTGRES_CREDENTIALS_REJECTED` keys on the **class alone** — no SQLSTATE clause. The
-      guard for it lives at the producer (Phase 4.6a.5), not in the predicate
-- [ ] Floor detail is class-gated: the attribution sentence renders only for
-      `PROTOCOL_UNEXPECTED_RESPONSE`, never for `PROTOCOL_UNSUPPORTED_VERSION`,
-      `PROTOCOL_MALFORMED_RESPONSE` or `PROTOCOL_PEER_CLOSED` (ADR 0040 §8.1)
-- [ ] `POSTGRES_PEER_VERIFICATION_FAILED` (ADR 0040 §11) — stable, not provisional, and
-      worded so it never reads as a rejected credential or as a named cause
-- [ ] Determinism: the same graph encoded twice, byte-identical
+- [x] The acceptance matrix (ADR 0040 §24), every `—` row asserted as a decision, and every
+      row additionally asserting `vantageDependent`, `kind`, `confidence` and the absence of a
+      discriminator
+- [x] Mutation guards, each applied for real, compiled, confirmed caught and restored
+- [x] Guards G1–G9 (ADR 0040 §23). G6 lives in `test/security/` — depguard denies diagnosis
+      the redaction import, and the boundary is not weakened for a test (ADR 0040 amendment B)
+- [x] `POSTGRES_CREDENTIALS_REJECTED` keys on the **class alone** — no SQLSTATE clause
+- [x] Floor detail is class-gated: the attribution sentence renders only for
+      `PROTOCOL_UNEXPECTED_RESPONSE` (ADR 0040 §8.1)
+- [x] `POSTGRES_PEER_VERIFICATION_FAILED` (ADR 0040 §11) — stable, and worded so it never
+      reads as a rejected credential or as a named cause
+- [x] Determinism: the same graph encoded twice, byte-identical — **and** each rule ordered
+      in its own right, which is the only test that can see a map-ordered rule (amendment A)
 
 **Not owned, and recorded rather than deferred silently:** generic DNS/TCP/TLS findings
 (ADR 0017's open blocker), TLS verification quality, replica and read-only facts, capacity
 claims, and peer-implementation identification. A PostgreSQL run that fails at DNS, TCP or TLS
-produces zero findings, and ADR 0040 §2 says so in as many words. **Phase 4.6b must not fix
-that** — see the release gate below.
+produces zero findings, and ADR 0040 §2 says so in as many words — pinned by a test at both
+the rule and the report level, so the day it changes somebody changes those tests on purpose.
+See the release gate below.
+
+**No** `security.Reveal` change (still 2), no new `FailureClass`, no `AttrKind`, no redaction
+change, no report-schema change, no dependency change, no Kafka production change, no SQL, no
+CLI or renderer code.
+
+**The one limitation, stated rather than buried.** These rules run against hand-built graphs,
+because **no composition root exists**: `internal/app` and `cmd/svcdoctor` are empty, so
+nothing assembles a PostgreSQL graph end to end. That is deliberate — inventing an
+orchestrator under cover of a diagnosis phase is exactly the scope creep this backlog exists
+to prevent — and closing it is **Phase 4.8**, which drives production paths end to end and
+compares a real graph against the ADR 0040 acceptance matrix. Any row a real graph does not
+describe reopens ADR 0040.
+
 
 ### Product/CLI release gate — generic transport diagnosis ownership: OPEN
 
