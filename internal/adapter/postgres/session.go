@@ -192,3 +192,93 @@ func (r *StartupResult) SASLMechanisms() []string {
 	copy(out, r.mechanisms)
 	return out
 }
+
+// AuthenticatedSession is a connection whose authentication is settled and whose
+// session is not yet established.
+//
+// It is what Phase 4.4 produces and what the session step will consume: the same
+// socket the whole run has used, past the point where a credential mattered and
+// short of the point where a session is usable. **`AuthenticationOk` is not
+// success** — a missing database, a revoked CONNECT privilege, an exhausted
+// connection limit and a server still in recovery all arrive after it and before
+// `ReadyForQuery` (ADR 0036 section 5). This type is the name for exactly that
+// window.
+//
+// # Why it is a distinct type
+//
+// The same argument that made StartupResult distinct from Session, one step
+// later, and it is protocol state rather than elegance: a StartupResult's socket
+// is waiting for an answer to an authentication demand, and this one's is not.
+// Returning a StartupResult from a successful authentication would say
+// "authenticate on this again", which is false — a second SASL exchange on an
+// authenticated connection is a protocol violation — and it would let a future
+// session step be written against a connection that never presented a
+// credential. Authenticate takes a *StartupResult and returns this, so the
+// mistake does not typecheck.
+//
+// # What it deliberately does not carry
+//
+// No credential, no secret, no password, no nonce, no salt, no proof, no
+// signature, and no graph. The credential did its work at the wire boundary and
+// has no reason to outlive it, and there is no accessor through which any of
+// them could be read back. The role is absent too: it is on the startup node
+// already, as an identity attribute that redaction can pseudonymize.
+//
+// # The next byte belongs to the session step
+//
+// Authentication stopped at AuthenticationOk having read exactly that frame.
+// Whatever the server sent in the same burst — ParameterStatus, BackendKeyData,
+// ReadyForQuery — is still on this connection, unread.
+//
+// An AuthenticatedSession is not safe for concurrent use.
+type AuthenticatedSession struct {
+	endpoint string
+	address  netip.AddrPort
+
+	// evidenceID is the deepest node recorded for this connection: the
+	// authentication node when one was recorded, otherwise the startup node,
+	// which is the case for a server that demanded no authentication at all.
+	evidenceID domain.EvidenceID
+
+	channel         security.Channel
+	channelEvidence domain.EvidenceID
+
+	ownedConn
+}
+
+// newAuthenticatedSession carries the connection's facts forward unchanged.
+//
+// It copies from the StartupResult rather than taking them as parameters, so no
+// call site can pair a connection with a channel that describes a different
+// socket. That is the same arrangement transport.Result.add and
+// kafka.HandshakeResult.add make, for the same reason (ADR 0029).
+func newAuthenticatedSession(
+	conn net.Conn, result *StartupResult, evidenceID domain.EvidenceID,
+) *AuthenticatedSession {
+	return &AuthenticatedSession{
+		endpoint:        result.endpoint,
+		address:         result.address,
+		evidenceID:      evidenceID,
+		channel:         result.channel,
+		channelEvidence: result.channelEvidence,
+		ownedConn:       ownedConn{conn: conn},
+	}
+}
+
+// Endpoint returns the logical label this connection belongs to.
+func (s *AuthenticatedSession) Endpoint() string { return s.endpoint }
+
+// Address returns the concrete peer this connection reached.
+func (s *AuthenticatedSession) Address() netip.AddrPort { return s.address }
+
+// Evidence returns the identifier of the deepest node recorded for this
+// connection, which the session step will parent its evidence to.
+func (s *AuthenticatedSession) Evidence() domain.EvidenceID { return s.evidenceID }
+
+// Channel reports what this connection proved, carried forward unchanged.
+func (s *AuthenticatedSession) Channel() security.Channel { return s.channel }
+
+// ChannelEvidence returns the node that established the channel.
+func (s *AuthenticatedSession) ChannelEvidence() (domain.EvidenceID, bool) {
+	return s.channelEvidence, s.channelEvidence != ""
+}

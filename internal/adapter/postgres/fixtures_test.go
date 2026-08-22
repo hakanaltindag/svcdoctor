@@ -46,6 +46,10 @@ type script struct {
 
 	// hangBeforeReply blocks instead of answering, to exercise cancellation.
 	hangBeforeReply bool
+
+	// scram makes the peer run a scripted SCRAM conversation after startup,
+	// instead of writing afterStartup and going quiet.
+	scram *scramScript
 }
 
 type pgPeer struct {
@@ -57,6 +61,16 @@ type pgPeer struct {
 	accepted  int
 	startups  [][]byte
 	localAddr []string
+
+	// afterStartupBytes is every byte the client sent after its StartupMessage.
+	// A refusal path must leave it empty, which is what proves no credential
+	// crossed the wire rather than merely that evidence said so.
+	afterStartupBytes []byte
+
+	// The decoded SCRAM messages, recorded as the fixture reads and writes them.
+	clientFirstBare string
+	serverFirst     string
+	clientFinal     string
 }
 
 // newPGPeer starts a listener that serves one script.
@@ -125,7 +139,7 @@ func (p *pgPeer) serve(conn net.Conn, s script) {
 		}
 	}
 
-	if s.afterStartup == nil {
+	if s.afterStartup == nil && s.scram == nil {
 		return
 	}
 
@@ -146,8 +160,17 @@ func (p *pgPeer) serve(conn net.Conn, s script) {
 	p.startups = append(p.startups, append(header[:], body...))
 	p.mu.Unlock()
 
+	if s.scram != nil {
+		p.serveSCRAM(active, *s.scram)
+		return
+	}
+
 	_, _ = active.Write(s.afterStartup)
-	time.Sleep(300 * time.Millisecond)
+
+	// Read whatever the client sends next and record it. Every post-startup
+	// byte is credential-derived at this point, so a refusal test can assert
+	// there were none — an assertion about the peer rather than about svcdoctor.
+	p.drain(active)
 }
 
 func readExactly(conn net.Conn, buf []byte) bool {

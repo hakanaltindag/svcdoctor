@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres/wire"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
@@ -463,24 +464,61 @@ func TestEnglishMessageGuardCoversTheClassifier(t *testing.T) {
 	if !strings.Contains(string(src), "func sqlStateFailure(") {
 		t.Fatal("sqlStateFailure moved; the guard above may no longer cover the classifier")
 	}
+
+	// The authentication classifier and the SCRAM parser are covered too, and
+	// neither may join the exemption list: one maps SQLSTATE onto a class, and
+	// the other walks a grammar over bytes the peer chose.
+	for _, want := range []struct{ path, symbol string }{
+		{"authenticate.go", "func authSQLStateFailure("},
+		{"wire/scram.go", "func scramAttributes("},
+	} {
+		body, readErr := os.ReadFile(want.path)
+		if readErr != nil {
+			t.Fatalf("reading %s: %v", want.path, readErr)
+		}
+		if !strings.Contains(string(body), want.symbol) {
+			t.Fatalf("%s moved out of %s; the guard may no longer cover it",
+				want.symbol, want.path)
+		}
+	}
 }
 
-// TestPostgresProductionCodeSendsNoCredential is the scope guard for the phase.
+// TestPostgresCredentialSurfaceIsExactlyTwoCalls is the scope guard for Phase
+// 4.4b, and it replaces the Phase 4.3 guard that asserted no credential was sent
+// at all.
 //
-// It parses the production sources and rejects the calls that would mean
-// authentication had begun. Comments and tests are exempt: a comment saying "no
-// password is sent" is documentation, and a test needs a password canary.
-func TestPostgresProductionCodeSendsNoCredential(t *testing.T) {
-	forbidden := map[string]string{
-		"Reveal":    "security.Reveal turns a masked secret into plaintext",
-		"SecretFor": "reading a credential's secret is authentication work",
-		"Dial":      "an adapter must not open a connection",
-		"DialTCP":   "an adapter must not open a connection",
-		"Dialer":    "an adapter must not own a dialer",
+// That earlier guard did its job: it made "this phase transmits nothing" a
+// property of the source rather than a claim in a comment, and it had to be
+// deliberately edited for authentication to be written. This is the stronger
+// successor. Phase 4.4b transmits exactly one credential, so the guard now pins
+// **where** rather than **whether**:
+//
+//   - security.Reveal appears exactly once, in wire/scram.go
+//   - Credential.SecretFor appears exactly once, in authenticate.go
+//   - neither appears anywhere else, in either package
+//   - nothing dials, at all
+//
+// A second Reveal, a Reveal that migrated out of the wire package, or a
+// SecretFor in the wire package all fail here — and the first two also fail
+// golangci-lint's forbidigo rule, so the boundary has two independent guards.
+func TestPostgresCredentialSurfaceIsExactlyTwoCalls(t *testing.T) {
+	// Where each call is allowed, and nowhere else.
+	allowed := map[string]string{
+		"Reveal":    "wire/scram.go",
+		"SecretFor": "authenticate.go",
 	}
+	forbiddenEverywhere := map[string]string{
+		"Dial":    "an adapter must not open a connection",
+		"DialTCP": "an adapter must not open a connection",
+		"Dialer":  "an adapter must not own a dialer",
+	}
+
+	counts := map[string]int{}
 
 	for _, dir := range []string{".", "wire"} {
 		for _, path := range productionFiles(t, dir) {
+			key := strings.TrimPrefix(filepath.ToSlash(path), "./")
+
 			fset := token.NewFileSet()
 			file, err := parser.ParseFile(fset, path, nil, 0)
 			if err != nil {
@@ -491,13 +529,63 @@ func TestPostgresProductionCodeSendsNoCredential(t *testing.T) {
 				if !ok {
 					return true
 				}
-				if reason, banned := forbidden[sel.Sel.Name]; banned {
-					t.Errorf("%s:%d calls %s: %s",
-						path, fset.Position(sel.Pos()).Line, sel.Sel.Name, reason)
+				name := sel.Sel.Name
+				line := fset.Position(sel.Pos()).Line
+
+				if reason, banned := forbiddenEverywhere[name]; banned {
+					t.Errorf("%s:%d calls %s: %s", key, line, name, reason)
+					return true
+				}
+				if home, tracked := allowed[name]; tracked {
+					counts[name]++
+					if key != home {
+						t.Errorf("%s:%d calls %s, which may only appear in %s",
+							key, line, name, home)
+					}
 				}
 				return true
 			})
 		}
+	}
+
+	for name, want := range map[string]int{"Reveal": 1, "SecretFor": 1} {
+		if counts[name] != want {
+			t.Errorf("found %d call(s) to %s in postgres production code, want %d",
+				counts[name], name, want)
+		}
+	}
+}
+
+// TestPostgresImplementsExactlyOneMechanism pins the phase's scope in the
+// source.
+//
+// MD5, cleartext and channel binding are observed and declined, and the way that
+// stays true is that the code to perform them does not exist. Each import below
+// would be the first sign that one had been started.
+func TestPostgresImplementsExactlyOneMechanism(t *testing.T) {
+	banned := map[string]string{
+		`"crypto/md5"`:  "MD5 authentication is declined, not implemented",
+		`"crypto/sha1"`: "no SCRAM-SHA-1 variant is implemented",
+	}
+
+	for _, dir := range []string{".", "wire"} {
+		for _, path := range productionFiles(t, dir) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Fatalf("parsing %s: %v", path, err)
+			}
+			for _, imp := range file.Imports {
+				if reason, bad := banned[imp.Path.Value]; bad {
+					t.Errorf("%s imports %s: %s", path, imp.Path.Value, reason)
+				}
+			}
+		}
+	}
+
+	// The one mechanism name svcdoctor sends, stated once.
+	if wire.MechanismSCRAMSHA256 != "SCRAM-SHA-256" {
+		t.Errorf("mechanism = %q, want SCRAM-SHA-256", wire.MechanismSCRAMSHA256)
 	}
 }
 
