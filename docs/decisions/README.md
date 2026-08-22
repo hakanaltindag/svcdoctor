@@ -47,6 +47,8 @@ does not overturn it, and both remain authoritative.
 | 0033 | An advertised endpoint is measured once per advertisement, and only at L1-L3 | Accepted | The consumer 0031 was built to feed and the first caller of 0032. Answers the execution-dedup question by deliberately not deduplicating |
 | 0034 | A Kafka rule owns advertised-endpoint reachability, anchored at the advertisement | Accepted (policy), implemented in Phase 3.6 | Revisits the two questions 0017 deferred and answers them for service-anchored rules. Authorizes one finding code and fixes every field of it; `internal/diagnosis/kafka` implements it and invents nothing |
 | 0035 | An unusable broker advertisement is its own claim, and it is not vantage-dependent | Accepted | Takes the case 0034 §14 placed out of scope. First finding with `vantageDependent: false`; the redaction defect it surfaced was fixed generically in Phase 3.7.5 |
+| 0036 | A PostgreSQL session is one connection, and it is usable only at ReadyForQuery | Accepted (policy), implemented from Phase 4.2 | First PostgreSQL record. Applies 0020, 0021 and 0024 to a protocol that negotiates TLS in-band; narrows 0029's channel authority; supplies the blocker carrier 0030 named; depends on 0037 |
+| 0037 | A principal or named resource is identity, and redaction must pseudonymize it | Accepted, **implemented in Phase 4.1** | Refines 0022 with a second identity category. Meets a reopen condition 0030 recorded. First report schema field added since v1 |
 
 ## Decisions that govern work not yet written
 
@@ -156,6 +158,26 @@ A deferral is a decision too, and each names the condition that should reopen it
   aggregates, controller-aware severity and the bootstrap path's owner open, each
   with the missing fact named. `Origin` is examined for the third time and stays
   deferred, unchanged.
+
+- **0036** defers every PostgreSQL *finding* to a later diagnosis-policy record, on the
+  0033 → 0034 pattern: it produces evidence and authorizes no claim. It re-examines the
+  bootstrap-path transport finding 0034 §14 left open and **declines to close it**, so
+  PostgreSQL does not reopen the generic-transport severity question either. It defers the
+  unsafe transport override to the same owner 0029 named, and records that this leaves
+  plaintext password authentication undiagnosable beyond L4 — the largest practical
+  limitation of the first slice. It declines to create a generic STARTTLS abstraction for
+  one caller, naming a second in-band negotiation as the condition that would justify one.
+  Its central empirical result is that **`AuthenticationOk` is not success**: two common
+  failures arrive after it and before `ReadyForQuery`, measured rather than reasoned.
+
+- **0037** closes the gap 0022 could not reach. 0022 taught redaction to carry identity
+  that names a *network peer*; a role name and a database name are identity of a different
+  category, and the model had no honest way to hold either — `HostAttr` would have been
+  false and would have rendered a database as `host-002`. It adds exactly one kind rather
+  than two, because the attribute key already distinguishes a role from a database and
+  survives redaction. It leaves two things unsolved and says so: identity embedded in a
+  connection string, which belongs to L0 normalization, and identity arriving only inside a
+  peer's own prose, which 0036 §6 answers by refusing to store server prose at all.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
