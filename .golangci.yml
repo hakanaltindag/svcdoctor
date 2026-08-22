@@ -192,6 +192,52 @@ linters:
                 redaction is structural; a regex scan is a safety net over known
                 values, not the mechanism
 
+        # A renderer explains a finished report and does nothing else.
+        # docs/ARCHITECTURE.md section 6.4, ADR 0048 section 3.
+        #
+        # Activated in Phase 5.1, when internal/render gained its first Go file.
+        # It was deliberately not written earlier: depguard rules are keyed on
+        # files, so a rule guarding an empty directory guards nothing while
+        # reading as though it guards something.
+        #
+        # internal/security/redaction is denied alongside the rest, and that is
+        # the sharper half. Redaction happens at the output boundary *before* a
+        # renderer runs; a renderer able to redact could emit shareable-looking
+        # output whose own report security metadata still said LOCAL_FULL.
+        render-is-presentation-only:
+          files:
+            - "**/internal/render/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/app
+              desc: a renderer presents a result; it does not orchestrate one or choose an exit code
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/cli
+              desc: a renderer is called by the command boundary and does not reach back into it
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter
+              desc: a renderer explains normalized evidence; it knows no protocol
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/probe
+              desc: a renderer collects nothing
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
+              desc: a renderer explains findings; producing them is diagnosis work
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/security
+              desc: a renderer never holds a secret
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/security/redaction
+              desc: >-
+                redaction is an output-boundary transformation applied before
+                rendering; a renderer that redacted could contradict the report's
+                own security metadata
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/platform
+              desc: a renderer reads no environment
+            - pkg: net
+              desc: a renderer performs no network I/O
+            - pkg: net/http
+              desc: a renderer performs no network I/O
+            - pkg: os/exec
+              desc: a renderer runs no commands
+            - pkg: math/rand
+              desc: rendered output must be deterministic
+            - pkg: math/rand/v2
+              desc: rendered output must be deterministic
+
         # Probes are service-agnostic and produce observations, not diagnosis.
         # docs/ARCHITECTURE.md section 3.
         probe-is-service-agnostic:

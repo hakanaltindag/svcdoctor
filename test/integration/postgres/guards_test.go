@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	gobuild "go/build"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -74,36 +75,191 @@ func parseFile(t *testing.T, path string) *ast.File {
 	return f
 }
 
-// TestNoCLIOrRendererExists guards what is still deliberately absent.
+// TestTheProductBoundaryExists is the positive form of a guard that used to
+// assert emptiness.
 //
-// **This guard changed in Phase 4.8b, on purpose.** In Phase 4.8a it also
-// covered `internal/app`, because a production composition root needed decisions
-// the repository had not made — which continuation may be authenticated and why,
-// whether more than one ever is, where the whole-run budget lives, whether a run
-// emits a shareable report. ADR 0041 decided all of them, and Phase 4.8b built
-// the composition root it authorized. So `internal/app` is now expected to hold
-// code, and asserting its emptiness would assert the opposite of the decision.
+// Until Phase 5.1 this file asserted that `cmd/svcdoctor` and `internal/render`
+// held no Go code, because the product boundary was undecided and an accidental
+// renderer would have made decisions ADR 0048 had not yet made. ADR 0048 made
+// them and Phase 5.1 built the spine, so asserting emptiness would now assert
+// the opposite of the decision — which is exactly the failure mode that guard
+// existed to prevent, pointed the other way.
 //
-// What remains absent is the product boundary: no CLI, no renderer. A run
-// returns a report and stops there; turning that into rendered output and a
-// process exit status is Phase 5, and `internal/app` must not start doing it.
-func TestNoCLIOrRendererExists(t *testing.T) {
+// What replaces it is the set of properties that were actually load-bearing.
+func TestTheProductBoundaryExists(t *testing.T) {
 	root := repoRoot(t)
 
 	for _, dir := range []string{
 		filepath.Join(root, "cmd", "svcdoctor"),
-		filepath.Join(root, "internal", "render"),
+		filepath.Join(root, "internal", "cli"),
+		filepath.Join(root, "internal", "render", "json"),
+		filepath.Join(root, "internal", "platform", "local"),
 	} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue // absent is at least as empty as empty
+		if len(goFilesIn(t, dir)) == 0 {
+			t.Errorf("%s holds no Go code; Phase 5.1 builds the CLI spine there", dir)
 		}
-		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".go") {
-				t.Errorf("%s contains %s; the CLI and renderers are Phase 5", dir, e.Name())
+	}
+}
+
+// TestTheCLIReachesOnlyTheApplication pins what the command boundary may know.
+//
+// The CLI is a composition layer, so it names concrete things on purpose: the
+// system resolver and dialer, the PostgreSQL TLS plan, the local vantage
+// producer. **What it must never import is internal/diagnosis.** Rules run
+// inside the application over frozen evidence, and a command that could call one
+// could publish a finding nobody measured.
+//
+// It must also not reach a wire package, where the protocol and the one
+// authorized security.Reveal live.
+func TestTheCLIReachesOnlyTheApplication(t *testing.T) {
+	forbidden := []string{
+		"internal/diagnosis",
+		"internal/adapter/postgres/wire",
+		"internal/adapter/kafka",
+		"internal/security/redaction",
+	}
+	for path, imports := range importsUnder(t, filepath.Join(repoRoot(t), "internal", "cli")) {
+		for _, imported := range imports {
+			for _, deny := range forbidden {
+				if strings.Contains(imported, deny) {
+					t.Errorf("%s imports %s; the command boundary may not reach it",
+						path, imported)
+				}
 			}
 		}
 	}
+}
+
+// TestTheRendererIsPresentationOnly is ADR 0048 section 3, enforced.
+//
+// A renderer that could import the application would start deciding exit codes;
+// one that could import diagnosis would start producing findings; one that could
+// import redaction could emit shareable-looking bytes whose own security
+// metadata disagreed. depguard carries the same rule, and this test states it in
+// the repository's own terms so that a weakened lint config is visible here too.
+func TestTheRendererIsPresentationOnly(t *testing.T) {
+	forbidden := []string{
+		"internal/app",
+		"internal/adapter",
+		"internal/probe",
+		"internal/diagnosis",
+		"internal/security",
+		"internal/platform",
+		"net/http",
+		"os/exec",
+	}
+	for path, imports := range importsUnder(t, filepath.Join(repoRoot(t), "internal", "render")) {
+		for _, imported := range imports {
+			for _, deny := range forbidden {
+				if strings.Contains(imported, deny) {
+					t.Errorf("%s imports %s; a renderer presents and nothing else",
+						path, imported)
+				}
+			}
+		}
+	}
+}
+
+// TestNoCredentialSurfaceExistsYet pins the Phase 5.1 boundary.
+//
+// ADR 0049 decides how a secret arrives, and Phase 5.2 implements it. Until then
+// the CLI must have no credential flag and no way to build a Secret — so a run
+// with no credential produces POSTGRES_CREDENTIAL_NOT_CONFIGURED, which is a
+// truthful diagnosis rather than a usage error.
+func TestNoCredentialSurfaceExistsYet(t *testing.T) {
+	root := filepath.Join(repoRoot(t), "internal", "cli")
+
+	for path, imports := range importsUnder(t, root) {
+		for _, imported := range imports {
+			if strings.HasSuffix(imported, "internal/security") {
+				t.Errorf("%s imports internal/security; Phase 5.1 constructs no credential "+
+					"and must not be able to", path)
+			}
+		}
+	}
+
+	// Code, not comments. This package's comments explain at length *why* there
+	// is no credential flag and why --shareable waits for Phase 5.2, and a guard
+	// that could not tell an explanation from an implementation would forbid
+	// writing the explanation down.
+	for _, path := range goFilesIn(t, root) {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		code := codeWithoutComments(t, path)
+		for _, forbidden := range []string{
+			"password", "Password", "PGPASSWORD", "shareable", "Shareable",
+			"Reveal", "os.Getenv",
+		} {
+			if strings.Contains(code, forbidden) {
+				t.Errorf("%s references %q in code; credential input is ADR 0049 and "+
+					"Phase 5.2, and --shareable is Phase 5.2", path, forbidden)
+			}
+		}
+	}
+}
+
+// codeWithoutComments returns a file's code with every comment removed, so a
+// guard can forbid an implementation without forbidding the sentence that
+// explains why the implementation is absent.
+func codeWithoutComments(t *testing.T, path string) string {
+	t.Helper()
+
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+	var out strings.Builder
+	if err := printer.Fprint(&out, fset, parsed); err != nil {
+		t.Fatalf("printing %s: %v", path, err)
+	}
+	return out.String()
+}
+
+// goFilesIn lists the Go files directly in a directory.
+func goFilesIn(t *testing.T, dir string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
+}
+
+// importsUnder maps every Go file under root to the packages it imports.
+func importsUnder(t *testing.T, root string) map[string][]string {
+	t.Helper()
+
+	out := map[string][]string{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		parsed, parseErr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if parseErr != nil {
+			return parseErr
+		}
+		for _, spec := range parsed.Imports {
+			out[path] = append(out[path], strings.Trim(spec.Path.Value, `"`))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+	return out
 }
 
 // TestTheCompositionRootIsPostgreSQLOnly pins the scope ADR 0041 authorized.
