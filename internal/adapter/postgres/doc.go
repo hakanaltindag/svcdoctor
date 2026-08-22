@@ -3,9 +3,10 @@
 // It is the second service adapter and it owns three steps, in order, over the
 // same socket the TCP probe measured:
 //
-//	Negotiate     postgres.ssl_request  L3   SSLRequest, and the TLS upgrade it may authorize
-//	Startup       postgres.startup      L4   StartupMessage, and what authentication the peer demands
-//	Authenticate  postgres.authentication L5 SCRAM-SHA-256, when the peer asks for it and policy allows
+//	Negotiate         postgres.ssl_request    L3  SSLRequest, and the TLS upgrade it may authorize
+//	Startup           postgres.startup        L4  StartupMessage, and what authentication the peer demands
+//	Authenticate      postgres.authentication L5  SCRAM-SHA-256, when the peer asks for it and policy allows
+//	EstablishSession  postgres.session        L5  AuthenticationOk to ReadyForQuery, then Terminate
 //
 // Each step consumes the previous step's result and returns a new type, so the
 // protocol state is in the type system rather than in a caller's memory: a
@@ -41,9 +42,24 @@
 // password outside printable ASCII is a gap in svcdoctor rather than a rejection
 // by the peer.
 //
+// # Where SQLSTATE is interpreted
+//
+// **Each step has its own classifier and they must not be merged.** A shared
+// PostgreSQL SQLSTATE dictionary would answer *what does this code mean*, when
+// the only answerable question is *what does it prove here*: `3D000` proves a
+// missing database at the session step and proves nothing at the two before it,
+// because neither of those has sent a database name for a catalog lookup to fail
+// on. `TestSQLStateMeaningIsScopedToItsStep` pins the difference and
+// `TestEachStepHasItsOwnClassifier` makes merging them visible. See ADR 0039
+// section 7.1.
+//
 // # What it does not do
 //
-// It executes no SQL, reads no ParameterStatus, and never reaches ReadyForQuery —
-// those belong to the session step, and the connection an AuthenticatedSession
-// carries still holds every byte of them, unread.
+// **It executes no SQL**, and an AST guard enforces that rather than a comment.
+// Every fact the session step records arrives as a `ParameterStatus`; the one
+// that would need a statement — the session-local `transaction_read_only` — is
+// deferred as a fact rather than obtained by weakening the rule.
+//
+// The session step is terminal in v0.1: it sends `Terminate`, closes, and returns
+// no connection, because nothing runs after `ReadyForQuery`.
 package postgres
