@@ -389,6 +389,41 @@ func TestVersionIsTheConfiguredValue(t *testing.T) {
 	}
 }
 
+// TestVersionHasOneAuthority pins that --version and the report describe the
+// same binary.
+//
+// The two projections travel different routes — one is printed by the command,
+// the other is carried in PostgresParams into the run and recorded in the
+// report's run metadata — and they must be the same string. A binary that told
+// an operator one version and its shared report another would make every report
+// ambiguous about what produced it, which is precisely the question a report
+// exists to answer when it is read somewhere else.
+//
+// cmd/svcdoctor resolves the value once and hands it down; this test is what
+// stops a later change from resolving it twice.
+func TestVersionHasOneAuthority(t *testing.T) {
+	h := newHarness(app.Result{}, nil)
+
+	if code := h.run("--version"); code != ExitOK {
+		t.Fatalf("--version exit = %d", code)
+	}
+	printed := strings.TrimSpace(h.stdout.String())
+
+	h.stdout.Reset()
+	if code := h.run("diagnose", "postgres", "--host", "db", "--user", "app"); code != ExitOK {
+		t.Fatalf("diagnose exit = %d: %s", code, h.stderr.String())
+	}
+	recorded := h.captured.Version
+
+	if printed != recorded {
+		t.Errorf("--version printed %q but the run recorded %q; "+
+			"both must come from one authority", printed, recorded)
+	}
+	if printed == "" {
+		t.Error("version is empty; domain.NewRunMetadata rejects that")
+	}
+}
+
 // TestHelpDocumentsOnlyWhatExists keeps help and implementation in step.
 //
 // Help that advertises a flag the build does not have is a support ticket. The

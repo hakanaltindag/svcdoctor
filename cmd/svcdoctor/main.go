@@ -16,15 +16,6 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/cli"
 )
 
-// version is svcdoctor's own version, recorded in every report's run metadata.
-//
-// A plain package variable so a release build can set it with
-// `-ldflags "-X main.version=..."`, and a development default so a build from
-// source is honest about what it is rather than claiming a release. No build-info
-// reflection, no semver library, and no git invocation at runtime: the value has
-// to be deterministic, because it lands in the report.
-var version = "dev"
-
 func main() {
 	// **The root context is created here and nowhere else.** A signal cancels
 	// it, cancellation reaches every probe through the context the run already
@@ -38,5 +29,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	os.Exit(cli.New(os.Stdin, os.Stdout, os.Stderr, version).Run(ctx, os.Args[1:]))
+	// Resolved once, here, and handed down. internal/cli prints this value for
+	// --version and records the same one in the report, so the two cannot
+	// disagree. See version.go.
+	os.Exit(cli.New(os.Stdin, os.Stdout, os.Stderr, resolvedVersion()).Run(ctx, os.Args[1:]))
 }
