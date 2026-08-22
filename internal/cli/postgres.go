@@ -13,10 +13,12 @@ import (
 
 	adapterpostgres "github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/app"
+	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/platform/local"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
 	renderjson "github.com/hakanaltindag/svcdoctor/internal/render/json"
+	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 )
 
 // maxCAFileSize bounds the trust material this command will read.
@@ -37,6 +39,11 @@ var errHelpRequested = errors.New("help requested")
 type postgresCommand struct {
 	params  app.PostgresParams
 	timeout time.Duration
+
+	// shareable selects the output projection. It is an *output* decision and
+	// deliberately never reaches internal/app: the application always produces a
+	// truthful LOCAL_FULL report, and diagnosis always runs on that (ADR 0018).
+	shareable bool
 }
 
 // diagnosePostgresCommand runs one PostgreSQL diagnosis end to end.
@@ -80,11 +87,53 @@ func (a *App) diagnosePostgresCommand(ctx context.Context, args []string) int {
 		return code
 	}
 
-	if err := renderjson.Write(a.Stdout, result.Report()); err != nil {
+	// **The exit code is already decided**, from the result, before the output
+	// projection is chosen. Redaction changes what a shared copy reveals and
+	// never what was concluded, so a run cannot exit differently because it was
+	// rendered for sharing.
+	report, err := project(result.Report(), command.shareable)
+	if err != nil {
+		// Redaction fails closed, and so does this: no half-redacted report
+		// reaches stdout, because a caller who received one would share it.
+		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: %v\n", err)
+		return ExitInternal
+	}
+	if err := renderjson.Write(a.Stdout, report); err != nil {
 		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: %v\n", err)
 		return ExitInternal
 	}
 	return code
+}
+
+// project selects the output form of a finished report.
+//
+// # The whole of --shareable, in one place
+//
+//	app produces a truthful LOCAL_FULL report
+//	    ↓
+//	this function optionally derives SHAREABLE_REDACTED
+//	    ↓
+//	the renderer receives whichever was chosen
+//
+// Diagnosis has already run, on the truthful report, and is never re-run.
+// Redaction is applied at most once, here, by the command — never by the
+// renderer, which cannot even import it (ADR 0048 sections 3 and 6).
+//
+// # It derives rather than mutates
+//
+// redaction.Redact builds a new report through the ordinary domain constructors
+// and leaves its input untouched, so the LOCAL_FULL report the exit code was
+// derived from is still intact after this returns. That is the property
+// TestTheLocalReportSurvivesRedaction pins.
+func project(report domain.Report, shareable bool) (domain.Report, error) {
+	if !shareable {
+		return report, nil
+	}
+	redacted, err := redaction.Redact(report)
+	if err != nil {
+		return domain.Report{}, fmt.Errorf("deriving the shareable report: %w", err)
+	}
+	return redacted, nil
 }
 
 // parsePostgres turns arguments into one run's parameters.
@@ -112,6 +161,10 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 		serverName  = fs.String("tls-server-name", "", "identity to verify")
 		insecure    = fs.Bool("tls-insecure", false, "do not verify the endpoint's identity")
 		output      = fs.String("output", "json", `"json"`)
+
+		passwordFile  = fs.String("password-file", "", "read the credential from a file")
+		passwordStdin = fs.Bool("password-stdin", false, "read the credential from stdin")
+		shareable     = fs.Bool("shareable", false, "produce the shareable redacted report")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -162,6 +215,23 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 		return postgresCommand{}, err
 	}
 
+	// The credential, from the one source the invocation named. Nothing here
+	// inspects it, compares it or decides anything from it: an empty source
+	// leaves the credential unset and the run takes the documented
+	// not-configured path. See readSecret and credentialFor.
+	sources := credentialSources{file: *passwordFile, fromStdin: *passwordStdin}
+	if err := sources.validate(); err != nil {
+		return postgresCommand{}, err
+	}
+	secret, err := a.readSecret(sources)
+	if err != nil {
+		return postgresCommand{}, err
+	}
+	credential, err := credentialFor(*host, uint16(*port), *user, secret)
+	if err != nil {
+		return postgresCommand{}, err
+	}
+
 	// The vantage is a platform fact and is collected here, once, from the
 	// platform boundary. A host that cannot name itself stops the run: an empty
 	// vantage would make every finding's "from this vantage point" meaningless.
@@ -171,22 +241,19 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 	}
 
 	return postgresCommand{
-		timeout: *timeout,
+		timeout:   *timeout,
+		shareable: *shareable,
 		params: app.PostgresParams{
 			Host:     *host,
 			Port:     uint16(*port),
 			Role:     *user,
 			Database: *database,
 
-			// **Credential is deliberately left at its zero value**, and
-			// internal/security is deliberately not imported by this package in
-			// Phase 5.1 — so no credential can be constructed here even by
-			// accident. That is a product state rather than a gap: an endpoint
-			// demanding authentication produces
-			// POSTGRES_CREDENTIAL_NOT_CONFIGURED, a truthful WARN with status OK
-			// and exit 0, so the CLI never has to acquire something it was not
-			// given. ADR 0049 decides how one arrives in Phase 5.2, and nothing
-			// in this function's shape has to change for it.
+			// Zero unless a source was named and yielded something. The
+			// adapter's own "nothing to present" branch reads exactly this, so
+			// an absent credential and an empty one reach the same documented
+			// outcome without this package deciding anything about either.
+			Credential: credential,
 
 			Resolver: dns.SystemResolver{},
 			Dialer:   tcp.SystemDialer{},

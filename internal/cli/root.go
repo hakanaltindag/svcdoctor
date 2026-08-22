@@ -34,6 +34,12 @@ import (
 // without a subprocess, and so that stdout discipline is provable rather than
 // asserted.
 type App struct {
+	// In carries credential material when --password-stdin selects it, and is
+	// read for nothing else. It is a field rather than os.Stdin so the credential
+	// path is testable without a subprocess, and so nothing in this package can
+	// read the process's input by reaching around the boundary.
+	In io.Reader
+
 	// Stdout receives the report artifact, and nothing else.
 	Stdout io.Writer
 
@@ -62,8 +68,9 @@ type App struct {
 }
 
 // New builds the production command environment.
-func New(stdout, stderr io.Writer, version string) *App {
+func New(stdin io.Reader, stdout, stderr io.Writer, version string) *App {
 	return &App{
+		In:               stdin,
 		Stdout:           stdout,
 		Stderr:           stderr,
 		Version:          version,

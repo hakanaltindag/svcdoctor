@@ -14,10 +14,15 @@ import (
 // artifact and goes to stdout, help shown because an invocation was wrong is a
 // diagnostic and goes to stderr — which a FlagSet's single Output cannot express.
 //
-// Nothing here documents a flag that does not exist. No --password, no
-// --password-file, no --password-stdin, no --shareable, no --color, no
-// --verbose, and no inspect or kafka: Phase 5.1 implements the JSON spine, and
-// help that advertises unimplemented surface is a bug report waiting to happen.
+// Nothing here documents a flag that does not exist. Phase 5.2 added
+// --password-file, --password-stdin and --shareable, so those appear; a literal
+// --password, an environment variable and an interactive prompt do not, because
+// ADR 0049 refuses the first and defers the other two. Neither do --color,
+// --verbose, inspect or kafka.
+//
+// The credential wording says what each flag reads and stops there. Calling a
+// source "safe" or "secure" would be an absolute claim about the operator's
+// filesystem and pipeline, which this tool is in no position to make.
 
 func (a *App) usageRoot(w io.Writer) {
 	_, _ = fmt.Fprint(w, `svcdoctor diagnoses service connectivity from where you run it.
@@ -84,8 +89,17 @@ Transport encryption:
                             credential transport policy refuses, so a
                             credential would be withheld rather than sent
 
+Credential:
+  --password-file path      read the PostgreSQL credential from a file
+  --password-stdin          read the PostgreSQL credential from stdin
+
+  At most one may be given. Supplying neither is a valid run: an endpoint that
+  demands authentication is reported as such, and nothing is sent.
+
 Output:
   --output string           "json" (default "json")
+  --shareable               produce the shareable redacted report instead of
+                            the local one, using the same diagnosis
 
 Exit codes:
   0   a report was produced and no error-level problem was proven

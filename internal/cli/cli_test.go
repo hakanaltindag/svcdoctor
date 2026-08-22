@@ -21,6 +21,8 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +31,7 @@ import (
 	adapterpostgres "github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/app"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // The command boundary's tests, and why they run real diagnoses.
@@ -193,7 +196,11 @@ func mustAddr(t *testing.T, s string) netip.Addr {
 // runReal produces a genuine Result by measuring a real socket.
 func runReal(t *testing.T, params app.PostgresParams) app.Result {
 	t.Helper()
-	params.Role = "svcdoctor"
+	// **Not "svcdoctor".** That word appears in finding prose, so a role named
+	// after the tool makes redaction fail closed — deliberately, and pinned by
+	// test/security's TestAToolWordAsARoleNameFailsClosed. These fixtures need a
+	// role that redacts cleanly; the refusal has its own test below.
+	params.Role = "app"
 	params.Version = "0.0.0-test"
 	if params.StepTimeout == 0 {
 		params.StepTimeout = 150 * time.Millisecond
@@ -382,23 +389,68 @@ func TestVersionIsTheConfiguredValue(t *testing.T) {
 	}
 }
 
-func TestHelpDocumentsNoUnimplementedSurface(t *testing.T) {
-	// Help that advertises a flag Phase 5.1 does not implement is a support
-	// ticket. Phase 5.2 adds the credential flags and --shareable; until then
-	// they must not appear.
-	forbidden := []string{
-		"--password", "--password-file", "--password-stdin",
-		"--shareable", "--color", "--verbose", "inspect", "kafka",
-	}
+// TestHelpDocumentsOnlyWhatExists keeps help and implementation in step.
+//
+// Help that advertises a flag the build does not have is a support ticket. The
+// forbidden list is the surface ADR 0049 refuses outright or defers: a literal
+// --password, environment variables, an interactive prompt, and the Phase 5.3
+// renderer's flags.
+//
+// The literal --password is matched with a boundary, because --password-file and
+// --password-stdin legitimately contain it as a prefix.
+func TestHelpDocumentsOnlyWhatExists(t *testing.T) {
+	literalPassword := regexp.MustCompile(`--password([^-\w]|$)`)
+
 	for _, args := range [][]string{{"--help"}, {"diagnose", "--help"}, {"diagnose", "postgres", "--help"}} {
 		h := newHarness(app.Result{}, nil)
 		h.run(args...)
 		text := h.stdout.String()
-		for _, word := range forbidden {
+
+		if literalPassword.MatchString(text) {
+			t.Errorf("`%s` help offers a literal --password; ADR 0049 refuses it outright",
+				strings.Join(args, " "))
+		}
+		for _, word := range []string{
+			"PGPASSWORD", "SVCDOCTOR_PASSWORD", "environment variable",
+			"prompt", "--color", "--verbose", "inspect", "kafka",
+		} {
 			if strings.Contains(text, word) {
-				t.Errorf("`%s` help mentions %q, which Phase 5.1 does not implement",
+				t.Errorf("`%s` help mentions %q, which is refused or deferred",
 					strings.Join(args, " "), word)
 			}
+		}
+		// Absolute safety claims are not this tool's to make about someone
+		// else's filesystem and pipeline (ADR 0049). Matched on whole words, so
+		// that --tls-insecure does not read as a claim that something is secure.
+		for _, claim := range []string{"safer", "secure", "protected"} {
+			if regexp.MustCompile(`\b` + claim + `\b`).MatchString(text) {
+				t.Errorf("`%s` help claims %q about a credential source",
+					strings.Join(args, " "), claim)
+			}
+		}
+	}
+}
+
+// TestNoLiteralPasswordFlagExists is the behavioural half: help could be right
+// and the flag could still be registered.
+func TestNoLiteralPasswordFlagExists(t *testing.T) {
+	for _, args := range [][]string{
+		{"--password", "hunter2"},
+		{"--password=hunter2"},
+	} {
+		h := newHarness(app.Result{}, nil)
+		full := append([]string{"diagnose", "postgres", "--host", "db", "--user", "app"}, args...)
+		code := h.run(full...)
+
+		if code != ExitUsage {
+			t.Errorf("%v: exit = %d, want %d; a literal password flag must not exist",
+				args, code, ExitUsage)
+		}
+		if h.calls != 0 {
+			t.Errorf("%v: the application ran", args)
+		}
+		if strings.Contains(h.stderr.String(), "hunter2") {
+			t.Errorf("%v: the rejection echoed the value", args)
 		}
 	}
 }
@@ -816,4 +868,476 @@ func sourceWithoutComments(t *testing.T, name string) string {
 		t.Fatalf("printing %s: %v", name, err)
 	}
 	return out.String()
+}
+
+// --- shareable output ---------------------------------------------------------
+
+// runWithStdin drives the command with credential material on the injected
+// input, so the stdin path is exercised without a subprocess.
+func (h *harness) runWithStdin(stdin string, args ...string) int {
+	h.app.In = strings.NewReader(stdin)
+	return h.app.Run(context.Background(), args)
+}
+
+func decode(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v", err)
+	}
+	return out
+}
+
+func outputMode(t *testing.T, decoded map[string]any) string {
+	t.Helper()
+	security, ok := decoded["security"].(map[string]any)
+	if !ok {
+		t.Fatal("the report has no security section")
+	}
+	mode, _ := security["outputMode"].(string)
+	return mode
+}
+
+// TestShareableSelectsTheRedactedProjection covers the flag's whole effect.
+func TestShareableSelectsTheRedactedProjection(t *testing.T) {
+	result := resultProblemsComplete(t)
+
+	local := newHarness(result, nil)
+	if code := local.run("diagnose", "postgres", "--host", "db", "--user", "app"); code != ExitProblemsFound {
+		t.Fatalf("local exit = %d: %s", code, local.stderr.String())
+	}
+	shared := newHarness(result, nil)
+	if code := shared.run("diagnose", "postgres", "--host", "db", "--user", "app",
+		"--shareable"); code != ExitProblemsFound {
+		t.Fatalf("shareable exit = %d: %s", code, shared.stderr.String())
+	}
+
+	localDoc := decode(t, local.stdout.Bytes())
+	sharedDoc := decode(t, shared.stdout.Bytes())
+
+	if got := outputMode(t, localDoc); got != domain.OutputModeLocalFull.String() {
+		t.Errorf("default output mode = %s, want LOCAL_FULL", got)
+	}
+	if got := outputMode(t, sharedDoc); got != domain.OutputModeShareableRedacted.String() {
+		t.Errorf("--shareable output mode = %s, want SHAREABLE_REDACTED", got)
+	}
+
+	// Both remain the canonical report: same schema version, same top-level
+	// keys, no wrapper and no invented field.
+	for name, doc := range map[string]map[string]any{"local": localDoc, "shareable": sharedDoc} {
+		if doc["schemaVersion"] != float64(domain.SchemaVersion) {
+			t.Errorf("%s: schemaVersion = %v", name, doc["schemaVersion"])
+		}
+		for _, invented := range []string{"report", "incomplete", "exitCode", "shareable", "sessionEstablished"} {
+			if _, ok := doc[invented]; ok {
+				t.Errorf("%s: the artifact carries %q", name, invented)
+			}
+		}
+	}
+	if shared.stderr.Len() != 0 {
+		t.Errorf("stderr = %q; --shareable announces nothing", shared.stderr.String())
+	}
+}
+
+// TestShareableCannotChangeTheExitCode is load-bearing.
+//
+// Redaction changes what a shared copy reveals, never what was concluded. A run
+// that exits 1 locally must exit 1 shared, or the flag would be able to hide a
+// problem from a pipeline.
+func TestShareableCannotChangeTheExitCode(t *testing.T) {
+	tests := []struct {
+		name   string
+		result func(*testing.T) app.Result
+		want   int
+	}{
+		{"healthy", resultOKComplete, ExitOK},
+		{"warning only", resultWarnComplete, ExitOK},
+		{"target error", resultProblemsComplete, ExitProblemsFound},
+		{"incomplete", resultOKIncomplete, ExitIncomplete},
+		{"incomplete with an error", resultProblemsIncomplete, ExitIncomplete},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.result(t)
+
+			local := newHarness(result, nil)
+			localCode := local.run("diagnose", "postgres", "--host", "db", "--user", "app")
+			shared := newHarness(result, nil)
+			sharedCode := shared.run("diagnose", "postgres", "--host", "db", "--user", "app",
+				"--shareable")
+
+			if localCode != tt.want || sharedCode != tt.want {
+				t.Errorf("exit local = %d, shareable = %d, want %d",
+					localCode, sharedCode, tt.want)
+			}
+			if shared.stdout.Len() == 0 {
+				t.Error("the shareable run produced no artifact")
+			}
+		})
+	}
+}
+
+// TestShareablePreservesTheDiagnosis pins what redaction may not touch.
+func TestShareablePreservesTheDiagnosis(t *testing.T) {
+	result := resultProblemsComplete(t)
+
+	local := newHarness(result, nil)
+	local.run("diagnose", "postgres", "--host", "db", "--user", "app")
+	shared := newHarness(result, nil)
+	shared.run("diagnose", "postgres", "--host", "db", "--user", "app", "--shareable")
+
+	localDoc := decode(t, local.stdout.Bytes())
+	sharedDoc := decode(t, shared.stdout.Bytes())
+
+	// The summary is re-derived by redaction rather than copied, so equality
+	// here is a statement about the diagnosis surviving, not about a memcpy.
+	if !reflect.DeepEqual(localDoc["summary"], sharedDoc["summary"]) {
+		t.Errorf("the summary changed under redaction:\n local: %v\n shared: %v",
+			localDoc["summary"], sharedDoc["summary"])
+	}
+
+	localFindings, _ := localDoc["findings"].([]any)
+	sharedFindings, _ := sharedDoc["findings"].([]any)
+	if len(localFindings) != len(sharedFindings) || len(sharedFindings) == 0 {
+		t.Fatalf("findings: local %d, shared %d", len(localFindings), len(sharedFindings))
+	}
+	for i := range localFindings {
+		l, _ := localFindings[i].(map[string]any)
+		s, _ := sharedFindings[i].(map[string]any)
+		for _, field := range []string{"code", "kind", "severity", "confidence", "layer", "vantageDependent"} {
+			if l[field] != s[field] {
+				t.Errorf("finding %d: %s changed under redaction: %v -> %v",
+					i, field, l[field], s[field])
+			}
+		}
+	}
+
+	// Timings are not identity and are not touched.
+	localNodes := nodesByStep(t, localDoc)
+	sharedNodes := nodesByStep(t, sharedDoc)
+	for step, ln := range localNodes {
+		sn, ok := sharedNodes[step]
+		if !ok {
+			t.Errorf("step %s vanished under redaction", step)
+			continue
+		}
+		for _, field := range []string{"startedAt", "durationMs", "duration", "state", "failureClass"} {
+			if lv, ok := ln[field]; ok && lv != sn[field] {
+				t.Errorf("%s: %s changed under redaction: %v -> %v", step, field, lv, sn[field])
+			}
+		}
+	}
+}
+
+func nodesByStep(t *testing.T, doc map[string]any) map[string]map[string]any {
+	t.Helper()
+	evidence, ok := doc["evidence"].(map[string]any)
+	if !ok {
+		t.Fatal("no evidence section")
+	}
+	raw, _ := evidence["nodes"].([]any)
+	out := map[string]map[string]any{}
+	for _, n := range raw {
+		node, ok := n.(map[string]any)
+		if !ok {
+			continue
+		}
+		step, _ := node["step"].(string)
+		out[step] = node
+	}
+	return out
+}
+
+// TestTheLocalReportSurvivesRedaction proves the projection is derivative.
+//
+// If redaction mutated its input, the truthful report the exit code was derived
+// from would be gone by the time anything else looked at it.
+func TestTheLocalReportSurvivesRedaction(t *testing.T) {
+	result := resultProblemsComplete(t)
+
+	before, err := json.Marshal(result.Report())
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	h := newHarness(result, nil)
+	if code := h.run("diagnose", "postgres", "--host", "db", "--user", "app",
+		"--shareable"); code != ExitProblemsFound {
+		t.Fatalf("exit = %d", code)
+	}
+
+	after, err := json.Marshal(result.Report())
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("deriving the shareable report mutated the local one")
+	}
+}
+
+// TestShareableIsAppliedOnce guards against a second pass.
+//
+// redaction.Redact is idempotent — a SHAREABLE_REDACTED report is returned
+// unchanged rather than pseudonymized into host-002 — so double redaction would
+// not corrupt the output. This asserts the stronger property directly: the
+// command applies it once, and the renderer cannot apply it at all.
+func TestShareableIsAppliedOnce(t *testing.T) {
+	result := resultProblemsComplete(t)
+	first := newHarness(result, nil)
+	first.run("diagnose", "postgres", "--host", "db", "--user", "app", "--shareable")
+	second := newHarness(result, nil)
+	second.run("diagnose", "postgres", "--host", "db", "--user", "app", "--shareable")
+
+	if first.stdout.String() != second.stdout.String() {
+		t.Error("two shareable runs of one report produced different bytes")
+	}
+	if strings.Contains(sourceWithoutComments(t, "postgres.go"), "redaction.Redact") &&
+		strings.Count(sourceWithoutComments(t, "postgres.go"), "redaction.Redact") != 1 {
+		t.Error("redaction is applied more than once")
+	}
+}
+
+// --- the credential path through the command ---------------------------------
+
+// TestCredentialReachesTheParameters covers both sources end to end.
+func TestCredentialReachesTheParameters(t *testing.T) {
+	t.Run("from a file", func(t *testing.T) {
+		h := newHarness(resultOKComplete(t), nil)
+		path := writeFile(t, "hunter2\n")
+		if code := h.run("diagnose", "postgres", "--host", "db.internal", "--user", "app",
+			"--password-file", path); code != ExitOK {
+			t.Fatalf("exit = %d: %s", code, h.stderr.String())
+		}
+		requireBoundCredential(t, h)
+	})
+
+	t.Run("from stdin", func(t *testing.T) {
+		h := newHarness(resultOKComplete(t), nil)
+		if code := h.runWithStdin("hunter2\n", "diagnose", "postgres",
+			"--host", "db.internal", "--user", "app", "--password-stdin"); code != ExitOK {
+			t.Fatalf("exit = %d: %s", code, h.stderr.String())
+		}
+		requireBoundCredential(t, h)
+	})
+}
+
+func requireBoundCredential(t *testing.T, h *harness) {
+	t.Helper()
+	if h.calls != 1 {
+		t.Fatalf("the application ran %d times", h.calls)
+	}
+	// **The credential path adds no chatter.** Reading a secret is not an event
+	// worth announcing, and a line like "password loaded" before the artifact
+	// would make stdout unparseable for the pipeline the flag exists to serve.
+	if h.stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", h.stderr.String())
+	}
+	if !json.Valid(h.stdout.Bytes()) {
+		t.Errorf("stdout is not valid JSON; something was written beside the artifact: %q",
+			h.stdout.String())
+	}
+	if h.captured.Credential.IsZero() {
+		t.Fatal("no credential reached the parameters")
+	}
+	endpoint, err := security.NewEndpoint("db.internal", 5432)
+	if err != nil {
+		t.Fatalf("NewEndpoint: %v", err)
+	}
+	if _, err := h.captured.Credential.SecretFor(endpoint); err != nil {
+		t.Errorf("the credential is not bound to the requested endpoint: %v", err)
+	}
+}
+
+// TestNoCredentialSourceLeavesTheParametersUnchanged is the Phase 5.1
+// regression: adding credential support must not make one required.
+func TestNoCredentialSourceLeavesTheParametersUnchanged(t *testing.T) {
+	h := newHarness(resultWarnComplete(t), nil)
+	code := h.runWithStdin("material-nobody-asked-for",
+		"diagnose", "postgres", "--host", "db", "--user", "app")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d", code, ExitOK)
+	}
+	if !h.captured.Credential.IsZero() {
+		t.Error("a credential appeared without a source flag")
+	}
+}
+
+// TestTheCredentialNeverReachesAnyStream is the security sweep at this boundary.
+func TestTheCredentialNeverReachesAnyStream(t *testing.T) {
+	const canary = "CANARY-PASSWORD-8f3a1c"
+
+	for _, mode := range []string{"local", "shareable"} {
+		for _, source := range []string{"file", "stdin"} {
+			h := newHarness(resultOKComplete(t), nil)
+			args := []string{"diagnose", "postgres", "--host", "db.internal", "--user", "app"}
+			if mode == "shareable" {
+				args = append(args, "--shareable")
+			}
+
+			var code int
+			if source == "file" {
+				code = h.run(append(args, "--password-file", writeFile(t, canary+"\n"))...)
+			} else {
+				code = h.runWithStdin(canary+"\n", append(args, "--password-stdin")...)
+			}
+			if code != ExitOK {
+				t.Fatalf("%s/%s: exit = %d: %s", mode, source, code, h.stderr.String())
+			}
+
+			if strings.Contains(h.stdout.String(), canary) {
+				t.Errorf("%s/%s: the credential reached stdout", mode, source)
+			}
+			if strings.Contains(h.stderr.String(), canary) {
+				t.Errorf("%s/%s: the credential reached stderr", mode, source)
+			}
+		}
+	}
+}
+
+// TestTheCLINeverRevealsASecret pins the Reveal boundary in this package.
+func TestTheCLINeverRevealsASecret(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		code := sourceWithoutComments(t, name)
+		for _, forbidden := range []string{"Reveal", "SecretFor", "os.Getenv", "os.Stdin"} {
+			if strings.Contains(code, forbidden) {
+				t.Errorf("%s references %q; the CLI constructs a Secret and never opens it, "+
+					"reads no environment, and takes its input through App.In", name, forbidden)
+			}
+		}
+	}
+}
+
+// TestRedactionFailingClosedIsAnInternalFailure pins ADR 0048's output-failure
+// path against the one condition that really triggers it.
+//
+// A role named after the tool collides with the word finding prose uses, so the
+// residual scan refuses rather than emit a report whose promise is false
+// (test/security pins the refusal itself). The command must surface that as an
+// output failure with **nothing on stdout**: a half-redacted artifact is the one
+// thing worse than no artifact, because a caller who received one would share it.
+func TestRedactionFailingClosedIsAnInternalFailure(t *testing.T) {
+	p := newPeer(t, func(conn net.Conn) {
+		if _, err := io.ReadFull(conn, make([]byte, 8)); err != nil {
+			return
+		}
+		_, _ = conn.Write([]byte{'X'})
+	})
+	ap := p.addrPort(t)
+
+	result, err := app.DiagnosePostgres(context.Background(), app.PostgresParams{
+		Host: "db.internal", Port: ap.Port(),
+		Role:     "svcdoctor", // collides with the word used in finding prose
+		Resolver: stubResolver{addrs: []netip.Addr{ap.Addr()}},
+		Dialer:   toPeer{target: ap},
+		Vantage:  mustVantage(t),
+		Version:  "0.0.0-test", StepTimeout: 150 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("DiagnosePostgres: %v", err)
+	}
+	if len(result.Report().Findings()) == 0 {
+		t.Fatal("the run produced no finding; the collision is not reproduced")
+	}
+
+	// Locally it renders fine: nothing about the run failed.
+	local := newHarness(result, nil)
+	if code := local.run("diagnose", "postgres", "--host", "db", "--user", "app"); code != ExitProblemsFound {
+		t.Fatalf("local exit = %d, want %d", code, ExitProblemsFound)
+	}
+
+	shared := newHarness(result, nil)
+	code := shared.run("diagnose", "postgres", "--host", "db", "--user", "app", "--shareable")
+	if code != ExitInternal {
+		t.Errorf("exit = %d, want %d; a refused redaction is an output failure",
+			code, ExitInternal)
+	}
+	if shared.stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty; no partially redacted report may escape",
+			shared.stdout.String())
+	}
+	if shared.stderr.Len() == 0 {
+		t.Error("stderr is empty; the operator is not told why nothing was produced")
+	}
+}
+
+func mustVantage(t *testing.T) domain.Vantage {
+	t.Helper()
+	v, err := domain.NewLocalVantage("svcdoctor-test")
+	if err != nil {
+		t.Fatalf("NewLocalVantage: %v", err)
+	}
+	return v
+}
+
+// TestShareablePreservesAWarning closes the gap a mutation pass found.
+//
+// Every other shareable test used a report carrying an ERROR or none at all, so
+// a projection that quietly returned the *unredacted* report whenever a warning
+// was present went unnoticed — which would leak identity on exactly the run an
+// operator is most likely to share, the one where nothing is broken.
+func TestShareablePreservesAWarning(t *testing.T) {
+	result := resultWarnComplete(t)
+	if result.Report().Summary().FindingCountsBySeverity().Warn == 0 {
+		t.Fatal("the fixture carries no warning; this test proves nothing")
+	}
+
+	h := newHarness(result, nil)
+	if code := h.run("diagnose", "postgres", "--host", "db", "--user", "app",
+		"--shareable"); code != ExitOK {
+		t.Fatalf("exit = %d: %s", code, h.stderr.String())
+	}
+
+	doc := decode(t, h.stdout.Bytes())
+	if got := outputMode(t, doc); got != domain.OutputModeShareableRedacted.String() {
+		t.Errorf("output mode = %s, want SHAREABLE_REDACTED; the warning suppressed redaction",
+			got)
+	}
+	if counts, _ := doc["summary"].(map[string]any); counts != nil {
+		severities, _ := counts["findingCountsBySeverity"].(map[string]any)
+		if severities["warn"] == float64(0) {
+			t.Error("the warning did not survive redaction")
+		}
+	}
+}
+
+// closeTrackingReader reports whether anything closed it.
+type closeTrackingReader struct {
+	*strings.Reader
+	closed bool
+}
+
+func (c *closeTrackingReader) Close() error {
+	c.closed = true
+	return nil
+}
+
+// TestTheCLINeverClosesItsInput pins a hazard unit tests could not see.
+//
+// A strings.Reader is not an io.Closer, so a mutation that closed stdin when it
+// could was invisible to every other test here — while in production it would
+// close the process's own standard input, which the CLI does not own and a shell
+// pipeline may still be writing to.
+func TestTheCLINeverClosesItsInput(t *testing.T) {
+	in := &closeTrackingReader{Reader: strings.NewReader("hunter2\n")}
+	h := newHarness(resultOKComplete(t), nil)
+	h.app.In = in
+
+	if code := h.app.Run(context.Background(), []string{
+		"diagnose", "postgres", "--host", "db", "--user", "app", "--password-stdin",
+	}); code != ExitOK {
+		t.Fatalf("exit = %d: %s", code, h.stderr.String())
+	}
+	if in.closed {
+		t.Error("the command closed its input; stdin belongs to the process, not to svcdoctor")
+	}
 }
