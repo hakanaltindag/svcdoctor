@@ -369,3 +369,222 @@ func TestGenericFindingProseCarriesNoIdentity(t *testing.T) {
 		}
 	}
 }
+
+// --- PostgreSQL in-band TLS findings (ADR 0044) --------------------------------
+
+// tlsCanaryDialer answers the SSLRequest with 'S' and then speaks something that
+// is not a TLS record, which fails the in-band handshake with TLS_PEER_NOT_TLS.
+type tlsCanaryDialer struct{}
+
+func (tlsCanaryDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, error) {
+	client, server := net.Pipe()
+	go func() {
+		defer func() { _ = server.Close() }()
+		request := make([]byte, 8)
+		if _, err := server.Read(request); err != nil {
+			return
+		}
+		if _, err := server.Write([]byte{'S'}); err != nil {
+			return
+		}
+		hello := make([]byte, 4096)
+		if _, err := server.Read(hello); err != nil {
+			return
+		}
+		_, _ = server.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+	}()
+	return client, nil
+}
+
+// tlsCanaryRun produces a real LOCAL_FULL report whose in-band handshake failed.
+func tlsCanaryRun(t *testing.T) domain.Report {
+	t.Helper()
+
+	vantage, err := domain.NewLocalVantage("anchor-runner-canary.local")
+	if err != nil {
+		t.Fatalf("NewLocalVantage: %v", err)
+	}
+
+	result, err := app.DiagnosePostgres(context.Background(), app.PostgresParams{
+		Host: anchorCanaryHost, Port: anchorCanaryPort,
+		// A role that shares no substring with any word this repository puts in
+		// finding prose. See TestAToolWordAsARoleNameFailsClosed for why that
+		// matters and why the behaviour is correct.
+		Role:     "tenantrolecanary",
+		Resolver: anchorResolver{}, Dialer: tlsCanaryDialer{},
+		StepTimeout: 5 * time.Second,
+		Vantage:     vantage,
+		Version:     "0.0.0-security",
+	})
+	if err != nil {
+		t.Fatalf("DiagnosePostgres: %v", err)
+	}
+	return result.Report()
+}
+
+// TestAPostgresTLSFindingRedactsWithItsEndpoint is the ADR 0044 redaction proof.
+//
+// The finding's subject is a concrete `ip:port` rather than the logical target,
+// so it exercises a different redaction path from the generic transport findings
+// — and it must land on the same pseudonym as the evidence nodes describing that
+// same address, or a shared report shows one endpoint as several.
+func TestAPostgresTLSFindingRedactsWithItsEndpoint(t *testing.T) {
+	local := tlsCanaryRun(t)
+
+	// The canary name resolves to two addresses and both handshakes fail, so
+	// there are **two** findings — one per endpoint. That is ADR 0044's
+	// endpoint scope working: a PostgreSQL finding claims something about the
+	// address that presented the certificate, so a second failing address is a
+	// second claim rather than the same one restated.
+	findings := local.Findings()
+	if len(findings) != 2 {
+		t.Fatalf("got %d findings, want one per failing endpoint: %v", len(findings), findings)
+	}
+	localSubjects := map[string]bool{}
+	for _, f := range findings {
+		if got := f.Code(); got != "POSTGRES_TLS_UPGRADE_NOT_HONORED" {
+			t.Fatalf("code = %s, want POSTGRES_TLS_UPGRADE_NOT_HONORED", got)
+		}
+		localSubjects[f.Subject().Ref()] = true
+	}
+	if len(localSubjects) != 2 {
+		t.Fatalf("the two findings share a subject %v; each is about its own endpoint",
+			localSubjects)
+	}
+	// Non-vacuity: locally the subjects name the real resolved addresses.
+	for subject := range localSubjects {
+		if !strings.Contains(subject, anchorCanaryV4) && !strings.Contains(subject, anchorCanaryV6) {
+			t.Fatalf("local subject %q names neither canary address", subject)
+		}
+	}
+
+	shareable, err := redaction.Redact(local)
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+	shared := shareable.Findings()
+	if len(shared) != len(findings) {
+		t.Fatalf("redaction changed the finding count to %d", len(shared))
+	}
+
+	sharedSubjects := map[string]bool{}
+	for _, f := range shared {
+		subject := f.Subject().Ref()
+		sharedSubjects[subject] = true
+
+		for _, canary := range []string{anchorCanaryV4, anchorCanaryV6, anchorCanaryHost} {
+			if strings.Contains(subject, canary) {
+				t.Errorf("the shareable subject %q still names %q", subject, canary)
+			}
+		}
+
+		// The cited evidence describes the same endpoint, so it must carry the
+		// same pseudonym — that correlation is the point of structural redaction.
+		if len(f.EvidenceRefs()) != 2 {
+			t.Fatalf("got %d refs, want the negotiation and the handshake",
+				len(f.EvidenceRefs()))
+		}
+		for _, ref := range f.EvidenceRefs() {
+			node, ok := shareable.Graph().Node(ref)
+			if !ok {
+				t.Fatalf("evidence ref %s does not resolve in the redacted graph", ref)
+			}
+			if node.Subject().Ref() != subject {
+				t.Errorf("finding subject %q and evidence subject %q disagree after redaction",
+					subject, node.Subject().Ref())
+			}
+		}
+	}
+
+	// Two endpoints stay two endpoints: redaction removes identity, never
+	// distinctions.
+	if len(sharedSubjects) != 2 {
+		t.Errorf("two endpoints collapsed into %v after redaction", sharedSubjects)
+	}
+
+	// Every semantic field survives the transformation unchanged.
+	before, after := findings[0], shared[0]
+	if before.Code() != after.Code() || before.Kind() != after.Kind() ||
+		before.Severity() != after.Severity() || before.Confidence() != after.Confidence() ||
+		before.VantageDependent() != after.VantageDependent() {
+		t.Error("redaction changed a semantic field of the finding")
+	}
+}
+
+// TestPostgresTLSFindingCarriesNoCertificateMaterial pins what may not reach a
+// report.
+//
+// Certificate names, the requested identity and the validity window are
+// structured attributes on the evidence node, where redaction transforms them.
+// None may appear in prose, and no raw TLS library error may either — the probe
+// discards that text precisely because it can name hosts in a form structural
+// redaction cannot recognize.
+func TestPostgresTLSFindingCarriesNoCertificateMaterial(t *testing.T) {
+	local := tlsCanaryRun(t)
+	if len(local.Findings()) == 0 {
+		t.Fatal("the run produced no finding; the scan would be vacuous")
+	}
+
+	for _, f := range local.Findings() {
+		text := f.Summary() + " " + f.Detail()
+		for _, r := range f.Recommendations() {
+			text += " " + r.Action()
+		}
+		for _, leak := range []string{
+			anchorCanaryHost, anchorCanaryV4, anchorCanaryV6,
+			"x509", "tls:", "certificate is valid for", "-----BEGIN",
+		} {
+			if strings.Contains(text, leak) {
+				t.Errorf("%s prose contains %q", f.Code(), leak)
+			}
+		}
+	}
+}
+
+// TestAToolWordAsARoleNameFailsClosed pins a sharp edge found while writing the
+// test above, and pins that its behaviour is the safe one.
+//
+// The residual scan is a substring search for every collected identity. Finding
+// prose in this repository says "svcdoctor" — `POSTGRES_TLS_DECLINED` has said so
+// since Phase 4.6b — so a run whose PostgreSQL **role** is literally `svcdoctor`
+// produces a report where the role's plaintext appears in a sentence that was
+// never about the role.
+//
+// Redaction then refuses to produce a shareable report at all. That is correct:
+// the scan cannot know the occurrence is coincidental, and ADR 0018's rule is to
+// fail closed. Refusing to share is a smaller harm than sharing a report that
+// claims an identity was removed when its plaintext is still present.
+//
+// This is not introduced by ADR 0044 and is not a defect in any finding. It is
+// recorded so that the next person to meet it recognizes it in seconds instead of
+// suspecting the new rule, and so that "fix" does not become "make the scan
+// cleverer" without a decision.
+func TestAToolWordAsARoleNameFailsClosed(t *testing.T) {
+	vantage, err := domain.NewLocalVantage("anchor-runner-canary.local")
+	if err != nil {
+		t.Fatalf("NewLocalVantage: %v", err)
+	}
+
+	result, err := app.DiagnosePostgres(context.Background(), app.PostgresParams{
+		Host: anchorCanaryHost, Port: anchorCanaryPort,
+		Role:     "svcdoctor", // collides with the word used in finding prose
+		Resolver: anchorResolver{}, Dialer: tlsCanaryDialer{},
+		StepTimeout: 5 * time.Second,
+		Vantage:     vantage,
+		Version:     "0.0.0-security",
+	})
+	if err != nil {
+		t.Fatalf("DiagnosePostgres: %v", err)
+	}
+
+	// The local report is produced normally: nothing about the run failed.
+	if len(result.Report().Findings()) == 0 {
+		t.Fatal("the run produced no finding; the case is not reproduced")
+	}
+
+	// Redaction refuses rather than emitting a report whose promise is false.
+	if _, err := redaction.Redact(result.Report()); err == nil {
+		t.Error("Redact succeeded; a collected identity's plaintext is present in the " +
+			"output and the residual scan must refuse")
+	}
+}
