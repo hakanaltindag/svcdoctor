@@ -181,22 +181,38 @@ func TestThisPackageHasNoBehaviour(t *testing.T) {
 	}
 }
 
-// TestNoGenericTransportFindingCodeExists is the companion of
-// internal/diagnosis/transport's phase guard, and it lives here because that
-// package is denied the file-system access a module-wide scan needs.
+// TestOnlyTheAuthorizedGenericFindingCodesExist keeps the generic claim
+// vocabulary closed.
 //
-// A generic transport finding could be smuggled in by declaring its code
-// somewhere else and wiring a rule up later. Every finding code that exists is
-// service-namespaced by contract, so a bare DNS_, TCP_, TLS_ or TARGET_ code
-// anywhere in production is precisely what ADR 0042 does not authorize.
+// It began as a blanket ban: before ADR 0043 no generic transport finding was
+// authorized at all, so any DNS_, TCP_, TLS_ or TARGET_ code was a defect. ADR
+// 0043 authorized exactly three, and the guard narrowed rather than disappeared —
+// a ban that is deleted the moment it first fires protects nothing.
 //
-// FailureClass values share those prefixes and are legitimate — they say what
+// What it still protects:
+//
+//   - **every TLS_ code.** Generic TLS is deferred for want of a producer
+//     (ADR 0043 section 14), and PostgreSQL's in-band handshake is a service gap
+//     with its own phase. Both would arrive here looking reasonable.
+//   - **a fourth generic code**, added without a record deciding what it may
+//     claim — which is the invented diagnostic policy ADR 0017 exists to prevent.
+//   - **TARGET_**, which contradicts the namespace convention docs/FINDINGS.md
+//     section 1 fixes: generic transport findings use the layer as the namespace.
+//
+// FailureClass values share these prefixes and are legitimate — they say what
 // evidence observed. Only a FindingCode is a claim, so the scan is limited to
 // declarations of that type.
-func TestNoGenericTransportFindingCodeExists(t *testing.T) {
+func TestOnlyTheAuthorizedGenericFindingCodesExist(t *testing.T) {
+	authorized := map[string]bool{
+		"DNS_NAME_NOT_RESOLVED":          true,
+		"DNS_RESOLUTION_FAILED":          true,
+		"TCP_CONNECTION_NOT_ESTABLISHED": true,
+	}
 	prefixes := []string{"DNS_", "TCP_", "TLS_", "TARGET_"}
+
 	root := repoRoot(t)
 	scanned := 0
+	found := map[string]bool{}
 
 	walkProductionFiles(t, root, func(path string, file *ast.File) {
 		rel, err := filepath.Rel(root, path)
@@ -218,10 +234,14 @@ func TestNoGenericTransportFindingCodeExists(t *testing.T) {
 				if uErr != nil {
 					continue
 				}
+				if authorized[code] {
+					found[code] = true
+					continue
+				}
 				for _, prefix := range prefixes {
 					if strings.HasPrefix(code, prefix) {
-						t.Errorf("%s declares finding code %s; generic transport "+
-							"diagnosis is Phase 4.9a", rel, code)
+						t.Errorf("%s declares generic finding code %s, which no record "+
+							"authorizes; ADR 0043 fixed exactly three", rel, code)
 					}
 				}
 			}
@@ -233,6 +253,43 @@ func TestNoGenericTransportFindingCodeExists(t *testing.T) {
 	// repository, including one full of the codes it is meant to reject.
 	if scanned == 0 {
 		t.Error("no FindingCode declaration was recognized; the scan is vacuous")
+	}
+	for code := range authorized {
+		if !found[code] {
+			t.Errorf("%s is authorized but declared nowhere; either the rule was removed "+
+				"or this guard no longer sees it", code)
+		}
+	}
+}
+
+// TestNoGenericFindingCodeMirrorsAFailureClass keeps the two vocabularies apart.
+//
+// FailureClass says what evidence observed; FindingCode says what diagnosis
+// claims. A code spelled identically to a class would be indistinguishable from
+// an observation in any consumer that matches on strings, and it is how a claim
+// vocabulary quietly becomes a second copy of the evidence vocabulary.
+//
+// This is why the TCP finding is not called TCP_CONNECTION_FAILED, which is a
+// real failure class, and why the DNS one is not DNS_NO_ADDRESS.
+func TestNoGenericFindingCodeMirrorsAFailureClass(t *testing.T) {
+	classes := map[string]bool{}
+	for i := 0; ; i++ {
+		class := domain.FailureClass(i)
+		if !class.Valid() {
+			break
+		}
+		classes[class.String()] = true
+	}
+	if len(classes) < 30 {
+		t.Fatalf("only %d failure classes enumerated; the scan is vacuous", len(classes))
+	}
+
+	for _, code := range []string{
+		"DNS_NAME_NOT_RESOLVED", "DNS_RESOLUTION_FAILED", "TCP_CONNECTION_NOT_ESTABLISHED",
+	} {
+		if classes[code] {
+			t.Errorf("finding code %s is also a FailureClass name", code)
+		}
 	}
 }
 
