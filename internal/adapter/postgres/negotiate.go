@@ -315,6 +315,25 @@ func classifySSLResponse(
 		return domain.StateUnknown, domain.FailureExecLocalTimeout, false
 	}
 
+	if isTimeout(err) {
+		// **svcdoctor's own budget, not the endpoint's answer.** The step
+		// timeout is applied to the socket by wire.bindDeadline and surfaces as
+		// a net.Error timeout; the caller's context above is still alive, so
+		// neither check sees it. Until Phase 4.11d this fell through to
+		// wireFailureClass, whose default is PROTOCOL_UNEXPECTED_RESPONSE — and
+		// an endpoint that was merely slower than the configured budget was
+		// reported as FAIL with an ERROR finding saying its negotiation did not
+		// complete. That is the one thing ADR 0020 and this repository's layer
+		// contract forbid: a local deadline is not a remote failure.
+		//
+		// It sits after the completed-exchange branch above, so a real answer
+		// still decides, and before wireFailureClass, so no timeout can reach a
+		// protocol class. ADR 0045's disposition table already stated this row
+		// — UNKNOWN, EXEC_LOCAL_TIMEOUT, owned by nobody — and the producer now
+		// implements it.
+		return domain.StateUnknown, domain.FailureExecLocalTimeout, false
+	}
+
 	return domain.StateFail, wireFailureClass(err), false
 }
 
