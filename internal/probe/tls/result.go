@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // Result is one handshake attempt: what it proved, and what it produced.
@@ -70,6 +71,55 @@ type Result struct {
 // not a diagnostic fact about the peer.
 func (r *Result) Evidence() domain.Evidence { return r.evidence }
 
+// Channel reports what the connection this handshake produced proved about its
+// peer.
+//
+// **This package is the authority for the two TLS channel facts**, because it is
+// the layer that performed the handshake and observed the outcome. Every other
+// layer — the transport chain, a service adapter, whatever eventually holds the
+// socket — propagates the value it was given and may not restate it. A lint
+// enforces that: naming security.ChannelTLSVerified or
+// security.ChannelTLSUnverified outside this package fails the build.
+//
+// Authority used to sit with the transport chain, which was true while every
+// handshake happened inside it. It stopped being true when Phase 4.0 established
+// that PostgreSQL negotiates TLS from inside its own protocol flow — TCP, then
+// an application-level SSLRequest, then a handshake on the same socket — so a
+// caller can legitimately reach this probe without the chain. Authority follows
+// the observation boundary rather than the call path. See ADR 0029 and ADR 0036.
+//
+// # It classifies a connection, so it needs one
+//
+//	handshake completed, identity verified      ChannelTLSVerified
+//	handshake completed, verification disabled  ChannelTLSUnverified
+//	handshake failed                            ChannelUnknown
+//
+// A failed handshake produces no connection, and Channel exists to govern what
+// may be written to one. It deliberately does **not** report
+// ChannelTLSUnverified for a rejected certificate: a hostname mismatch is a real
+// and useful diagnostic fact, but it is recorded in the evidence, and reporting
+// it here would describe a socket this Result closed. "Nobody classified a live
+// connection" is the honest answer, and ChannelUnknown is refused by every
+// policy, so the failure direction is safe.
+//
+// # It survives TakeConn
+//
+// The value describes the connection this handshake produced, whoever owns it
+// now. It is not keyed on Connected(), because the caller that takes the socket
+// is exactly the caller that needs to know what it proved, and a fact that
+// evaporated on transfer would be useless to it.
+func (r *Result) Channel() security.Channel {
+	// The connection, not Connected(): the fact belongs to the socket the
+	// handshake produced and outlives the transfer of ownership.
+	if r.conn == nil {
+		return security.ChannelUnknown
+	}
+	if r.verified {
+		return security.ChannelTLSVerified
+	}
+	return security.ChannelTLSUnverified
+}
+
 // Verified reports whether this handshake established the peer's identity.
 //
 // It is the same fact the evidence records as tls.verified, computed once from
@@ -84,7 +134,14 @@ func (r *Result) Evidence() domain.Evidence { return r.evidence }
 // It is false for a failed handshake and false when verification was disabled.
 // Those two are different diagnostic facts — the evidence distinguishes them —
 // but neither established who the peer is, and this method answers only that.
-func (r *Result) Verified() bool { return r.verified }
+//
+// It is derived from Channel rather than read from the field both are built
+// from, so there is one place in this package that turns an observation into a
+// claim. Two accessors computing the same answer independently is how they come
+// to disagree.
+func (r *Result) Verified() bool {
+	return r.Channel() == security.ChannelTLSVerified
+}
 
 // Connected reports whether a live TLS connection is available to take.
 //

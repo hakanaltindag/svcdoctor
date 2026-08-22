@@ -180,6 +180,17 @@ func sweepAddress(
 		// because the caller asked for no TLS, so nothing was encrypted and
 		// nobody was identified. It is never concluded from a missing TLS node.
 		//
+		// **This chain is the authority for that one fact**, and only for it. It
+		// is entitled to state plaintext because it is the component that decided
+		// not to establish TLS and knows the connection was left in the clear —
+		// the same rule that gives internal/probe/tls the two TLS facts, applied
+		// to the layer that made this decision. It may not state either TLS fact,
+		// and a lint stops it: those belong to the probe that handshakes.
+		//
+		// A future protocol that negotiates encryption in band reaches the same
+		// conclusion from its own observation rather than from this branch, and
+		// will need the same authority for it. See ADR 0029.
+		//
 		// channelEvidence stays empty for the same reason, in the other
 		// direction: the fact is true, and no node in this graph states it, so
 		// there is nothing honest to point a later refusal at.
@@ -236,31 +247,22 @@ func handshake(
 	// answers to different questions — "what does a protocol node derive from?"
 	// and "what proves what this connection is?" — and a later chain that
 	// records another layer would keep the second pointing here.
+	//
+	// The channel is **copied from the probe that performed the handshake**, not
+	// derived here. This chain did not observe the handshake and has nothing to
+	// add to it; re-deriving the classification would give one fact two
+	// authorities, and the second one would eventually be wrong. Reading it after
+	// TakeConn is deliberate and safe: tls.Result.Channel describes the
+	// connection the handshake produced, not the one this Result still holds.
+	// See ADR 0029.
 	result.add(wrapped, completedPath{
 		endpoint:        params.endpoint(),
 		address:         addr,
 		evidenceID:      tlsEvidence.ID(),
-		channel:         channelOf(session),
+		channel:         session.Channel(),
 		channelEvidence: tlsEvidence.ID(),
 	})
 	return nil
-}
-
-// channelOf classifies the connection a completed handshake produced.
-//
-// The fact comes from the handshake observation itself, through the Result that
-// owns the connection, so it describes this socket and no other. A handshake
-// that failed never reaches here — it produces no connection to classify — so
-// the two states below are the only ones a retained TLS path can be in.
-//
-// The distinction is the one docs/SECURITY.md draws: a completed handshake
-// proves the channel is encrypted, and only a verified one proves who is on the
-// other end of it.
-func channelOf(session *tls.Result) security.Channel {
-	if session.Verified() {
-		return security.ChannelTLSVerified
-	}
-	return security.ChannelTLSUnverified
 }
 
 // recordUnattempted records that an address was never tried because the caller's
