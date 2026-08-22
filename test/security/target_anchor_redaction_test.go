@@ -276,3 +276,96 @@ func TestTheAnchorSurvivesRedactionAsANode(t *testing.T) {
 		t.Errorf("the anchor's child is %s, want %s", child.Step(), vocabulary.StepDNSLookup)
 	}
 }
+
+// --- generic transport findings (ADR 0043) -------------------------------------
+
+// TestAGenericFindingRedactsWithItsSubject is the ADR 0043 redaction proof.
+//
+// The generic findings are the first whose subject is the operator's logical
+// endpoint rather than a service fact, and the first that appear in a report
+// where the same endpoint is also the report target and an evidence subject.
+// All three must pseudonymize to one value, or a shared report shows one endpoint
+// as three.
+//
+// The run refuses every address, so the TCP finding fires against real evidence
+// from the production composition.
+func TestAGenericFindingRedactsWithItsSubject(t *testing.T) {
+	local := anchorRun(t)
+
+	findings := local.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want the one generic TCP finding: %v", len(findings), findings)
+	}
+	if got := findings[0].Code(); got != "TCP_CONNECTION_NOT_ESTABLISHED" {
+		t.Fatalf("code = %s, want TCP_CONNECTION_NOT_ESTABLISHED", got)
+	}
+
+	// Non-vacuity: locally, all three carry the real endpoint.
+	want := anchorCanaryHost + ":5432"
+	if got := findings[0].Subject().Ref(); got != want {
+		t.Fatalf("finding subject = %q, want %q", got, want)
+	}
+	if got := local.Target().Requested(); got != want {
+		t.Fatalf("report target = %q, want %q", got, want)
+	}
+	if got := anchorSubject(t, local); got != want {
+		t.Fatalf("anchor subject = %q, want %q", got, want)
+	}
+
+	shareable, err := redaction.Redact(local)
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+
+	shared := shareable.Findings()
+	if len(shared) != 1 {
+		t.Fatalf("redaction changed the finding count to %d", len(shared))
+	}
+
+	findingRef := shared[0].Subject().Ref()
+	targetRef := shareable.Target().Requested()
+	anchorRef := anchorSubject(t, shareable)
+
+	if strings.Contains(findingRef, anchorCanaryHost) {
+		t.Errorf("the shareable finding subject %q still names the host", findingRef)
+	}
+	if findingRef != targetRef || findingRef != anchorRef {
+		t.Errorf("one endpoint got several pseudonyms: finding %q, target %q, anchor %q",
+			findingRef, targetRef, anchorRef)
+	}
+
+	// Every reference still resolves after identifiers were remapped wholesale.
+	for _, ref := range shared[0].EvidenceRefs() {
+		if _, ok := shareable.Graph().Node(ref); !ok {
+			t.Errorf("evidence ref %s does not resolve in the redacted graph", ref)
+		}
+	}
+	if got, want := len(shared[0].EvidenceRefs()), len(findings[0].EvidenceRefs()); got != want {
+		t.Errorf("redaction changed the reference count from %d to %d", want, got)
+	}
+}
+
+// TestGenericFindingProseCarriesNoIdentity pins that the sentences are safe.
+//
+// Structural redaction transforms subjects, attributes and identifiers. It cannot
+// rewrite prose, so a finding whose summary named a host would leak on the day
+// somebody shared a report — which is why docs/FINDINGS.md requires the prose to
+// carry no identity that structure already carries.
+func TestGenericFindingProseCarriesNoIdentity(t *testing.T) {
+	local := anchorRun(t)
+	if len(local.Findings()) == 0 {
+		t.Fatal("the run produced no finding; the scan would be vacuous")
+	}
+
+	for _, f := range local.Findings() {
+		text := f.Summary() + " " + f.Detail()
+		for _, r := range f.Recommendations() {
+			text += " " + r.Action()
+		}
+		for _, canary := range []string{anchorCanaryHost, anchorCanaryV4, anchorCanaryV6} {
+			if strings.Contains(text, canary) {
+				t.Errorf("%s prose contains %q", f.Code(), canary)
+			}
+		}
+	}
+}
