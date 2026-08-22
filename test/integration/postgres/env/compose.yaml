@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: svcd-pg
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app-pw
+      POSTGRES_DB: appdb
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./certs:/etc/pg-certs:ro
+      - ./pg_hba.conf:/etc/pg-hba.conf:ro
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    command:
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/etc/pg-certs/server.crt
+      - -c
+      - ssl_key_file=/etc/pg-certs/server.key
+      - -c
+      - hba_file=/etc/pg-hba.conf
+      - -c
+      - password_encryption=scram-sha-256

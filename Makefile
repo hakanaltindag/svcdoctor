@@ -101,3 +101,32 @@ kafka-test: ## Run the Kafka integration suite against a running cluster
 	$(GO) test -tags integration -count=1 -timeout 30m ./test/integration/kafka/...
 
 integration-kafka: kafka-up kafka-test kafka-down ## Full Kafka validation gate
+
+# --- PostgreSQL integration validation (Phase 4 gate) -----------------------
+#
+# Deliberately not part of `check`, for the reason the Kafka gate is not: it
+# needs Docker, while the ordinary gate must stay fast and hermetic.
+# See test/integration/postgres/README.md.
+
+PG_ENV := test/integration/postgres/env
+PG_COMPOSE := docker compose -f $(PG_ENV)/compose.yaml
+
+.PHONY: postgres-up postgres-down postgres-test integration-postgres
+
+postgres-up: ## Start the PostgreSQL validation server
+	@$(PG_ENV)/gen-certs.sh
+	@$(PG_COMPOSE) up -d
+	@printf 'waiting for postgres'
+	@for i in $$(seq 1 60); do \
+		if docker exec svcd-pg pg_isready -q -U app -d appdb 2>/dev/null; then \
+			printf ' ready\n'; exit 0; fi; \
+		printf '.'; sleep 1; \
+	done; printf '\nserver did not become ready\n'; exit 1
+
+postgres-down: ## Stop the validation server and delete its volume
+	@$(PG_COMPOSE) down -v --remove-orphans
+
+postgres-test: ## Run the PostgreSQL integration suite against a running server
+	$(GO) test -tags integration -count=1 -timeout 10m ./test/integration/postgres/...
+
+integration-postgres: postgres-up postgres-test postgres-down ## Full PostgreSQL validation gate
