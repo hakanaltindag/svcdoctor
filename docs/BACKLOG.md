@@ -1865,10 +1865,12 @@ and for two separate reasons:
 - **Generic TLS has no producer.** No production run yields a `tls.handshake` node whose direct
   parent is a requested `tcp.connect`: PostgreSQL negotiates in band, and Kafka has no
   composition root. Policy for evidence that cannot occur would be wrong by the time it could.
-- **PostgreSQL's in-band TLS is decided but not implemented.** Measured: `postgres.ssl_request`
-  PASS, `tls.handshake` FAIL, `findings: 0`, `status: OK`, `firstBrokenLayer: L3`. **ADR 0044**
-  gives it to PostgreSQL, read from the parent edge the negotiation already recorded — five codes,
-  per-endpoint claims, no widening of ADR 0043's generic walk. Implementation is Phase 4.9d.
+- **PostgreSQL's in-band TLS is closed.** ADR 0044, implemented in Phase 4.9d. What was
+  `findings: 0`, `status: OK`, `firstBrokenLayer: L3` now produces a per-endpoint PostgreSQL
+  finding and `PROBLEMS_FOUND`.
+- **What keeps the gate open is generic requested-target TLS**, which still has no production
+  producer: PostgreSQL negotiates in band, and Kafka has no composition root. A producer
+  arrives with Kafka bootstrap composition, and the policy needs its own record then.
 
 - [x] Decide whether run intent can reach a rule at all, and how — ADR 0042
 - [x] Implement the anchor, including the generic vocabulary leaf ADR 0042 §11 requires
@@ -2096,7 +2098,7 @@ generic finding codes became an allow-list of exactly three, still rejecting eve
 `internal/diagnosis/transport`'s "this package is empty" guard became the architecture suite
 that replaced it.
 
-### Phase 4.9c — PostgreSQL in-band TLS diagnosis policy: DECIDED, NOT IMPLEMENTED
+### Phase 4.9c/4.9d — PostgreSQL in-band TLS diagnosis: COMPLETE
 
 **ADR 0044.** Five codes — `POSTGRES_TLS_UPGRADE_NOT_HONORED`,
 `POSTGRES_TLS_IDENTITY_MISMATCH`, `POSTGRES_TLS_CHAIN_NOT_TRUSTED`,
@@ -2120,27 +2122,69 @@ Four things worth remembering when the rule is written:
 - **Expired and not-yet-valid share one code.** They pose one question, and
   `tls.peer_not_before` / `tls.peer_not_after` answer which end.
 
-Implementation is authorized as Phase 4.9d. Generic TLS is **not** — it still has no producer
-and needs its own record.
+**Phase 4.9d implemented it** as `internal/diagnosis/postgres.TLS`, the fifth rule in that
+package. `FindingCode` 17 → 22; nothing else moved.
 
-### PostgreSQL BASIC closure checklist
+- [x] The rule, the closed class mapping, and the five-condition ownership predicate
+- [x] The full ADR 0044 acceptance matrix, including the shapes that must withhold — no
+      parent, two parents, a transport parent, a subject mismatch, a wrong layer, and a
+      handshake under a failed negotiation
+- [x] Guards: no identifier parsing, no `Origin`, no ancestor search, no `Children`, no
+      coupling to startup/authentication/session, no certificate material or library error
+      text, a closed mapping, a declaration scan over the package's codes, and a guard that no
+      code mirrors a `FailureClass` name
+- [x] Real integration for two of the five codes, by varying **client** configuration against
+      the same real certificate: `POSTGRES_TLS_IDENTITY_MISMATCH` and
+      `POSTGRES_TLS_CHAIN_NOT_TRUSTED`, both subjected to `127.0.0.1:55432`, both
+      `PROBLEMS_FOUND`, `firstBrokenLayer` still L3
+- [x] Redaction: the finding subject and its cited evidence pseudonymize to one value, two
+      endpoints stay two endpoints, and every semantic field survives
+- [x] 19 of 20 mutations caught; the twentieth is structurally impossible, because the
+      predicate already requires the handshake's subject to equal the negotiation's, so
+      substituting one for the other cannot change the output
+
+**Three codes are honestly unit-only.** The environment cannot reissue the fixture's
+certificate to make it expired or not-yet-valid, and no correct server agrees to encrypt and
+then does not speak TLS. The acceptance matrix says which rows are which rather than implying
+uniform coverage.
+
+**One pre-existing sharp edge was found and pinned rather than fixed.** A PostgreSQL role
+literally named `svcdoctor` collides with the word in finding prose, so the residual scan finds
+its plaintext and refuses to emit a shareable report. That is fail-closed and correct
+(ADR 0018); it predates this phase, and `TestAToolWordAsARoleNameFailsClosed` records it as
+intended behaviour.
+
+Generic TLS is **not** implemented — it still has no producer and needs its own record.
+
+### PostgreSQL BASIC closure checklist — re-enumerated after Phase 4.9d
 
 Everything recorded anywhere in the repository as a PostgreSQL BASIC gap, so that closure is a
 check rather than a memory:
 
-- [ ] **ADR 0044 implementation** (Phase 4.9d) — the five in-band TLS codes
-- [ ] **No credential configured** — a run against an endpoint that demands authentication while
-      carrying no credential presents nothing and records no authentication node. There is no
-      finding saying so. Recorded in ADR 0041's implementation note; it is diagnosis work and has
-      no rule
-- [ ] **`postgres.ssl_request` failures other than a decline** — an `E` answer, a malformed reply,
-      a peer close. ADR 0040 declined findings for shapes it had not measured; an `E` answer is a
-      peer refusing to negotiate and is worth a claim once one is measured
+- [x] **ADR 0044 implementation** (Phase 4.9d) — the five in-band TLS codes
+- [ ] **No credential configured** — **still undecided; a second-opinion packet was returned in
+      Phase 4.11a rather than an ADR.** Measured: every step PASSes, no authentication node, no
+      session node, `findings: []`, `status: OK`, `firstBrokenLayer: none`. The blocker is not the
+      claim — `POSTGRES_CREDENTIAL_WITHHELD` is precedent for a WARN finding about the run rather
+      than the target — but the *predicate*: a graph cancelled between Startup and the credentialed
+      step is byte-identical to one where no credential existed, and diagnosis cannot see
+      `Result.Incomplete()`. Resolving it needs either an accepted narrow false positive, or an
+      evidence node nobody is currently authorized to mint
+- [ ] **`postgres.ssl_request` failures other than a decline** — **decided by ADR 0045**, not yet
+      implemented. One floor, `POSTGRES_SSL_NEGOTIATION_FAILED`, over `PROTOCOL_UNEXPECTED_RESPONSE`,
+      `PROTOCOL_PEER_CLOSED` and `PROTOCOL_MALFORMED_RESPONSE`. Measured trigger: an HTTP server on
+      the port produced a FAIL negotiation, no finding and `status: OK`. The `E` answer still has no
+      claim of its own and keeps its reopen condition
 - [ ] **Confirm no `SummaryStatusOK`-with-failed-evidence case remains** for PostgreSQL, by
-      enumerating every FAIL-producing step and checking each has an owner
+      enumerating every FAIL-producing step and checking each has an owner. L1, L2, L3-in-band,
+      L4 and L5 all have owners as of Phase 4.9d; what remains unchecked is whether any *other*
+      FAIL-producing step exists that nobody has enumerated
 - [ ] **Integration coverage review** — which acceptance rows are unit-only by nature and which
-      are unit-only because the environment cannot serve them (ADR 0044 marks certificate
-      validity rows as the latter)
+      are unit-only because the environment cannot serve them (ADR 0044 marks the certificate
+      validity rows and `UPGRADE_NOT_HONORED` as the latter)
+- [ ] **Decide whether the `svcdoctor`-as-a-role-name redaction refusal needs anything.** It is
+      correct and fail-closed today. The question for closure is only whether a user meeting it
+      gets an error they can act on, which is a CLI/renderer concern rather than a diagnosis one
 
 Deliberately **not** on this list, because they are not BASIC: replica/read-only/superuser and
 version facts (ADR 0040 §20), capacity and availability (ADR 0039 §10), peer implementation

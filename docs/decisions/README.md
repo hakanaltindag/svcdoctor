@@ -55,7 +55,8 @@ does not overturn it, and both remain authoritative.
 | 0041 | A run discovers broadly and authenticates narrowly | **Accepted, implemented in Phase 4.8b** | First record about the application. Closes the selection deferral 0028 left open; partially supersedes 0011 on command-tree shape. Narrowed by 0042 §3, which opens one hole in its evidence-authority ban |
 | 0042 | A run records the target it was asked about, and a sweep declares its cause | **Accepted, implemented in Phase 4.9a-pre** | Closes the ownership and subject gaps Phase 4.9a stopped on. Narrows 0041, half-closes 0017's deferral, amends 0032 at the sweep root, and leaves 0034's advertised ownership structurally unreachable. Authorizes no finding |
 | 0043 | svcdoctor says what it could not reach, and no more than that | **Accepted, implemented in Phase 4.9b** | Closes 0017's generic transport deferral **for DNS and TCP only**. Consumes 0042 as its ownership prerequisite; leaves 0034, 0040 and 0041 unchanged. Defers generic TLS for want of a producer, and records PostgreSQL's in-band TLS gap without fixing it |
-| 0044 | A handshake belongs to whoever asked for it | Accepted (policy) | Gives PostgreSQL the in-band `tls.handshake` node, read from the parent edge the negotiation already recorded. **Supersedes one bullet of 0040** — the refusal of `POSTGRES_TLS_*` findings — and argues the reversal. 0041, 0042 and 0043 unchanged; generic TLS still deferred |
+| 0044 | A handshake belongs to whoever asked for it | **Accepted, implemented in Phase 4.9d** | Gives PostgreSQL the in-band `tls.handshake` node, read from the parent edge the negotiation already recorded. **Supersedes one bullet of 0040** — the refusal of `POSTGRES_TLS_*` findings — and argues the reversal. 0041, 0042 and 0043 unchanged; generic TLS still deferred |
+| 0045 | The negotiation gets a floor, so a wrong port stops reading as healthy | Accepted (policy) | Closes two of the three shapes 0040 recorded as an SSLRequest gap, and gives that step the floor the other three PostgreSQL steps already had. Disjoint from `POSTGRES_TLS_DECLINED` by class and from 0044 by state. The no-credential blocker is **not** decided here |
 
 ## Decisions that govern work not yet written
 
@@ -322,7 +323,24 @@ A deferral is a decision too, and each names the condition that should reopen it
   belongs to the layer that caused the probe to run, read from the parent edge, never from the step
   name — and its most-argued detail is the one that looks like an oversight: it does **not** copy
   0043's partial-success withholding, because a PostgreSQL finding claims something about *this
-  endpoint*, and another endpoint working does not make that claim false.
+  endpoint*, and another endpoint working does not make that claim false. Phase 4.9d
+  implemented it, and found two things worth keeping: three of the five codes are honestly
+  unit-only, because no correct server can be asked to agree to encrypt and then not speak
+  TLS; and a PostgreSQL role literally named `svcdoctor` makes redaction refuse the whole
+  report, because finding prose says that word and the residual scan cannot know the
+  collision is coincidental. The refusal is correct and is now pinned as intended.
+
+- **0045** exists because pointing svcdoctor at a port serving HTTP — the most ordinary way to
+  get an endpoint wrong — produced `findings: []`, `status: OK` and a broken L3. It gives
+  `postgres.ssl_request` the floor that startup, authentication and session already had, so every
+  `postgres.*` step is now total over failure. Two details are worth keeping. Its
+  `vantageDependent` is `true` while `POSTGRES_TLS_DECLINED` on the same node is `false`, and that
+  is derived rather than inconsistent: one names a server-wide decision, the other attributes
+  nothing and therefore cannot exclude a source-keyed cause. And it declines to give the `E`
+  answer its own claim, for the same reason 0040 declined the whole thing — the shape has still
+  not been measured, and this phase measured an unexpected *byte*, not an `ErrorResponse`. It is
+  half a phase: the no-credential blocker hit two second-opinion triggers and was returned as a
+  packet instead of decided.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

@@ -1388,3 +1388,26 @@ disjoint by construction.
 
 The remaining `postgres.ssl_request` gap — an `E` answer, a malformed reply, a peer
 close — is **not** closed by ADR 0044 and stays recorded here.
+
+## Amendment (Phase 4.11a): the SSLRequest gap is closed, in part
+
+This record's "What this does not own" left `postgres.ssl_request` failures other
+than a decline — an `E` answer, a malformed reply, a peer close — without a
+finding, *"recorded as a gap: an `E` answer is a peer refusing to negotiate and is
+worth a claim, but it is rare enough that no measurement exists and this record
+does not authorize findings for shapes it has not seen."*
+
+The restraint was right and it is now half-obsolete. **ADR 0045** adds
+`POSTGRES_SSL_NEGOTIATION_FAILED`, a floor over `PROTOCOL_UNEXPECTED_RESPONSE`,
+`PROTOCOL_PEER_CLOSED` and `PROTOCOL_MALFORMED_RESPONSE`, because those shapes
+have now been measured: an HTTP server on the port produces a FAIL negotiation,
+no finding, and `status: OK`.
+
+**The `E` answer still has no claim of its own**, on this record's original
+reasoning — that exact shape has still not been measured, and ADR 0045 carries the
+reopen condition rather than authorizing a claim for it.
+
+Nothing else here changes. The floor is disjoint from `POSTGRES_TLS_DECLINED` by
+`FailureClass` alone: `PROTOCOL_UNSUPPORTED_CAPABILITY` is produced only on the
+branch that also records `postgres.ssl.offered`, so it always satisfies the
+declined rule's predicate and never enters the floor's set.
