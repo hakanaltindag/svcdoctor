@@ -158,10 +158,12 @@ sides of an architecture boundary:
 Anything that chooses a *service*, assembles a *report*, or decides what the *process* does
 is application orchestration and does not belong in a probe.
 
-**Application orchestration is decided and built for PostgreSQL.** `internal/app` holds the
-composition root; `cmd/svcdoctor` and `internal/render` still hold no Go code, and
-`test/integration/postgres` fails if either gains any — a guard Phase 5.1 replaces with
-positive boundary checks when the CLI arrives. **ADR 0041** defines the run boundary
+**Application orchestration is decided and built for PostgreSQL**, and Phase 5.1 added the
+product boundary above it. `internal/app` holds the composition root; `cmd/svcdoctor` is
+process bootstrap; `internal/cli` owns dispatch, input, output selection and the exit code;
+`internal/render/json` writes the canonical artifact; `internal/platform/local` produces the
+vantage fact. `test/integration/postgres` guards the boundaries between them. **ADR 0041**
+defines the run boundary
 it implements: one command is one run; the run owns the root context, one
 `GraphBuilder`, every continuation, the selection of at most one credential-bearing path,
 closure of the rest, the freeze, diagnosis and the `LOCAL_FULL` report — and owns no
@@ -189,13 +191,24 @@ section 13 belong to the application boundary.
 each arrow crosses exactly once:
 
 ```text
-internal/cli  →  internal/app  →  app.Result (Report + Incomplete)
-                                      ↓
-                   internal/cli selects the output security mode
-                   (LOCAL_FULL, or SHAREABLE_REDACTED via internal/security/redaction)
-                                      ↓
-                              internal/render
+cmd/svcdoctor    root signal context, os.Exit
+    ↓
+internal/cli     parse, validate, build params, derive the run deadline
+    ↓
+internal/app     one diagnosis
+    ↓
+app.Result       Report + Incomplete
+    ↓
+internal/cli     select the output security mode
+                 (LOCAL_FULL, or SHAREABLE_REDACTED via internal/security/redaction)
+                 and the exit code
+    ↓
+internal/render  the artifact on stdout
 ```
+
+Implemented in Phase 5.1 except the redaction step and the terminal renderer, which are
+Phases 5.2 and 5.3. `internal/render` currently imports `internal/domain` and nothing else,
+and a `render-is-presentation-only` depguard rule keeps it that way.
 
 The command layer owns process outcome; the renderer owns presentation and owns nothing else.
 A renderer chooses no exit code, performs no diagnosis, applies no redaction and imports no

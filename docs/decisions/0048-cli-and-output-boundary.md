@@ -2,7 +2,25 @@
 
 ## Status
 
-**Accepted. Not implemented — Phase 5.1 onwards.**
+**Accepted. Implemented through Phase 5.1; the rest lands in Phases 5.2 and 5.3.**
+
+Phase 5.1 built the spine: `cmd/svcdoctor`, `internal/cli`, `internal/render/json`
+and `internal/platform/local`. `svcdoctor diagnose postgres` runs end to end
+against real servers, emits the canonical report on stdout and returns the exit
+codes below, with the `render-is-presentation-only` depguard rule of section 14
+active.
+
+**One deviation from section 6, deliberate and temporary.** That section fixes
+the v0.1 surface as `--output text|json` with `text` as the default. The terminal
+renderer is Phase 5.3, so Phase 5.1 accepts only `json` and rejects `text` as an
+invocation error naming the phase. Accepting `text` and improvising output would
+ship a renderer nobody reviewed; accepting it and failing internally would report
+svcdoctor as broken when the operator did nothing wrong. The default becomes
+`text` when 5.3 lands, and nothing is released before then.
+
+Still unimplemented: `--shareable` and section 6's redaction step (Phase 5.2,
+with ADR 0049's credential input), and the terminal renderer of sections 9
+through 12 (Phase 5.3).
 
 It fixes the command tree, the ownership split between `cmd`, `internal/cli`,
 `internal/app` and `internal/render`, the JSON artifact, the stdout/stderr

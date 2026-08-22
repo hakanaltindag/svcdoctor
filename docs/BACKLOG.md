@@ -2298,16 +2298,41 @@ neither implemented. No production Go code, no dependency, no schema change.
 - [x] Standard library only — no CLI framework, no colour library, no colour in v0.1
 - [x] `--password-file` / `--password-stdin`, mutually exclusive, no precedence, no literal flag
 
-### Phase 5 — CLI, renderers and productization: DECIDED, NOT IMPLEMENTED
+### Phase 5.1 — CLI spine and canonical JSON: COMPLETE
 
-Sequence, JSON before the terminal renderer because JSON is a thin wrapper over an already
-canonical marshaller and therefore exercises the whole CLI spine with almost no presentation
-code:
+`svcdoctor diagnose postgres` runs end to end. **ADR 0048 implemented through this phase**;
+ADR 0049 remains Accepted and unimplemented.
 
-- **5.1** CLI spine + JSON: `cmd/svcdoctor`, `internal/cli`, local vantage, signal context,
-  flags, `ExitCode`, canonical JSON output. Retire `TestNoCLIOrRendererExists` and replace it
-  with positive boundary guards; add the `render-is-presentation-only` depguard rule when
-  `internal/render` gains its first Go file
+- [x] `cmd/svcdoctor` — bootstrap only: root `signal.NotifyContext`, `cli.New(...).Run`, `os.Exit`
+- [x] `internal/cli` — dispatch, flags, validation, params, exit codes, stream routing
+- [x] `internal/render/json` — a thin canonical `domain.Report` serializer, one trailing newline
+- [x] `internal/platform/local` — the local vantage fact, from `os.Hostname`
+- [x] Standard library only. Dependencies stay at **one**
+- [x] Exit contract implemented as one pure function, precedence `3 > 2 > 4 > 1 > 0`, with
+      **4 outranking 1** pinned against a real incomplete-plus-ERROR run
+- [x] stdout carries the artifact on 0, 1 and 4; stderr only on 2 and 3; help and `--version`
+      on stdout
+- [x] No credential source, by design: a real SCRAM endpoint produces
+      `POSTGRES_CREDENTIAL_NOT_CONFIGURED`, WARN, status OK, no session, **exit 0**
+- [x] `TestNoCLIOrRendererExists` retired and replaced by positive guards — the product
+      boundary exists, the CLI never reaches diagnosis or a wire package, the renderer imports
+      only `internal/domain`, and no credential surface exists yet
+- [x] `render-is-presentation-only` depguard rule added, now that `internal/render` has files
+- [x] Real binary integration: healthy trust session, no-credential SCRAM, target-side ERROR,
+      local-timeout exit 4, invalid invocations, help/version, and SIGINT still producing a
+      partial report at exit 4
+- [x] 25 mutations applied; 22 caught, 3 not applicable. Two escapes were real test defects and
+      were fixed rather than explained away
+
+**Two mutation escapes worth remembering.** Routing `postgres` straight to the PostgreSQL
+command still exited 2 — for a missing `--user`, not for the rejected route — so the dispatch
+table now carries complete flags and asserts the application was never reached. And deriving
+the exit code from `FindingCount()` escaped every unit test, because no unit fixture carried a
+finding on an `OK` report; a scripted SCRAM-demanding peer now makes the WARN+OK shape
+reachable without Docker, which is the invariant the whole phase exists to protect.
+
+### Phase 5 — remaining CLI work: DECIDED, NOT IMPLEMENTED
+
 - **5.2** credential input (ADR 0049) and `--shareable`
 - **5.3** terminal renderer: stage tree, findings, session status, incompleteness, durations,
   multi-path, golden tests
