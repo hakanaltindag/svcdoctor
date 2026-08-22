@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
 
@@ -797,6 +799,232 @@ func (sslThenGarbageDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, 
 		}
 		hello := make([]byte, 4096)
 		if _, err := server.Read(hello); err != nil {
+			return
+		}
+		_, _ = server.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+	}()
+	return client, nil
+}
+
+// --- ADR 0046: the run reaches authentication with nothing to present ----------
+
+// scramDemandingDialer answers a StartupMessage by demanding SCRAM, so the run
+// reaches the authentication step with nothing to present.
+//
+// The plan is TLSDisabled, so no SSLRequest is sent and the first thing this
+// peer sees is the startup packet. Plaintext is deliberate: with no credential
+// the transport policy never gets a question to answer, which is the ordering
+// ADR 0046 fixed.
+type scramDemandingDialer struct{}
+
+func (scramDemandingDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, error) {
+	client, server := net.Pipe()
+	go func() {
+		defer func() { _ = server.Close() }()
+		startup := make([]byte, 4096)
+		if _, err := server.Read(startup); err != nil {
+			return
+		}
+		_, _ = server.Write(authenticationSASL())
+	}()
+	return client, nil
+}
+
+// authenticationSASL is an AuthenticationSASL message naming SCRAM-SHA-256.
+//
+// Written out rather than computed, and the length is the part worth checking:
+// 4 bytes of authentication code, 13 of mechanism name and 2 terminators is 19,
+// plus the 4-byte length field, which PostgreSQL counts, makes 23. The run that
+// parses it is what proves the number right — the first draft of this fixture
+// said 27 and the run rejected it.
+func authenticationSASL() []byte {
+	return []byte{
+		'R',         // AuthenticationRequest
+		0, 0, 0, 23, // length, including itself
+		0, 0, 0, 10, // AuthenticationSASL
+		'S', 'C', 'R', 'A', 'M', '-', 'S', 'H', 'A', '-', '2', '5', '6',
+		0, // end of this mechanism name
+		0, // end of the mechanism list
+	}
+}
+
+// runNoCredential executes a production run carrying no credential over a
+// plaintext plan.
+func runNoCredential(t *testing.T, ctx context.Context) Result {
+	t.Helper()
+
+	result, err := DiagnosePostgres(ctx, PostgresParams{
+		Host: "db.example.com", Port: 5432,
+		Role:     "svcdoctor",
+		Resolver: stubResolver{addrs: addrs(t, "10.0.0.1")}, Dialer: scramDemandingDialer{},
+		TLS:         postgres.TLSDisabled,
+		StepTimeout: 2 * time.Second,
+		Vantage:     vantage(t),
+		Version:     "0.0.0-test",
+	})
+	if err != nil {
+		t.Fatalf("DiagnosePostgres: %v", err)
+	}
+	return result
+}
+
+// TestARunWithNoCredentialSaysSo is the ADR 0046 report integration.
+//
+// Before this, the same run reported `findings: []`, `status: OK` and no broken
+// layer at all — every measured step passed, and the absence of a session was
+// invisible.
+func TestARunWithNoCredentialSaysSo(t *testing.T) {
+	result := runNoCredential(t, context.Background())
+	report := result.Report()
+
+	auth := nodesWithStep(report.Graph(), servicepostgres.StepAuthentication)
+	if len(auth) != 1 {
+		t.Fatalf("got %d authentication nodes, want 1", len(auth))
+	}
+	if got := auth[0].State(); got != domain.StateSkipped {
+		t.Errorf("state = %s, want SKIPPED", got)
+	}
+	if got := auth[0].FailureClass(); got != domain.FailureExecRequiredInputMissing {
+		t.Errorf("class = %s, want EXEC_REQUIRED_INPUT_MISSING", got)
+	}
+
+	findings := report.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want 1: %v", len(findings), findings)
+	}
+	if got := findings[0].Code(); got != "POSTGRES_CREDENTIAL_NOT_CONFIGURED" {
+		t.Errorf("code = %s, want POSTGRES_CREDENTIAL_NOT_CONFIGURED", got)
+	}
+	if got := findings[0].Severity(); got != domain.SeverityWarn {
+		t.Errorf("severity = %s, want WARN", got)
+	}
+
+	// The endpoint did nothing wrong, so the report does not say it did. The
+	// finding is what makes the run's own limitation visible.
+	if got := report.Summary().Status(); got != domain.SummaryStatusOK {
+		t.Errorf("status = %s, want OK: nothing about the target is broken", got)
+	}
+	if got := report.Summary().FirstBrokenLayer(); got != domain.LayerUnspecified {
+		t.Errorf("firstBrokenLayer = %s, want unset: no evidence failed", got)
+	}
+	if result.Incomplete() {
+		t.Error("Incomplete() = true; the run finished everything it could do")
+	}
+
+	// No session, and no credential attempt.
+	if got := len(nodesWithStep(report.Graph(), servicepostgres.StepSession)); got != 0 {
+		t.Errorf("got %d session nodes, want 0", got)
+	}
+}
+
+// TestCancellationBeforeAuthenticationIsNotAMissingCredential is the distinction
+// ADR 0046 exists to make mechanically.
+//
+// Both runs stop before authentication completes. Before this phase their graphs
+// were identical, and any rule that inferred "no credential" from the absence of
+// an authentication node would have claimed it about a cancelled run too.
+func TestCancellationBeforeAuthenticationIsNotAMissingCredential(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := runNoCredential(t, ctx)
+	report := result.Report()
+
+	for _, f := range report.Findings() {
+		if f.Code() == "POSTGRES_CREDENTIAL_NOT_CONFIGURED" {
+			t.Error("a cancelled run was reported as having no credential configured")
+		}
+	}
+	if !result.Incomplete() {
+		t.Error("Incomplete() = false; a cancelled run reports incompleteness there")
+	}
+
+	// And the graphs genuinely differ: the cancelled run records no
+	// missing-input node, which is what makes the two distinguishable.
+	for _, n := range nodesWithStep(report.Graph(), servicepostgres.StepAuthentication) {
+		if n.FailureClass() == domain.FailureExecRequiredInputMissing {
+			t.Error("a cancelled run recorded a missing-input authentication node")
+		}
+	}
+}
+
+// TestATrustEndpointNeedsNoCredential pins that the absence is irrelevant when
+// nothing was asked for.
+func TestATrustEndpointNeedsNoCredential(t *testing.T) {
+	result, err := DiagnosePostgres(context.Background(), PostgresParams{
+		Host: "db.example.com", Port: 5432,
+		Role:     "svcdoctor",
+		Resolver: stubResolver{addrs: addrs(t, "10.0.0.1")}, Dialer: trustDialer{},
+		TLS:         postgres.TLSDisabled,
+		StepTimeout: 2 * time.Second,
+		Vantage:     vantage(t),
+		Version:     "0.0.0-test",
+	})
+	if err != nil {
+		t.Fatalf("DiagnosePostgres: %v", err)
+	}
+	report := result.Report()
+
+	for _, f := range report.Findings() {
+		if f.Code() == "POSTGRES_CREDENTIAL_NOT_CONFIGURED" {
+			t.Error("a trust endpoint produced a missing-credential finding")
+		}
+	}
+	for _, n := range nodesWithStep(report.Graph(), servicepostgres.StepAuthentication) {
+		if n.FailureClass() == domain.FailureExecRequiredInputMissing {
+			t.Errorf("a trust endpoint recorded %s", n.FailureClass())
+		}
+	}
+}
+
+// trustDialer answers a StartupMessage with AuthenticationOk, so no credential
+// is ever wanted.
+type trustDialer struct{}
+
+func (trustDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, error) {
+	client, server := net.Pipe()
+	go func() {
+		defer func() { _ = server.Close() }()
+		startup := make([]byte, 4096)
+		if _, err := server.Read(startup); err != nil {
+			return
+		}
+		_, _ = server.Write([]byte{'R', 0, 0, 0, 8, 0, 0, 0, 0})
+	}()
+	return client, nil
+}
+
+// TestTheRunReportsAFailedNegotiation is the ADR 0045 report integration.
+func TestTheRunReportsAFailedNegotiation(t *testing.T) {
+	result := runWith(t, "db.example.com", 5432,
+		stubResolver{addrs: addrs(t, "10.0.0.1")}, httpDialer{})
+	report := result.Report()
+
+	findings := report.Findings()
+	if len(findings) != 1 {
+		t.Fatalf("got %d findings, want 1: %v", len(findings), findings)
+	}
+	if got := findings[0].Code(); got != "POSTGRES_SSL_NEGOTIATION_FAILED" {
+		t.Errorf("code = %s, want POSTGRES_SSL_NEGOTIATION_FAILED", got)
+	}
+	if got := report.Summary().Status(); got != domain.SummaryStatusProblemsFound {
+		t.Errorf("status = %s, want PROBLEMS_FOUND", got)
+	}
+	if got := report.Summary().FirstBrokenLayer(); got != domain.LayerTLS {
+		t.Errorf("firstBrokenLayer = %s, want L3", got)
+	}
+}
+
+// httpDialer answers the SSLRequest the way an HTTP server would — the most
+// ordinary wrong-port mistake there is.
+type httpDialer struct{}
+
+func (httpDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, error) {
+	client, server := net.Pipe()
+	go func() {
+		defer func() { _ = server.Close() }()
+		request := make([]byte, 8)
+		if _, err := server.Read(request); err != nil {
 			return
 		}
 		_, _ = server.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))

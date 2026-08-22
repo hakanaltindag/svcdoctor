@@ -377,14 +377,12 @@ func continuePath(
 	selected *postgres.StartupResult,
 	params PostgresParams,
 ) error {
-	// A server that demands authentication when the run carries no credential is
-	// not asked for one. Nothing is presented, so nothing is recorded, and the
-	// startup node's own postgres.auth_method already says what was wanted.
-	if params.Credential.IsZero() && selected.AuthMethod() != authMethodNone {
-		_ = selected.Close()
-		return nil
-	}
-
+	// A run carrying no credential still enters the authentication step. It used
+	// to return here, which left nothing in the graph and made a run against an
+	// endpoint demanding SCRAM report itself healthy — and made that graph
+	// indistinguishable from one cancelled at this exact point. The adapter now
+	// records the condition as evidence, because that is where the fact is known
+	// and where a producer may state it (ADR 0046).
 	authenticated, err := postgres.Authenticate(
 		ctx, builder, selected, params.Credential, postgres.AuthParams{
 			TransportPolicy: params.TransportPolicy,

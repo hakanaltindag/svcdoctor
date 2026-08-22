@@ -449,3 +449,58 @@ func mentionsAuthMethod(n ast.Node) bool {
 	})
 	return found
 }
+
+// TestTheRunChecksItsBudgetBeforeTheCredentialedStep pins the ordering ADR 0046
+// depends on.
+//
+// A cancelled run must record no authentication node at all, so that the graph a
+// cancelled run leaves stays distinguishable from one where the run held no
+// credential. Since Phase 4.11b the adapter records a node whenever it is
+// *entered*, which means the only thing keeping the two apart is that
+// orchestration does not enter it after the budget has ended.
+//
+// Timing a cancellation to land in that window is not reproducible, so the
+// ordering is asserted from the source instead: within measurePostgres, the
+// context check precedes the call that continues the selected path.
+func TestTheRunChecksItsBudgetBeforeTheCredentialedStep(t *testing.T) {
+	var fn *ast.FuncDecl
+	for _, name := range productionFiles(t) {
+		for _, decl := range parse(t, name).Decls {
+			if d, ok := decl.(*ast.FuncDecl); ok && d.Name.Name == "measurePostgres" {
+				fn = d
+			}
+		}
+	}
+	if fn == nil {
+		t.Fatal("measurePostgres not found")
+	}
+
+	var ctxCheck, continueCall token.Pos
+	ast.Inspect(fn, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Err" {
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "ctx" && ctxCheck == 0 {
+				ctxCheck = call.Pos()
+			}
+		}
+		if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "continuePath" {
+			continueCall = call.Pos()
+		}
+		return true
+	})
+
+	if ctxCheck == 0 {
+		t.Fatal("measurePostgres no longer checks ctx.Err(); a cancelled run would enter " +
+			"the authentication step and record a missing-input node")
+	}
+	if continueCall == 0 {
+		t.Fatal("measurePostgres no longer calls continuePath")
+	}
+	if ctxCheck > continueCall {
+		t.Error("the budget is checked after the credentialed step is entered; a cancelled " +
+			"run would be recorded as having no credential configured")
+	}
+}
