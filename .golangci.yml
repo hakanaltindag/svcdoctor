@@ -68,11 +68,30 @@ linters:
             security.Reveal turns a masked secret into plaintext. Only a service
             adapter's wire package may call it, immediately before the value goes
             on the socket. See docs/SECURITY.md, ADR 0027 and ADR 0030.
-        - pattern: '^security\.Channel[A-Z]'
+        # Two patterns rather than one, because the two facts have different
+        # authorities and a single rule could only grant both to one package.
+        # The messages are deliberately distinguishable: the exclusions below
+        # match on their text, which is how a package is granted one authority
+        # without receiving the other.
+        - pattern: '^security\.ChannelTLS[A-Z]'
           msg: >-
-            a security.Channel constant states what a connection proved, and only
-            the transport chain that established the connection may state it.
-            Every other layer propagates the value it was given. See ADR 0029.
+            naming a TLS channel constant claims what a TLS handshake proved, and
+            only internal/probe/tls performs one. Every other layer, including the
+            transport chain, propagates the value that probe returned. See
+            ADR 0029.
+        - pattern: '^security\.ChannelPlaintext$'
+          msg: >-
+            naming a plaintext channel constant states that a connection was left
+            in the clear, and only the component that decided not to establish
+            encryption and observed that outcome may state it. See ADR 0029.
+        # security.ChannelUnknown is deliberately not forbidden anywhere. This
+        # rule exists to stop a layer manufacturing a claim it did not observe,
+        # and ChannelUnknown is the absence of a claim: it is the zero value, it
+        # is refused by every policy, and naming it is how a component declines to
+        # classify a connection. The TLS probe returns it for a handshake that
+        # produced no connection. Banning it would forbid the one channel value
+        # that cannot overclaim, and the previous single-pattern rule caught it
+        # only by accident.
     depguard:
       rules:
         # Diagnosis is a pure function over frozen evidence.
@@ -200,6 +219,28 @@ linters:
             - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
               desc: adapters produce evidence; interpreting it is diagnosis work
 
+        # An adapter must not re-derive what a connection proved.
+        #
+        # Phase 4.2 made internal/probe/tls the authority for that fact and had
+        # every other layer propagate it. The remaining way to forge one was to
+        # reach past the value and interrogate the socket — a `*tls.Conn` type
+        # assertion, or ConnectionState() — which needs crypto/tls. Denying the
+        # import removes the capability rather than the temptation.
+        #
+        # It would also be wrong on its own terms: a wrapped connection defeats
+        # the assertion, and configuration is not outcome. Test fixtures are
+        # exempt because building a TLS peer to probe against is not re-deriving
+        # anything. See ADR 0029 and docs/SECURITY.md.
+        adapter-does-not-inspect-tls:
+          files:
+            - "**/internal/adapter/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: crypto/tls
+              desc: >-
+                adapters propagate the channel the TLS probe established; they must
+                not inspect a connection to re-derive it
+
         # Renderers explain an existing report and discover nothing.
         # docs/ARCHITECTURE.md section 7.
         render-explains-only:
@@ -273,13 +314,30 @@ linters:
         linters:
           - forbidigo
 
-      # The transport chain is the authority on what a connection proved: it
-      # performed the handshake, so it is the one layer entitled to name a
-      # security.Channel constant. Everywhere else the value is copied from the
-      # connection it describes (ADR 0029).
+      # Channel authority follows the observation boundary, and these two rules
+      # are what make that mechanical rather than a convention. Each grants one
+      # package one fact, by matching the text of the specific forbid rule above,
+      # so neither package can name the other's constant.
+      #
+      # Verified in both directions against deliberate violations: the transport
+      # chain naming a TLS constant fails, and the TLS probe naming plaintext
+      # fails. See ADR 0029 and docs/SECURITY.md.
+
+      # The TLS probe performs the handshake, so it owns what the handshake
+      # proved.
+      - path: internal/probe/tls/
+        linters:
+          - forbidigo
+        text: 'TLS channel constant'
+
+      # The transport chain decides when to leave a connection in the clear, so
+      # it owns that fact and no other. A protocol that negotiates encryption in
+      # band will need the same narrow grant when it exists; that is a one-line
+      # addition here rather than a change to this model (ADR 0029, ADR 0036).
       - path: internal/probe/transport/
         linters:
           - forbidigo
+        text: 'plaintext channel constant'
 
       # Tests may name a channel to assert one. Asserting a value is not
       # producing it, and the production paths are covered by mutation checks
