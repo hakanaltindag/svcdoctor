@@ -6,17 +6,21 @@
 // branches on a service name (ADR 0009), and a service rule is simply a rule
 // that is only wired in for that service.
 //
-// It imports internal/domain and internal/service/postgres, and nothing else.
-// depguard denies it the adapter, the probes, security, render and platform, and
-// denies it net, crypto/tls, os and the random-number generators — the mechanism
-// that makes "diagnosis performs no I/O" a build failure rather than a habit.
+// It imports internal/domain, internal/service/postgres and internal/vocabulary,
+// and nothing else. depguard denies it the adapter, the probes, security, render
+// and platform, and denies it net, crypto/tls, os and the random-number
+// generators — the mechanism that makes "diagnosis performs no I/O" a build
+// failure rather than a habit. Both vocabulary packages are leaves holding names
+// and no behaviour, which is how a rule names a step a probe produces without
+// importing the probe.
 //
 // Everything here implements ADR 0040 and invents nothing. Where a comment
 // explains a choice, the choice was made there.
 //
-// # Four rules, one per anchor step
+// # Five rules, one per anchor
 //
 //	SSLRequest      postgres.ssl_request      L3
+//	TLS             tls.handshake             L3   (see below)
 //	Startup         postgres.startup          L4
 //	Authentication  postgres.authentication   L5
 //	Session         postgres.session          L5
@@ -46,15 +50,29 @@
 // the six unrelated conditions it collapses. A floor never becomes a credential,
 // database or capacity claim.
 //
+// # The one generic node this package owns, and why that is not a contradiction
+//
+// TLS anchors at a `tls.handshake` node — a generic step, produced by
+// internal/probe/tls — when and only when its **single direct parent** is a PASS
+// `postgres.ssl_request` describing the same endpoint. ADR 0044 authorizes it and
+// ADR 0040's earlier refusal is superseded there.
+//
+// It is not the provenance inference ADR 0034 section 4 forbids, and the
+// difference is who wrote the edge. That prohibition is about reading how a
+// *subject* entered a run off the shape around a node — a guess. Here the adapter
+// parented the handshake to the negotiation deliberately, to record that
+// PostgreSQL asked for the upgrade, so the rule reads a fact a producer stated
+// about an execution. The general form: **a generic probe's evidence belongs to
+// the layer that caused the probe to run.**
+//
+// Because the parent must be `postgres.ssl_request`, a handshake performed by the
+// generic transport chain cannot reach this rule: those hang off `tcp.connect`,
+// for a requested target and for a Kafka advertised sweep alike.
+//
 // # What this package deliberately does not diagnose
 //
-// dns.lookup, tcp.connect and tls.handshake. Those are generic transport nodes,
-// and a PostgreSQL rule reading one would be inferring provenance from graph
-// shape — the question ADR 0017 deferred and ADR 0034 section 4 forbids
-// answering structurally. The consequence is stated rather than hidden: **a
-// PostgreSQL run that fails at DNS, TCP or TLS produces no finding from this
-// package.** See ADR 0040 sections 2 and 26.1; it is tracked as a product
-// release gate, not as a gap for a service rule to fill.
+// dns.lookup and tcp.connect. Those are generic transport nodes with no service
+// context, and ADR 0043 gives them to internal/diagnosis/transport.
 //
 // Also absent: any success finding, and any claim derived from
 // postgres.in_hot_standby, postgres.default_transaction_read_only,
