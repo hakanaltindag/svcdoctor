@@ -257,3 +257,20 @@ Explicitly still open, and none of them is touched:
   case; a scope may or may not be the right vehicle.
 - **A producer with variable component arity** — the injectivity argument in §3
   must be re-derived before it ships.
+
+## Amendment (Phase 4.9a-pre): a sweep root declares its cause
+
+Section 6 made `Parent` optional, and that was correct when written: every sweep
+was a root and there was nothing to declare.
+
+ADR 0042 §9 removes the option at one position only. A production transport sweep's
+root node must be parented — to the run's requested-target anchor when the operator
+asked for it, to the service evidence that caused it otherwise. A sweep root with
+no parent is a producer defect.
+
+**What a parent edge *means* is unchanged.** It still records derivation and still
+does not say a subject was discovered, user-supplied or trusted; ADR 0042 §10
+explains why declaring a sweep's cause is not the provenance inference
+`REPORT_SCHEMA.md` forbids. Sections 1, 5, 8 and 9 are untouched: a scope is still
+not `Origin`, still reaches the identifier and nothing else, and is still
+deterministic.

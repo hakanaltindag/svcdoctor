@@ -132,3 +132,23 @@ invent.
 - Findings reach the report in the order the report already uses.
 - Adding the first concrete rules requires a severity policy first, not more
   machinery.
+
+## Amendment (Phase 4.9a-pre): half the deferral is closed
+
+ADR 0042 supplies the missing context this record's "Concrete rules are deferred"
+section named. Both blockers it recorded were the same blocker:
+
+- **Severity** was deferred because it "depends on whether the endpoint was the one
+  the user asked about or one discovered from it. That distinction is `Origin`."
+  A requested-target anchor supplies it without `Origin` — an anchored rule only
+  ever runs on the sweep the operator caused, exactly as ADR 0034 §13 established
+  for a service anchor.
+- **The generic-versus-service overlap** is answered by parentage at the sweep
+  root: a generic rule owns the sweep directly parented to an anchor and nothing
+  else, so `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`'s evidence is structurally
+  unreachable from it.
+
+**What severity such a finding actually carries is still unwritten**, and so is
+every other field of a generic transport finding. That is Phase 4.9a's work and
+this record's deferral stands for it. The rule contract itself is unchanged:
+`func(domain.Graph) []domain.Finding`, and ADR 0042 §17 exists to keep it that way.

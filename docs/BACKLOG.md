@@ -74,9 +74,9 @@ condition that should reopen it.
 
 | Decision | Why deferred | Reopen when |
 |---|---|---|
-| **Transport severity policy** | **Answered for service-anchored rules by ADR 0034; still open for generic ones.** A rule anchored at a service fact only ever runs on endpoints of a known role, so severity is the per-subject impact of its own claim — an unreachable advertised broker is ERROR. A rule that meets a bare transport node still needs to know whether the endpoint was asked for or discovered, which is `Origin` | A generic transport rule acquires an owner, or `Origin` does (ADR 0017, ADR 0034 §13) |
-| **`Origin` / provenance** | **Examined in Phase 3.3 and left deferred.** Discovery now exists and needed only *derivation* — which parent edges already record — not provenance. The two are distinct: when a cluster advertises the bootstrap endpoint back, one `host:port` has both a discovery-derived node and a lookup-derived transport path, so origin is not a function of the subject and cannot be read off graph shape (`REPORT_SCHEMA.md`) | An execution or topology planner has a real consumer for provenance (ADR 0031 §6) |
-| **Generic vs service finding overlap** | **Answered for advertised endpoints by ADR 0034**: the Kafka finding owns that evidence outright and no generic finding fires for it, resolved by ownership rather than engine suppression. ADR 0034 §3 also defines the general duplicate/complementary/causal test. Still open: whether generic transport findings exist **at all**, which needs run intent that `diagnosis.Rule` cannot see | Application orchestration exists and the bootstrap path acquires an owner (ADR 0034 §16) |
+| **Transport severity policy** | **Unblocked by ADR 0042, still unwritten.** ADR 0034 answered it for service-anchored rules; the generic half needed a rule to know whether an endpoint was asked for or discovered, which read as `Origin`. ADR 0042's requested-target anchor supplies that context without `Origin`: an anchored generic rule only ever runs on the sweep the operator caused. **What severity, kind, confidence and vantage such a finding carries is the remaining decision**, and it is Phase 4.9a's | Phase 4.9a resumes with the anchor implemented (ADR 0017 amendment, ADR 0034 §13, ADR 0042 §17) |
+| **`Origin` / provenance** | **Examined again in Phase 4.9a-pre and left deferred — the consumer that looked like it needed provenance did not.** Discovery needed only *derivation*, which parent edges already record. Generic transport diagnosis looked like the first real `Origin` consumer, and ADR 0042 showed it is not: it asks which *execution* the operator caused, not how a *subject* entered the run. The advertised-back case that kills `Origin` — one `host:port` with both a discovery-derived node and a lookup-derived path — leaves the anchor untouched, because two sweeps stay two sweeps | An execution or topology planner has a real consumer for **subject** provenance (ADR 0031 §6, ADR 0042 §10) |
+| **Generic vs service finding overlap** | **Structurally answered by ADR 0042.** ADR 0034 gave the Kafka finding outright ownership of advertised evidence and defined the duplicate/complementary/causal test; what stayed open was whether generic transport findings could exist at all, which needed run intent `diagnosis.Rule` cannot see. ADR 0042 puts that intent in the graph as an L0 anchor and draws the boundary at **direct** parentage of a sweep root — not descendant reachability, because the advertised sweep is a transitive descendant of the bootstrap target. Ownership is disjoint by construction, with no engine suppression. **Whether such findings exist is now a policy question, not a structural one** | Phase 4.9a resumes (ADR 0034 §16, ADR 0042 §7) |
 | **Execution deduplication, and a many-causes→one-execution graph shape** | Phase 3.4 runs one transport sweep per advertisement, including when two advertisements name one endpoint. A deduplicated sweep would have two causes and one effect, and the derivation parent is singular — recording it would mean picking one cause by a tiebreak and leaving the other with no measurement a finding could reference (ADR 0033 §3) | The graph gains a truthful many-causes→one-execution representation; the dedup key stays the normalized endpoint, never the node identifier |
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
 | **Service attribute-key ownership** | **Settled for the keys that have a second consumer, in Phase 3.6.** A key lives with the code that produces it until something outside that package genuinely reads it; then it moves to a leaf vocabulary package (`internal/service/<service>`) that imports `internal/domain` and nothing else. Three Kafka constants moved on exactly that trigger (ADR 0034 §19); the rest stayed. `internal/domain` still holds no service key | A key acquires a consumer outside the package that produces it |
@@ -429,11 +429,15 @@ Questions 2.1 surfaced:
       consumer of a shared key table, which would have become the central service-key registry
       the architecture rejects; ADR 0022 moved sensitivity onto the *value* instead, so the
       redactor needs no vocabulary at all.
-      **Still open:** a future rule in `internal/diagnosis/transport/` cannot import
-      `tls.AttrVerified` or `dns.AttrAnswers`, because depguard forbids diagnosis importing
-      probes. **Reopen when** the first transport rule needs a key, or when two probes need the
-      same one. This remains the generic half and does **not** settle the service-specific
-      half.
+      **Reopened and answered in principle by ADR 0042 §11:** a future rule in
+      `internal/diagnosis/transport/` cannot import `tls.AttrVerified`, `dns.AttrAnswers` or
+      the step names `dns.lookup`, `tcp.connect` and `tls.handshake`, because depguard forbids
+      diagnosis importing probes — and `internal/domain` deliberately holds no step constants.
+      The generic transport rule needs the three **step names** to bound its traversal, so the
+      anchor phase must create a service-neutral vocabulary leaf on the same terms ADR 0040 §22
+      used for `internal/service/postgres`: `internal/domain` only, no behaviour, not named for
+      a service. **The package name is left to implementation.** This settles the generic half
+      and does **not** settle the service-specific half.
 
 ### Phase 2.2 — Generic TCP probe and connection ownership (complete)
 
@@ -1827,7 +1831,7 @@ compares a real graph against the ADR 0040 acceptance matrix. Any row a real gra
 describe reopens ADR 0040.
 
 
-### Product/CLI release gate — generic transport diagnosis ownership: OPEN
+### Product/CLI release gate — generic transport diagnosis ownership: OPEN (structurally unblocked)
 
 **Not Phase 4.6b scope, and not a PostgreSQL question.** Recorded here because it is the one
 place the PostgreSQL slice is architecturally correct and incomplete as a product.
@@ -1840,13 +1844,29 @@ Today a run whose endpoint fails at DNS, TCP or TLS produces complete evidence, 
 Those are the *common* failure modes: a name that does not resolve, a refused port, an
 untrusted certificate. A first-time user meets a report that reads as broken.
 
-It is a gate rather than a task because the blocker is a fact, not effort: a rule needs run
+It was a gate rather than a task because the blocker was a fact, not effort: a rule needed run
 intent — *is this a service diagnosis or a bare endpoint check?* — which `diagnosis.Rule`
 cannot see, receiving only a `Graph`. See **ADR 0017**, and ADR 0040 §26.1.
 
-- [ ] Decide whether generic transport findings exist at all, and who owns them
-- [ ] If they do: decide how run intent reaches a rule without widening `diagnosis.Rule` into
-      something that can branch on a service name (ADR 0009)
+**Phase 4.9a attempted the decision and stopped on that fact**, finding a second one beside it:
+the requested logical `host:port` is the subject of no node, so even granting ownership a
+generic finding had nothing truthful to be *about*. **Phase 4.9a-pre answered both**
+(**ADR 0042**) with an L0 requested-target anchor and direct-parent sweep ownership, without
+`Origin`, without identifier parsing and without touching `diagnosis.Rule`.
+
+**The gate is still open.** What remains is policy, not structure, and it is deliberately not
+inferable from the anchor decision.
+
+- [x] Decide whether run intent can reach a rule at all, and how — ADR 0042
+- [ ] Implement the anchor (Phase 4.9a-pre implementation), including the generic vocabulary
+      leaf ADR 0042 §11 requires
+- [ ] Resume Phase 4.9a: decide whether generic transport findings exist, their codes, and
+      their kind/severity/confidence/vantage semantics
+- [ ] Decide the partial-success and incomplete-measurement rules — a sweep where one path
+      reaches the terminal layer and another fails must not produce an unreachability claim
+- [ ] Decide whether one TLS finding is enough. Ten `TLS_*` classes mix reachability,
+      time-relative and client-capability facts, so one fixed `vantageDependent` flag is
+      probably wrong (ADR 0034 §14 fenced this off; ADR 0034 §17 does not generalize)
 - [ ] Until then, keep the gap stated in the report rather than papered over by a service rule
 
 ### Phase 4.8a — Real end-to-end validation from a test composition boundary: COMPLETE
@@ -1956,6 +1976,54 @@ from *not performable*, so an `md5`/SCRAM split by family could select the `md5`
 reproducible here: Docker translates both loopback families to one container-side address, so
 `pg_hba` cannot distinguish them — measured, and pinned by a test that fails if the
 environment ever gains the capability.
+
+### Phase 4.9a — Generic transport diagnosis ownership: STOPPED
+
+Set out to decide who owns DNS/TCP/TLS diagnosis for the endpoint an operator names. Stopped
+without a policy, correctly, on two structural facts verified from the tree at `e20c904`:
+
+- **Ownership.** No structure proved which transport sweep the operator caused. Rootness is
+  forbidden provenance inference and is not type-enforced — `transport.Params.Parent` was
+  optional — and `SweepScope` reaches the identifier and nothing else, so reading it means
+  parsing an `EvidenceID`.
+- **Subject.** The requested logical `host:port` is the subject of no node. `dns.lookup` carries
+  the hostname alone; `tcp.connect` and `tls.handshake` carry the resolved `ip:port`. On the
+  flagship NXDOMAIN case there is no TCP child to recover a port from at all.
+
+Model D — generic for user-supplied targets, service for discovered ones — is the right
+destination and was the one ADR 0034 §3 had already rejected by name as unimplementable. It
+became implementable only after Phase 4.9a-pre. **No ADR was written and no file changed**; a
+record saying "still blocked" would have been a record of a non-decision.
+
+### Phase 4.9a-pre — Requested-target anchor: DECIDED, NOT IMPLEMENTED
+
+**ADR 0042.** One L0 evidence node, minted by the composition root, whose subject is the
+operator's logical endpoint and whose child is the sweep it caused. It closes both gaps above
+with one node.
+
+Its load-bearing finding is adversarial rather than architectural: the Kafka advertised sweep is
+a **transitive descendant** of the bootstrap target, through
+`tls.handshake → api_versions → authentication → metadata → broker_advertised`. So
+"generic diagnosis owns everything below the anchor" would have walked straight into
+`KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`'s evidence and reintroduced the duplication ADR 0034
+resolved. Ownership is therefore **direct** parentage at the sweep root plus a step-typed walk
+of bounded depth — which also leaves PostgreSQL's in-band `tls.handshake` with its adapter,
+because that node parents to `postgres.ssl_request` rather than to `tcp.connect`.
+
+Layer-bounding was tried and fails: `postgres.ssl_request` is L3.
+
+- [ ] The anchor node, minted in one named function in `internal/app`
+- [ ] The narrowed evidence-authority guard — `NewFinding`, `AddBlockedBy` and every attribute
+      constructor stay banned package-wide; `NewEvidence` permitted in one place only
+- [ ] The generic vocabulary leaf (ADR 0042 §11) — the anchor step name plus the three
+      transport step names a rule walks
+- [ ] `transport.Params.Parent` documentation tightened at the sweep root (ADR 0032 amendment)
+- [ ] The 18 acceptance guards and 20 mutations in ADR 0042 §15-16, including the full-depth
+      Kafka fixture that distinguishes direct-child from descendant ownership
+- [ ] A non-vacuous redaction canary proving `report.target.requested` and the anchor subject
+      pseudonymize identically
+
+**No schema change, no `Origin`, no `Rule` signature change, no new dependency.**
 
 ### Phase 5 — CLI, renderers and productization: NOT STARTED
 

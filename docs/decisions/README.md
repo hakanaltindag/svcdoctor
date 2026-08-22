@@ -28,7 +28,7 @@ does not overturn it, and both remain authoritative.
 | 0014 | Findings reference evidence by identifier | Accepted | |
 | 0015 | The report derives its summary | Accepted | |
 | 0016 | The report owns canonical serialization | Accepted | Refines 0004 |
-| 0017 | The diagnosis rule contract | Accepted | Defers transport severity policy and finding identity |
+| 0017 | The diagnosis rule contract | Accepted | Defers transport severity policy and finding identity. Half of that deferral is closed by 0042, which supplies the requested-versus-discovered context an anchored generic rule needs; the severity policy itself is still unwritten |
 | 0018 | Structural redaction produces the shareable report | Accepted | |
 | 0019 | Evidence identifiers are derived from the step and a scope path | Accepted | Implements the scheme 0013 left to producers. Amended in Phase 2.2, which settled encoding and scoping |
 | 0020 | Generic transport probes normalize at their own boundary | Accepted | Implements 0002 and 0010 for the first real producer. Widened the `DNS_NO_ADDRESS` contract. Confirmed unchanged by the second producer |
@@ -43,7 +43,7 @@ does not overturn it, and both remain authoritative.
 | 0029 | A connection carries what it proved, and a fail-closed policy reads it | Accepted, **amended in Phase 4.2** | Implements 0028 §6. Sends no credential; changes no report schema |
 | 0030 | PLAIN authentication, and the ordering that governs every credential byte | Accepted | Implements 0028 over 0029's mechanisms, inside 0027's boundary. **The first phase that transmits a credential.** Supplies the blocker carrier 0028 §3 assumed |
 | 0031 | Metadata discovers a topology, records it, and probes none of it | Accepted | First topology discovery. Answers the `Origin` reopen condition of 0013 and the topology-uniqueness case of 0019 |
-| 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4 |
+| 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4. Amended by 0042 §9: a sweep root's `Parent` stops being optional |
 | 0033 | An advertised endpoint is measured once per advertisement, and only at L1-L3 | Accepted | The consumer 0031 was built to feed and the first caller of 0032. Answers the execution-dedup question by deliberately not deduplicating |
 | 0034 | A Kafka rule owns advertised-endpoint reachability, anchored at the advertisement | Accepted (policy), implemented in Phase 3.6 | Revisits the two questions 0017 deferred and answers them for service-anchored rules. Authorizes one finding code and fixes every field of it; `internal/diagnosis/kafka` implements it and invents nothing |
 | 0035 | An unusable broker advertisement is its own claim, and it is not vantage-dependent | Accepted | Takes the case 0034 §14 placed out of scope. First finding with `vantageDependent: false`; the redaction defect it surfaced was fixed generically in Phase 3.7.5 |
@@ -51,6 +51,9 @@ does not overturn it, and both remain authoritative.
 | 0037 | A principal or named resource is identity, and redaction must pseudonymize it | Accepted, **implemented in Phase 4.1** | Refines 0022 with a second identity category. Meets a reopen condition 0030 recorded. First report schema field added since v1 |
 | 0038 | PostgreSQL SCRAM-SHA-256, and the two facts that must both be true before authentication passes | **Accepted, implemented in Phase 4.4b**, §8 and §21 amended by implementation | Applies 0028's contract, 0029's mechanisms and 0030's ordering to a second protocol and adds no policy. Fixes the success boundary at *signature verified* **and** *AuthenticationOk*, both measured. Narrows scope to printable-ASCII passwords rather than adding a SASLprep dependency |
 | 0039 | A PostgreSQL session is established at ReadyForQuery, and that proves less than it looks like | **Accepted, implemented in Phase 4.5b**, §2 and §15 amended by implementation | Completes the slice 0036 designed. Confirms the ReadyForQuery boundary and **corrects 0036 §5** — `57P03` is pre-auth. Adds `RESOURCE_NOT_FOUND`, which 0036 §16 authorized and 4.3 deferred; declines a capacity class |
+| 0040 | A PostgreSQL rule anchors only at a `postgres.*` step | Accepted (policy), implemented in Phase 4.6b | The 0034 analogue for PostgreSQL. Authorizes the service vocabulary leaf 0042 §11 reuses generically |
+| 0041 | A run discovers broadly and authenticates narrowly | **Accepted, implemented in Phase 4.8b** | First record about the application. Closes the selection deferral 0028 left open; partially supersedes 0011 on command-tree shape. Narrowed by 0042 §3, which opens one hole in its evidence-authority ban |
+| 0042 | A run records the target it was asked about, and a sweep declares its cause | Accepted (structure) | Closes the ownership and subject gaps Phase 4.9a stopped on. Narrows 0041, half-closes 0017's deferral, amends 0032 at the sweep root, and leaves 0034's advertised ownership structurally unreachable. Authorizes no finding |
 
 ## Decisions that govern work not yet written
 
@@ -262,6 +265,23 @@ A deferral is a decision too, and each names the condition that should reopen it
   the one thing that is logged, counted and lockout-relevant. It also fixes the CLI tree as
   action-first, partially superseding 0011's shape while preserving its reasoning, and it is
   careful to claim nothing about the paths it did not authenticate.
+
+- **0042** is the record Phase 4.9a stopped to ask for. That phase set out to decide who owns
+  DNS/TCP/TLS diagnosis for the endpoint an operator named, and found two gaps rather than a
+  policy question: the graph could not prove which transport sweep the operator caused, and it
+  carried the requested `host:port` in no subject at all — only inside identifiers, which
+  nothing may parse. Both have one cause, and it is that nothing recorded *why the run
+  happened*. The answer is one node at L0, minted by the composition root, whose subject is the
+  logical endpoint and whose child is the sweep it caused. The accusation it had to survive is
+  that this is `Origin` wearing a node, and the defence is mechanical rather than rhetorical:
+  `Origin` asks how a *subject* entered a run and dies on a cluster advertising its bootstrap
+  endpoint back, while the anchor asks which *execution* the operator caused and is untouched by
+  that same case — the two sweeps stay distinct, as 0032 built them to. Its load-bearing
+  discovery is that the Kafka advertised sweep is a **transitive descendant** of the bootstrap
+  target, so "generic diagnosis owns everything below the anchor" would have walked straight
+  into 0034's evidence; ownership is therefore direct parentage at the sweep root and a
+  step-typed walk of bounded depth, which also leaves PostgreSQL's in-band handshake with its
+  adapter. It authorizes no finding, and says so.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

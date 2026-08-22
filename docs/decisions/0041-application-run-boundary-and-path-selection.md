@@ -706,3 +706,23 @@ evidence to close the gap.
 - **Concurrent path discovery** — sequential for now. Reopen on a real
   performance requirement, and only if selection stays decoupled from completion
   order (ADR 0024's own reopen condition).
+
+## Amendment (Phase 4.9a-pre): one hole in the evidence-authority ban
+
+This record's implementation pinned that `internal/app` creates no evidence, and
+that guard was right about everything it was defending: orchestration must not
+record measurements, findings or a second representation of which path was
+selected.
+
+ADR 0042 §3 opens exactly one hole in it. The run may construct **one** kind of
+evidence — the L0 requested-target anchor describing the endpoint it was asked
+about — because it is the only layer that holds that fact, and because without it
+a generic transport rule can neither identify the operator's sweep nor name its
+subject. The guard is narrowed rather than deleted: `NewFinding`, `AddBlockedBy`
+and every attribute constructor stay banned across the whole package, and
+`NewEvidence` is permitted in one named function only.
+
+The run still attaches no descendants. It passes the anchor's identifier as
+`transport.Params.Parent` and the chain records the edge, so §14's rule — that
+orchestration never parses an evidence identifier — is unaffected, as are path
+selection, the one-authentication limit and the LOCAL_FULL boundary.

@@ -556,6 +556,57 @@ The registration boundary may be defined early. The adapter contract itself must
 
 See ADR 0009.
 
+### 5.6 A run records what it was asked about, and a sweep declares its cause
+
+Section 5.5 established that a rule anchored at a service fact needs no provenance,
+and closed with the asymmetry that followed: *a generic rule meeting a failed
+`dns.lookup` node has no such anchor, and the question it must ask first — was this
+endpoint asked for, or discovered? — is exactly `Origin`.*
+
+**ADR 0042 gives the generic rule an anchor of its own**, and it is not `Origin`.
+
+A run records one L0 evidence node describing the target the operator asked about:
+`LayerInput`, `SubjectKindTarget`, subject `host:port`, PASS. The requested transport
+sweep is parented to it, through the derivation parent the chain already accepts. The
+composition root mints it, because probes collect measurements and the operator's
+request is not a measurement — it is the reason measurements were made.
+
+Three properties make it safe, and each is the counterpart of a property in 5.2b:
+
+- **It answers a question about an execution, not a subject.** `Origin` asks how *an
+  endpoint* entered the run and dies on a cluster advertising its bootstrap endpoint
+  back — one `host:port` with a discovery-derived node and a lookup-derived path, both
+  true, neither rankable. The anchor asks which *sweep* the operator caused, and that
+  same case leaves it untouched: there are two sweeps, kept distinct by the scope 5.2b
+  describes, and the generic rule owns one of them.
+- **It is recorded, not inferred.** Nothing reads provenance off graph shape. One layer
+  records one fact it holds, and a rule enumerates anchors and walks *down* — the same
+  direction 5.5 identified as the whole difference.
+- **It is one projection of one authority, not a second record.** The run's typed input
+  produces both `report.target.requested` and the anchor's subject. Neither is
+  authoritative over the other; a test pins that they agree.
+
+**Ownership is direct parentage, and descendant reachability would be a bug.** A Kafka
+advertised sweep is a *transitive* descendant of the bootstrap target — the chain runs
+`tls.handshake → api_versions → authentication → metadata → broker_advertised → dns.lookup`
+— so a rule owning "everything below the anchor" would diagnose a discovered broker and
+duplicate the finding 5.5's Kafka rule exists to make. The boundary is therefore:
+
+> **Generic transport diagnosis owns the sweep whose root `dns.lookup` node is a direct
+> child of a requested-target anchor, and within it only the chain-shaped nodes beneath
+> that root.**
+
+The traversal is bounded in depth and typed by step, which is exactly the shape the
+transport chain emits and nothing else emits. Bounding it by *layer* instead does not
+work: PostgreSQL's `postgres.ssl_request` is at L3 and would be swallowed. That same
+step-typing is what leaves PostgreSQL's in-band handshake service-owned, since its
+`tls.handshake` node parents to the negotiation rather than to TCP.
+
+**What this does not do.** It authorizes no finding. Whether a generic transport finding
+exists, what it may claim, and its severity, confidence and vantage semantics are
+undecided; ADR 0017's deferral stands for all of them. And `Origin` remains deferred:
+nothing here lets any layer ask how an arbitrary subject entered a run.
+
 ## 6. Diagnosis
 
 Diagnosis consumes normalized evidence only.
