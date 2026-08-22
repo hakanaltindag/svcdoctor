@@ -97,7 +97,7 @@ Credential:
   demands authentication is reported as such, and nothing is sent.
 
 Output:
-  --output string           "json" (default "json")
+  --output string           "text" or "json" (default "text")
   --shareable               produce the shareable redacted report instead of
                             the local one, using the same diagnosis
 

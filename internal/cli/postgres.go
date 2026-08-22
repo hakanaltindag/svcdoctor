@@ -17,7 +17,9 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/platform/local"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
+	"github.com/hakanaltindag/svcdoctor/internal/render"
 	renderjson "github.com/hakanaltindag/svcdoctor/internal/render/json"
+	renderterminal "github.com/hakanaltindag/svcdoctor/internal/render/terminal"
 	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 )
 
@@ -39,6 +41,9 @@ var errHelpRequested = errors.New("help requested")
 type postgresCommand struct {
 	params  app.PostgresParams
 	timeout time.Duration
+
+	// output names the form to render: "text" or "json".
+	output string
 
 	// shareable selects the output projection. It is an *output* decision and
 	// deliberately never reaches internal/app: the application always produces a
@@ -98,11 +103,30 @@ func (a *App) diagnosePostgresCommand(ctx context.Context, args []string) int {
 		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: %v\n", err)
 		return ExitInternal
 	}
-	if err := renderjson.Write(a.Stdout, report); err != nil {
+	if err := a.render(command.output, render.Input{Report: report, Incomplete: result.Incomplete()}); err != nil {
 		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: %v\n", err)
 		return ExitInternal
 	}
 	return code
+}
+
+// render writes the selected form to stdout.
+//
+// Explicit dispatch over two names. Not a registry, not a map of constructors
+// and not an interface with one implementation each: two forms do not make a
+// plugin point, and ADR 0009 declines that abstraction until something proves it
+// needs one.
+//
+// **Both forms receive the same already-projected report**, so `--shareable`
+// means the same thing in either, and both derive from the same run. Neither
+// renderer chooses an exit code: that was decided above, from the result.
+func (a *App) render(output string, in render.Input) error {
+	switch output {
+	case outputJSON:
+		return renderjson.Write(a.Stdout, in.Report)
+	default:
+		return renderterminal.Write(a.Stdout, in)
+	}
 }
 
 // project selects the output form of a finished report.
@@ -160,7 +184,7 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 		caFile      = fs.String("tls-ca-file", "", "PEM trust source")
 		serverName  = fs.String("tls-server-name", "", "identity to verify")
 		insecure    = fs.Bool("tls-insecure", false, "do not verify the endpoint's identity")
-		output      = fs.String("output", "json", `"json"`)
+		output      = fs.String("output", "text", `"text" or "json"`)
 
 		passwordFile  = fs.String("password-file", "", "read the credential from a file")
 		passwordStdin = fs.Bool("password-stdin", false, "read the credential from stdin")
@@ -242,6 +266,7 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 
 	return postgresCommand{
 		timeout:   *timeout,
+		output:    *output,
 		shareable: *shareable,
 		params: app.PostgresParams{
 			Host:     *host,
@@ -295,23 +320,23 @@ func tlsPlan(mode string) (adapterpostgres.TLSPlan, error) {
 	}
 }
 
+// The output forms this command renders.
+const (
+	outputText = "text"
+	outputJSON = "json"
+)
+
 // checkOutput validates the output form.
 //
-// **Only JSON exists in Phase 5.1.** ADR 0048 settles the v0.1 surface as
-// `text|json` with `text` as the default, and the terminal renderer that would
-// honour it is Phase 5.3. Accepting `text` and printing something improvised
-// would ship a renderer nobody reviewed; accepting it and failing internally
-// would report svcdoctor as broken when the operator did nothing wrong. So it is
-// rejected as an invocation error that names the reason, and the default is the
-// one form that exists.
+// Both exist as of Phase 5.3. `text` is the default because a person running one
+// command is the common case; `json` is the canonical artifact and is what
+// automation redirects.
 func checkOutput(output string) error {
 	switch output {
-	case "json":
+	case outputText, outputJSON:
 		return nil
-	case "text":
-		return usagef("--output text is not implemented yet; use --output json")
 	default:
-		return usagef(`--output %q must be "json"`, output)
+		return usagef(`--output %q must be "text" or "json"`, output)
 	}
 }
 
