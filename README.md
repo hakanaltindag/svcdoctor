@@ -1,276 +1,458 @@
 # svcdoctor
 
-`svcdoctor` is a client-vantage connection and topology diagnostic CLI for distributed services.
+`svcdoctor` is an on-demand, evidence-linked connection diagnostic CLI for distributed
+services. You point it at a service endpoint, it attempts the journey a real client would,
+and it reports what it measured at every stage — and, just as deliberately, what it did not
+learn.
 
-## Project status
+**PostgreSQL is supported today.** No APM, OpenTelemetry collector, sidecar or agent is
+required for a diagnostic run.
 
-**Phases 1 and 2 are complete, and Phase 3 — the Kafka vertical slice — is in progress. The
-tool is not usable yet**: it can sweep one endpoint end to end, ask every reachable broker for
-its API versions and which SASL mechanisms it offers, authenticate to one chosen broker with
-SASL/PLAIN, ask that broker to describe the cluster's brokers, measure every endpoint that
-broker advertised, and produce an evidence graph. Nothing interprets or presents that yet,
-because no diagnosis rule, renderer or CLI exists.
+## What it does
 
-**svcdoctor now transmits credentials, under a contract written before the first byte.** A
-password is sent only over a channel whose peer identity was verified — never plaintext, never
-TLS with verification disabled — and a refusal is recorded as a `SKIPPED` node with
-`EXEC_SKIPPED_BY_POLICY` rather than as silence. A credential is authorized by the logical
-endpoint the operator named, never by an address it resolved to, so DNS cannot widen its
-authority. Authentication takes exactly one session, never a list, so the adapter cannot choose
-which broker receives a credential. `security.Reveal`, the one function that turns a masked
-secret into plaintext, is confined by lint to adapter wire packages and has **exactly one call
-site** (ADR 0027, ADR 0028, ADR 0030).
+For PostgreSQL, svcdoctor behaves as the client you describe and walks the same path:
 
-What is implemented, with one runtime dependency (`github.com/twmb/franz-go/pkg/kmsg`,
-BSD-3-Clause, no transitive dependencies):
+```text
+requested target → DNS → TCP → SSLRequest → TLS → Startup → Authentication → Session
+```
 
-- `internal/security` — masked secret and endpoint-bound credential primitives
-- `internal/security/redaction` — structural redaction into a shareable report
-- `internal/domain` — domain primitives, evidence, the immutable evidence DAG, findings and
-  the canonical report
-- `internal/diagnosis` — the rule contract and a deterministic diagnosis engine
-- `internal/probe` — the evidence identifier encoding every probe shares
-- `internal/probe/dns` — the DNS probe, the first real I/O producer (Phase 2.1)
-- `internal/probe/tcp` — the TCP probe and connection ownership transfer (Phase 2.2)
-- `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
-- `internal/probe/transport` — the generic transport chain: DNS → TCP per address → TLS (Phase 2.4)
-- `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1),
-  SASL mechanism discovery (Phase 3.2a), channel propagation (Phase 3.2b), SASL/PLAIN
-  authentication (Phase 3.2c), Metadata topology discovery (Phase 3.3) and advertised
-  endpoint reachability (Phase 3.4)
-- `internal/adapter/kafka/wire` — the only importer of the Kafka protocol library, and the only
-  package permitted to call `security.Reveal`
+At the end you get:
 
-**Discovered endpoints are measured, never spoken to, and never given a credential.** Metadata
-tells svcdoctor which brokers a cluster advertises, and each advertisement becomes its own
-evidence node parented to the exchange that carried it. Reachability then measures those
-endpoints with the generic transport chain — DNS, TCP and TLS — and stops: no Kafka request
-reaches a discovered broker, no credential can, and there is no recursion to bound. The
-transport plan is supplied by the caller rather than guessed from a port or copied from the
-bootstrap connection, because a Metadata response says nothing about what a listener speaks
-(ADR 0031, ADR 0033).
+- what was measured, stage by stage, and where the journey stopped;
+- the elapsed duration of each attempted stage;
+- findings, each one linked to the exact evidence that produced it;
+- whether a PostgreSQL session was actually established;
+- whether svcdoctor's own execution completed.
 
-**Two advertisements naming one endpoint produce two measurements.** That redundancy is
-deliberate: a deduplicated sweep would have two causes and one effect, and the graph could only
-record it by picking one advertisement as *the* cause and silently leaving the other with no
-measurement attached. Truthful attribution was chosen over saving a bounded number of
-credential-free connections (ADR 0033).
+The design goal is a report that separates **what was measured** from **what can honestly be
+claimed**. `UNKNOWN` is not a failure. A local timeout is not a target timeout. Missing
+credentials are not a rejected password.
 
-**svcdoctor now produces its first finding.** Phase 3.5 decided what may be concluded from
-advertised-endpoint reachability evidence and Phase 3.6 implemented it, inventing nothing: the
-Kafka finding owns those transport failures outright so no generic finding duplicates them, an
-unreachable advertised broker is `ERROR` because severity is the impact of a finding's claim
-about its own subject, a partially reachable endpoint gets no finding because svcdoctor does
-not observe which address a client would select, and an unfinished measurement never becomes a
-remote failure — it becomes a `HYPOTHESIS` at `WARN`, or nothing at all. `Origin` was examined
-a third time and stays deferred (ADR 0034).
+## Quick start
 
-- `internal/diagnosis/kafka` — the Kafka rules: `AdvertisedEndpointUnreachable` behind
-  `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` (Phase 3.6), and `UnusableAdvertisement` behind
-  `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE` (Phase 3.7)
-- `internal/service/kafka` — a leaf holding the three Kafka constants both the adapter and the
-  rule name. It imports `internal/domain` and nothing else
+```sh
+svcdoctor diagnose postgres \
+  --host db.prod.internal \
+  --user svcdoctor \
+  --password-file /run/secrets/postgres
+```
 
-**A second finding covers what the first deliberately cannot.** When Metadata reports a broker
-with no host, or a port outside the range a port can occupy, no endpoint exists to measure and
-"unreachable" would be false — nothing was reached because nothing was tried.
-`KAFKA_ADVERTISED_ENDPOINT_UNUSABLE` states that narrower claim, and it is the first finding
-marked `vantageDependent: false`: the defect is in the values the cluster reported, so no other
-network position sees anything different. It stops short of naming a cause, because Metadata
-says what a broker reports and never how it arrived at it (ADR 0035).
+Text output is the default, so no output flag is needed. To select a database explicitly:
 
-**The rule anchors at the advertisement and walks down.** It enumerates the advertisement
-nodes and follows derivation edges to the sweep each one caused; it never meets a transport
-failure and asks what that failure is about. That direction is what lets it say "the cluster
-answered, and then advertised an address this client cannot reach" without ever inferring how
-an endpoint entered the run — which is why the same host being both bootstrap target and
-advertised broker stays two honest measurements and one finding.
+```sh
+svcdoctor diagnose postgres \
+  --host db.prod.internal \
+  --user svcdoctor \
+  --database appdb \
+  --password-file /run/secrets/postgres
+```
 
-**The Kafka slice is validated against a real cluster.** `make integration-kafka` runs the
-whole vertical — DNS, TCP, TLS, ApiVersions, SASL/PLAIN, Metadata, advertised-endpoint
-reachability, diagnosis and redaction — against three real Apache Kafka 4.0 brokers in KRaft
-mode, and differentially against `kcat`. Broker identifiers, advertised endpoints and topology
-agree exactly; injected DNS, TCP and TLS failures produce exactly the findings the policy
-authorizes and no others; a partially reachable endpoint produces none. See
-[`docs/validation/KAFKA_PHASE3_VALIDATION.md`](docs/validation/KAFKA_PHASE3_VALIDATION.md).
-It needs Docker and is deliberately not part of `make check`.
+A credential is optional input. Running without one is a valid diagnostic run — see
+[Credentials](#credentials).
 
-What is not implemented: SCRAM and every other SASL mechanism, protocol checks against
-discovered brokers, topic and partition analysis, PostgreSQL, generic transport rules,
-renderers and the CLI. Those directories contain no Go code. svcdoctor also cannot yet reach
-Metadata on a cluster with no SASL, which is this repository's restriction rather than Kafka's
-(ADR 0031).
+Help and version:
 
-> **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
-> It reconstructs the mental model, the locked invariants, the rejected alternatives and the
-> open decisions, and it states exactly where Phase 2 may begin. Then read
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the relevant records in
-> [`docs/decisions/`](docs/decisions/README.md), and [`docs/BACKLOG.md`](docs/BACKLOG.md).
+```sh
+svcdoctor --help
+svcdoctor --version
+svcdoctor diagnose --help
+svcdoctor diagnose postgres --help
+```
 
-The first implementation target will be Kafka. PostgreSQL follows after the Kafka vertical slice is complete and validated.
+## Flags
+
+`svcdoctor diagnose postgres` is the only leaf command in v0.1.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--host <host>` | *required* | the endpoint to diagnose |
+| `--user <role>` | *required* | the role to connect as |
+| `--port <uint>` | `5432` | the port to connect to |
+| `--database <name>` | *empty* | database to select; empty lets the server default it to the role name |
+| `--timeout <duration>` | `30s` | bound on the whole run |
+| `--step-timeout <duration>` | `10s` | bound on each individual exchange |
+| `--output text\|json` | `text` | output form — see [Output modes](#output-modes) |
+| `--shareable` | off | emit the redacted projection — see [Shareable reports](#shareable-reports) |
+
+TLS flags are described under [TLS](#tls), and credential flags under
+[Credentials](#credentials). `svcdoctor diagnose postgres --help` is authoritative.
+
+## Example output
+
+A run that reached a session. Durations below are illustrative, not a benchmark.
+
+```text
+svcdoctor · postgres · db.prod.internal:5432
+
+  ✓ PASS  DNS  2.3ms
+
+  Path 10.0.4.17:5432 · continued
+    ✓ PASS  TCP             1.8ms
+    ✓ PASS  SSLRequest      0.9ms
+    ✓ PASS  TLS             4.1ms
+    ✓ PASS  Startup         1.2ms
+    ✓ PASS  Authentication  2.8ms
+    ✓ PASS  Session         0.4ms
+
+Findings
+  none
+
+Result
+  status     OK           no target-side error was proven
+  session    established
+  execution  complete
+  duration   13.5ms
+```
+
+A run that stopped at TLS:
+
+```text
+svcdoctor · postgres · db.prod.internal:5432
+
+  ✓ PASS  DNS  2.1ms
+
+  Path 10.0.4.17:5432
+    ✓ PASS     TCP             1.7ms
+    ✓ PASS     SSLRequest      0.9ms
+    ✗ FAIL     TLS             15.5ms  TLS_UNKNOWN_AUTHORITY
+    · SKIPPED  Startup                 EXEC_SKIPPED_PREREQUISITE_FAILED
+    ·          Authentication          not reached
+    ·          Session                 not reached
+
+Findings
+  ✗ ERROR  POSTGRES_TLS_CHAIN_NOT_TRUSTED  db.prod.internal:5432
+    The certificate chain presented for the PostgreSQL TLS upgrade did not verify
+    against this run's trust context
+    ...
+    → Check the trust material this run was given against the chain recorded on the
+      referenced evidence
+    evidence: 2
+
+Result
+  status       PROBLEMS FOUND
+  session      NOT established
+  execution    complete
+  first break  L3               tls
+  duration     18.2ms
+```
+
+Three lines are always printed, and they are independent of one another: `status`, `session`
+and `execution`.
+
+### What "OK" means
+
+> **An overall status of `OK` means no ERROR or CRITICAL target-side problem was proven. It
+> does not mean a PostgreSQL session was established.**
+
+That distinction is load-bearing, and the most common way to reach it is running without a
+credential against an endpoint that requires authentication:
+
+```text
+    · SKIPPED  Authentication         EXEC_REQUIRED_INPUT_MISSING
+    ·          Session                not reached
+
+Findings
+  ⚠ WARN  POSTGRES_CREDENTIAL_NOT_CONFIGURED  db.prod.internal:5432
+    The PostgreSQL endpoint required authentication and this run had no credential
+    to present
+
+Result
+  status     OK               no target-side error was proven
+  session    NOT established
+  execution  complete
+```
+
+This exits **0**. It is not an invocation error: svcdoctor was asked to measure an endpoint
+and it did, truthfully reporting that nothing was sent and nothing was refused. Read the
+`session` line, not the exit code, to learn whether a session existed.
+
+### Stage durations
+
+Each attempted stage records its own elapsed duration, and the run records its own total. The
+total is measured for the run; it is not the sum of the stage durations.
+
+These are point-in-time measurements taken from the svcdoctor execution vantage for that one
+exchange. They are not historical latency analysis, and svcdoctor applies no thresholds,
+baselines or comparisons to them. No finding is derived from a duration.
+
+## What PostgreSQL BASIC checks
+
+PostgreSQL BASIC is what svcdoctor can learn *while acting as the PostgreSQL client you asked
+it to be*. It issues **no SQL**.
+
+| Stage | What is measured |
+|---|---|
+| Requested target | the host and port the run was asked to diagnose |
+| DNS | resolution from this vantage point, and every address returned |
+| TCP | a connection attempt per resolved address |
+| SSLRequest | PostgreSQL's in-band negotiation of an encrypted channel |
+| TLS | handshake, chain verification, identity match, validity window |
+| Startup | the startup exchange and the authentication the endpoint requests |
+| Authentication | mechanism negotiation and the outcome of SCRAM-SHA-256 |
+| Session | whether the session reached `ReadyForQuery` |
+
+Representative findings include name not resolved, TCP connection not established, TLS
+declined, SSL negotiation failed, TLS chain not trusted, TLS identity mismatch, credential
+not configured, credential withheld, credentials rejected, database not found, and database
+connect denied.
+
+For the finding conventions and the full catalog, see [`docs/FINDINGS.md`](docs/FINDINGS.md),
+with worked examples in [`docs/DIAGNOSIS_EXAMPLES.md`](docs/DIAGNOSIS_EXAMPLES.md).
+
+## Credentials
+
+There are exactly two credential sources:
+
+| Flag | Reads the credential from |
+|---|---|
+| `--password-file <path>` | a file |
+| `--password-stdin` | standard input |
+
+They are **mutually exclusive** — supplying both is an invocation error rather than a
+precedence rule, so a run can never quietly authenticate with the source you did not mean.
+
+Supplying neither is valid input. If the endpoint then requires authentication, the run
+reports `POSTGRES_CREDENTIAL_NOT_CONFIGURED` at `WARN` with no session established, and
+nothing is sent.
+
+Reading from a pipe, for example from a secret-provider command:
+
+```sh
+secret-provider read postgres/svcdoctor | \
+  svcdoctor diagnose postgres --host db.prod.internal --user svcdoctor --password-stdin
+```
+
+There is **no** literal `--password` flag, no environment-variable source, no interactive
+prompt and no DSN input. A password on a command line is visible in the process table and in
+shell history, which is why it is not offered.
+
+Credential material is not part of the report, in either output mode.
+
+## TLS
+
+TLS is required by default and the endpoint's identity is verified by default.
+
+| Flag | Meaning |
+|---|---|
+| `--tls require\|disable` | negotiate an encrypted channel, or do not (default `require`) |
+| `--tls-ca-file <path>` | PEM trust source; empty uses the system trust store |
+| `--tls-server-name <name>` | identity to verify and send in SNI; empty uses `--host` |
+| `--tls-insecure` | do not verify the endpoint's identity |
+
+There is no automatic fallback: a failed TLS negotiation is reported, never retried in
+plaintext. libpq's `sslmode` vocabulary is deliberately not reproduced.
+
+`--tls-insecure` disables verification and is recorded in the report. It does **not** mean
+"connect insecurely and authenticate anyway": the resulting channel is unverified, and the
+credential-transport policy refuses to present a password over an unverified channel. Such a
+run reports `POSTGRES_CREDENTIAL_WITHHELD` and sends nothing.
+
+## Output modes
+
+| `--output` | Result |
+|---|---|
+| `text` | human-readable terminal report (**default**) |
+| `json` | the canonical Report document |
+
+JSON is the canonical representation and the one to use for automation; the terminal form is
+derived from the same report. Markdown and HTML renderers are planned but **not implemented**
+— see [Roadmap](#roadmap).
+
+### JSON for automation
+
+For exit codes **0, 1 and 4**, stdout contains exactly one JSON document and stderr is empty.
+For exit codes **2 and 3**, stdout is empty and the error is written to stderr; no report is
+produced.
+
+The JSON is the canonical Report and nothing else. In particular the CLI does not inject a
+process exit code, an execution-completeness flag, or a session-established flag into the
+document — those are process- and presentation-level facts, and the schema does not carry
+them. `schemaVersion` is `1`.
+
+Parse the JSON. Do not parse the terminal text; its layout is a presentation detail.
+
+The report model is specified in [`docs/REPORT_SCHEMA.md`](docs/REPORT_SCHEMA.md).
+
+## Shareable reports
+
+```sh
+svcdoctor diagnose postgres --host db.prod.internal --user svcdoctor \
+  --password-file /run/secrets/postgres --shareable --output json
+```
+
+`--shareable` emits the `SHAREABLE_REDACTED` projection of the same report instead of the
+local one. Identity-bearing fields covered by the redaction policy — hostnames, addresses,
+role and database names, the local vantage — are replaced with stable pseudonyms, applied
+consistently so that relationships between target, evidence and findings remain readable.
+Findings, evidence references and durations are preserved, and the exit code is unchanged:
+redaction changes what a shared copy reveals, never what was concluded.
+
+Redaction **fails closed**. If the residual identity check cannot confirm that a covered
+value was replaced, svcdoctor emits no report at all and exits 3 rather than writing a
+partially redacted artifact to stdout.
+
+This applies the redaction policy recorded in [`docs/SECURITY.md`](docs/SECURITY.md). It is
+not a claim of anonymization or of regulatory compliance; review a shared report against your
+own disclosure requirements.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | a report was produced, execution completed, and no ERROR/CRITICAL target-side finding exists |
+| 1 | a report was produced, execution completed, and an ERROR/CRITICAL target-side finding exists |
+| 2 | svcdoctor was invoked with something it cannot act on; no report |
+| 3 | svcdoctor itself failed and produced no usable report |
+| 4 | a report was produced, but svcdoctor's own execution did not finish |
+
+Precedence is `3 > 2 > 4 > 1 > 0`.
+
+- **Exit 1 means svcdoctor worked** and found a target-side problem. It is not a svcdoctor
+  failure.
+- **Exit 4 outranks exit 1.** A run that was cut short and also proved an ERROR exits 4, and
+  the finding stays in the report — incompleteness qualifies every conclusion in it. Exit 4
+  is reached by cancellation (`SIGINT`/`SIGTERM`) or by an expired local execution budget; a
+  partial report is still written to stdout.
+- **A `WARN` finding with overall status `OK` still exits 0.** Do not read exit 0 as "a
+  connection succeeded" — the no-credential run above is the counterexample.
+
+## Build and install
+
+Go 1.26 or newer, from a checked-out repository:
+
+```sh
+go install ./cmd/svcdoctor      # into $GOBIN
+go build -o svcdoctor ./cmd/svcdoctor
+```
+
+The binary is statically linkable and builds with `CGO_ENABLED=0`. It needs no source tree,
+no configuration file and no runtime data directory.
+
+There are currently no Homebrew, Docker, apt, RPM or prebuilt-binary distributions.
+
+`svcdoctor --version` prints the version. A build from source prints `dev`; release builders
+can inject a value with `-ldflags "-X main.version=v0.1.0"`.
+
+## Current scope
+
+**PostgreSQL BASIC is complete and feature-frozen.** The PostgreSQL-only v0.1 CLI is
+implemented: one leaf command, `svcdoctor diagnose postgres`, with text and JSON output,
+file and stdin credential input, shareable redaction, and the exit-code contract above.
+
+BASIC is bounded on purpose: it learns what svcdoctor can observe while acting as the
+PostgreSQL client for this run. Inspecting a server's operational state is a separate future
+body of work (PostgreSQL DEEP) and is not part of v0.1.
+
+### Not in v0.1
+
+These are deliberate boundaries, not defects:
+
+- no Kafka CLI (the Kafka adapter exists internally; no command is exposed)
+- no `inspect` command — the namespace is reserved, its output contract deferred
+- no PostgreSQL DEEP, no diagnostic SQL of any kind
+- no `pg_stat_*` inspection, connection-pool, blocking-query or replication analysis
+- no table or query latency diagnosis
+- no monitoring, historical state, baselines or thresholds
+- no generic TLS diagnosis command
+- no Kubernetes integration, agent mode or eBPF
+- no Markdown or HTML output
+- no color or progress UI, no shell completion
+- no literal-password flag, environment-variable password or interactive prompt
+- no DSN or `sslmode` input
+- no retries and no protocol fallbacks
+
+Deferred until PostgreSQL and Kafka are both validated as products: Redis/Valkey, RabbitMQ,
+MySQL/MariaDB, Elasticsearch/OpenSearch.
+
+Out of scope for v0.1 entirely: host mode, eBPF, MCP server, PDF generation, tuning advisor,
+long-term monitoring, LLM-based core diagnosis, and generic rule scripting DSLs.
+
+## How it fits together
+
+```text
+CLI  →  application composition  →  probes / adapters  →  evidence graph
+                                                              ↓
+        text / JSON  ←  optional shareable redaction  ←  Report  ←  diagnosis
+```
+
+The separation is the architecture's primary rule:
+
+> **Probes collect facts. Adapters understand protocols. Diagnosis correlates evidence.
+> Renderers explain results.**
+
+Probes gather DNS, TCP and TLS facts and know nothing about PostgreSQL. Adapters own protocol
+semantics and normalize wire responses into evidence. Diagnosis runs over a frozen evidence
+graph and performs no I/O — when evidence is missing it emits `UNKNOWN` or `SKIPPED` rather
+than going to look. Renderers create no findings and compute no severity.
+
+The layer order the report reasons about:
+
+```text
+L0  Input / config normalization      L4  Protocol / capability discovery
+L1  DNS                               L5  Authentication / authorization
+L2  TCP                               L6  Topology discovery
+L3  TLS
+```
+
+svcdoctor has **one runtime dependency**: `github.com/twmb/franz-go/pkg/kmsg` (BSD-3-Clause,
+no transitive dependencies), used only by the Kafka adapter's wire package.
+
+Full detail is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the product boundary is in
+[`docs/SCOPE.md`](docs/SCOPE.md); design records are in
+[`docs/decisions/`](docs/decisions/README.md).
+
+## Claim discipline
+
+One idea distinguishes svcdoctor from a connectivity check: **it separates what it measured
+from what it can safely claim.**
+
+- `UNKNOWN` is not `FAIL`. An unsupported capability, or a stage svcdoctor could not
+  complete, is a gap in the tool rather than a defect in the target.
+- A local execution timeout is not a remote failure. It means the budget expired, and
+  nothing was learned about the target.
+- No credential is not a bad password. Nothing was sent, so nothing was refused.
+- A finding is valid from the vantage point it was recorded at, unless the evidence proves
+  otherwise.
+- Every finding references the exact evidence identifiers that produced it, and severity and
+  confidence are reported separately — never fused into one score or a percentage.
+
+## Development
+
+```sh
+make check                 # fmt-check, test, vet, lint, build — mirrors CI
+make fmt                   # format sources in place
+make help                  # list targets
+
+make integration-postgres  # full PostgreSQL validation against a real server (needs Docker)
+```
+
+`make check` is fast and hermetic. The integration gate is deliberately excluded from it
+because it requires Docker; it starts a real PostgreSQL 18 server, runs the suite against it
+and tears it down. See [`test/integration/postgres/README.md`](test/integration/postgres/README.md).
+
+Linting uses [golangci-lint](https://golangci-lint.run) `v2.13.1` (v2 config format).
+
+Package-level fixtures live in package-adjacent `testdata/` directories; `test/` holds
+cross-package and environment-dependent tests.
+
+## Roadmap
+
+PostgreSQL-only v0.1 is **release-ready** and not yet tagged or distributed.
+
+Next, in no committed order:
+
+- Markdown and HTML renderers, derived from the canonical report
+- a Kafka command, once a Kafka composition root exists (the adapter, topology discovery and
+  diagnosis rules are already implemented and validated against a real cluster)
+- the `inspect` namespace, once its output contract is decided
+- PostgreSQL DEEP
+
+The authoritative phase numbering and checklist live in
+[`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 | | |
 |---|---|
 | Repository | `github.com/hakanaltindag/svcdoctor` |
 | Go module path | `github.com/hakanaltindag/svcdoctor` |
 | Go version | 1.26 |
-| License | Apache-2.0 (ADR 0006) |
-
-## Development
-
-```sh
-make check     # full local quality gate: fmt-check, test, vet, lint, build
-make fmt       # format sources in place
-make help      # list targets
-```
-
-`make check` mirrors CI. Gates that require Go packages report `SKIPPED` until the first
-package exists; they activate automatically at that point. No placeholder Go code exists to
-make them artificially green.
-
-Linting uses [golangci-lint](https://golangci-lint.run) `v2.13.1` (v2 config format).
-
-## Architectural invariant
-
-> **Probes collect facts. Adapters understand protocols. Diagnosis correlates evidence. Renderers explain results.**
-
-This separation is non-negotiable.
-
-> **Extensibility comes from stable boundaries, not from maximizing abstractions.**
-
-Concrete structs first. Interfaces only at real boundaries.
-
-- Probes must remain protocol-agnostic wherever possible.
-- Generic transport owns DNS/TCP/TLS and hands a live connection to the adapter when a protocol handshake needs one.
-- Adapters own protocol semantics and topology discovery.
-- Diagnosis consumes normalized evidence and must not perform network or protocol I/O.
-- Renderers only transform diagnosis results into output formats.
-- Service growth must not introduce central `if kafka`, `if postgres`, `if redis` dispatch sprawl.
-- New services are registered explicitly at a single composition root.
-
-## Layer order
-
-```text
-L0  Input / config normalization
-L1  DNS
-L2  TCP
-L3  TLS
-L4  Protocol / capability discovery
-L5  Authentication / authorization
-L6  Topology discovery
-```
-
-Protocol/capability discovery precedes authentication because that is the real wire order
-for both v0.1 services.
-
-## CLI shape
-
-```text
-svcdoctor kafka ...
-svcdoctor postgres ...
-```
-
-Service-specific subcommands, sourced from explicit service registration. Service type is
-never inferred from port numbers. See ADR 0011.
-
-Exit codes are documented in `docs/SCOPE.md`. Exit code `1` means svcdoctor worked and found
-a target-side problem; it does not mean svcdoctor failed.
-
-## v0.1 scope
-
-The product scope is intentionally narrow:
-
-- Kafka first.
-- PostgreSQL second.
-- L0-L6 diagnostics are the core product surface.
-- L7-L8 signals are allowed only when required for correlation.
-- Outputs: terminal, JSON, Markdown, HTML.
-- JSON is the canonical report model; terminal, Markdown, and HTML are derived from it.
-- Security and redaction are architecture requirements, not follow-up work.
-
-Deferred until the Kafka + PostgreSQL vertical slice is validated:
-
-- Redis / Valkey
-- RabbitMQ
-- MySQL / MariaDB
-- Elasticsearch / OpenSearch
-
-Out of scope for v0.1: host mode, eBPF, MCP server, PDF generation, tuning advisor,
-long-term monitoring, LLM-based core diagnosis, and generic rule scripting DSLs.
-
-## Repository layout
-
-Only `internal/domain`, `internal/security`, `internal/security/redaction`,
-`internal/diagnosis`, `internal/probe`, `internal/probe/dns`, `internal/probe/tcp`,
-`internal/probe/tls`, `internal/probe/transport` and `test/security` contain Go code. Every
-other `internal/`, `cmd/` and `test/` directory below is scaffold and is empty.
-
-```text
-svcdoctor/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── cmd/
-│   └── svcdoctor/                 # CLI entrypoint boundary; intentionally empty
-├── internal/
-│   ├── app/                       # Application orchestration
-│   ├── domain/                    # Shared normalized domain/evidence model
-│   ├── probe/
-│   │   ├── dns/                   # Generic DNS facts; phase 2.1
-│   │   ├── tcp/                   # Generic TCP facts + connection ownership; phase 2.2
-│   │   ├── tls/                   # Generic TLS facts + handshake ownership; phase 2.3
-│   │   └── transport/             # Generic transport chain; phase 2.4
-│   ├── adapter/
-│   │   ├── kafka/                 # Kafka protocol semantics; phase 3
-│   │   │   └── wire/              # the only importer of the Kafka protocol library
-│   │   └── postgres/              # Reserved for phase 4
-│   ├── diagnosis/
-│   │   ├── transport/             # Cross-service transport-layer correlation
-│   │   ├── kafka/                 # Kafka-specific diagnosis rules; phase 3
-│   │   └── postgres/              # Reserved for phase 4
-│   ├── render/                    # Terminal / JSON / Markdown / HTML renderers
-│   ├── security/                  # Secret types + structural redaction
-│   └── platform/
-│       ├── kubernetes/            # Optional platform context; phase 5
-│       └── local/                 # Local vantage metadata only; no host doctor
-├── test/
-│   ├── integration/
-│   │   ├── kafka/
-│   │   └── postgres/
-│   └── security/
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── REPORT_SCHEMA.md
-│   ├── FINDINGS.md
-│   ├── SCOPE.md
-│   ├── SECURITY.md
-│   ├── BACKLOG.md
-│   └── decisions/
-├── .golangci.yml
-├── Makefile
-├── go.mod
-├── LICENSE
-└── .gitignore
-```
-
-Unit and package-level fixtures will live in package-adjacent `testdata/` directories once
-the corresponding packages exist. `test/` holds cross-package and environment-dependent tests.
-
-## Implementation order
-
-The authoritative phase numbering and checklist live in
-[`docs/BACKLOG.md`](docs/BACKLOG.md): Phase 1 Core Foundations (complete), Phase 2 Generic
-Transport Engine, Phase 3 Kafka, Phase 4 PostgreSQL, Phase 5 productization/platform/
-renderers, Phase 6 validation. The sequence below is the same work read as a narrative.
-
-1. Freeze architecture contracts and evidence schema.
-2. Define secret handling and redaction contracts.
-3. Implement generic DNS/TCP/TLS probes.
-4. Implement Kafka transport and protocol discovery.
-5. Implement Kafka metadata/topology verification.
-6. Implement deterministic Kafka diagnosis.
-7. Implement canonical JSON and Markdown output.
-8. Validate the Kafka vertical slice.
-9. Only then start PostgreSQL.
-
-No production implementation should be added before the relevant architecture boundary is documented and reviewed.
+| License | Apache-2.0 |
