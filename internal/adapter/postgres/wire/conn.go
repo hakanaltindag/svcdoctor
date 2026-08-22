@@ -57,6 +57,38 @@ var (
 	// ErrInvalidInput means this package was called with something it cannot
 	// encode, such as a startup parameter containing a NUL byte.
 	ErrInvalidInput = errors.New("invalid postgres wire input")
+
+	// ErrPasswordUnsupported means the credential contains a character
+	// svcdoctor cannot prepare for SCRAM.
+	//
+	// It is a statement about svcdoctor and never about the peer: nothing was
+	// sent, so the peer expressed no opinion. PostgreSQL applies SASLprep to
+	// passwords and svcdoctor implements only the printable-ASCII range over
+	// which SASLprep provably changes nothing. See printableASCII and ADR 0038
+	// section 11.
+	ErrPasswordUnsupported = errors.New("password is outside the range svcdoctor can prepare for SCRAM")
+
+	// ErrIterationsUnsupported means the peer named a PBKDF2 iteration count
+	// above MaxSCRAMIterations.
+	//
+	// Also a statement about svcdoctor: the count is legal protocol, and
+	// svcdoctor declines to spend the CPU. It is kept distinct from
+	// ErrMalformedMessage because the value was structurally valid.
+	ErrIterationsUnsupported = errors.New("peer demanded more SCRAM iterations than svcdoctor performs")
+
+	// ErrServerSignatureMismatch means the server's SCRAM signature did not
+	// match the one derived locally, so the peer did not prove knowledge of the
+	// credential.
+	//
+	// The exchange is unsuccessful from that point on, whatever the peer sends
+	// next — including AuthenticationOk.
+	ErrServerSignatureMismatch = errors.New("server did not prove knowledge of the credential")
+
+	// ErrSCRAMRejected means the server ended the SCRAM exchange with an error
+	// token naming the credential.
+	//
+	// The token itself never leaves the comparison that produced this sentinel.
+	ErrSCRAMRejected = errors.New("peer rejected the SCRAM credential")
 )
 
 // bindDeadline makes the caller's context able to interrupt blocking I/O, and

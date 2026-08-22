@@ -3,6 +3,7 @@
 //
 //	SSLRequest      -> one response byte           (S / N / E)
 //	StartupMessage  -> the server's first reply     (AuthenticationXXX / ErrorResponse / …)
+//	SCRAM-SHA-256   -> AuthenticationOk             (the full SASL exchange)
 //
 // It is the PostgreSQL counterpart of internal/adapter/kafka/wire and follows the
 // same boundary: bytes in, plain Go values out. It holds no connection, produces
@@ -15,8 +16,19 @@
 // ADR 0036 section 13 chose that over a library: every PostgreSQL client library
 // that provides SCRAM also owns the connection lifecycle, `sslmode` fallback and
 // multi-host failover — automatic redial and automatic fallback, the two
-// behaviours ADR 0008 rejected. This package uses encoding/binary, io, net and
-// context.
+// behaviours ADR 0008 rejected. This package uses encoding/binary, io, net,
+// context, and — for SCRAM — crypto/rand, crypto/hmac, crypto/sha256,
+// crypto/pbkdf2 and encoding/base64. All standard library.
+//
+// # It is the only package here that may reveal a secret
+//
+// AuthenticateSCRAM calls security.Reveal, which is why this package imports
+// internal/security. That is one of exactly two production call sites in
+// svcdoctor, one per service, and `forbidigo` fails the build on a third outside
+// a wire package. Everything derived from the plaintext — the salted password,
+// the client key, the stored key, the signatures, the proof and the auth message
+// — stays inside scram.go; the SCRAM type returned upward has no field any of
+// them could occupy. See ADR 0027 and ADR 0038.
 //
 // # It borrows connections, never owns them
 //
