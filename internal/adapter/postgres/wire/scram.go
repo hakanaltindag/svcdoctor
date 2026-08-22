@@ -510,10 +510,18 @@ func mac(key, data []byte) []byte {
 //
 // RFC 5802 defines server-error-value as a token list *with* an extension
 // production, so the token is not guaranteed to come from the closed set and a
-// peer may put arbitrary text there. It is compared against three exact tokens
-// to choose a sentinel and then dropped: it reaches no field, no error and no
+// peer may put arbitrary text there. It is compared against exact tokens to
+// choose a sentinel and then dropped: it reaches no field, no error and no
 // evidence. No PostgreSQL or pgBouncer version observed sends one at all — both
 // report SCRAM failures as an ErrorResponse — so this path is defensive.
+//
+// # Two outcomes, two directions
+//
+// A `v=` that does not match yields ErrServerSignatureMismatch, and that is
+// **svcdoctor refusing the peer**, not the peer refusing svcdoctor. It is only
+// reachable once the peer has accepted the client proof — a peer that rejects
+// the proof never sends a `v=` at all — so the two must not be normalized
+// together downstream. See ADR 0040 section 5.1.
 func verifyServerFinal(raw string, expected []byte) error {
 	// Only the first attribute decides the outcome; RFC 5802 permits trailing
 	// extensions after it, which are ignored.
@@ -532,8 +540,25 @@ func verifyServerFinal(raw string, expected []byte) error {
 	switch attr[0] {
 	case 'e':
 		switch attr[2:] {
-		case "invalid-proof", "unknown-user", "invalid-username-encoding":
+		case "invalid-proof", "unknown-user":
+			// Both are the peer refusing what it was presented: the proof did
+			// not verify, or there is no such principal to verify it against.
+			// Neither is read for its cause — the two are one outcome here, as
+			// they are for 28P01.
 			return ErrSCRAMRejected
+		case "invalid-username-encoding":
+			// **Not a credential refusal.** RFC 5802 defines this as the
+			// username field failing SASLprep or `=`-escaping, which is a fault
+			// in the value's encoding rather than a decision about the material.
+			// Calling it a rejection would let a decoding fault reach diagnosis
+			// as "the peer refused your credential".
+			//
+			// It is defensive and unobserved: this client sends `n=`, an empty
+			// username, because the role travels in the StartupMessage — so
+			// there is nothing here for a peer to fail to decode. Handled
+			// anyway, at the conservative class, because a peer chooses this
+			// token and svcdoctor does not get to assume it will not send one.
+			return ErrUnexpectedResponse
 		default:
 			return ErrUnexpectedResponse
 		}

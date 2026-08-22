@@ -427,14 +427,30 @@ func (o authObservation) classify() (domain.State, domain.FailureClass) {
 		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
 	}
 
-	// A refusal svcdoctor made on the peer's behalf: the peer failed to prove
-	// knowledge of the credential. It is a mutual mechanism, so the refusal is
-	// mutual, and AUTH_CREDENTIALS_REJECTED is the class that says a party
-	// refused the authentication material it was presented.
+	// SCRAM authenticates both parties, so a failure has a direction, and the
+	// two directions get different classes. Normalizing them together was this
+	// package's own error until Phase 4.6a.5; see ADR 0038 amendment D.
 	switch {
 	case errors.Is(o.err, wire.ErrServerSignatureMismatch):
-		return domain.StateFail, domain.FailureAuthCredentialsRejected
+		// **svcdoctor refused the peer.** The server's ServerSignature did not
+		// equal the one this credential derives, so the peer did not prove it
+		// knows the credential.
+		//
+		// This is only reachable once the peer has *accepted* the client proof
+		// — a peer that rejects the proof answers with an error in place of the
+		// server-final and never sends a signature at all. So
+		// AUTH_CREDENTIALS_REJECTED here would state the opposite of what
+		// happened, which is why it no longer does.
+		//
+		// The class names what was observed and no cause: a peer that does not
+		// hold the credential, an intermediary answering in its place, and a
+		// defective implementation are indistinguishable from the wire.
+		return domain.StateFail, domain.FailureAuthPeerVerificationFailed
 	case errors.Is(o.err, wire.ErrSCRAMRejected):
+		// **The peer refused svcdoctor.** The server-final carried
+		// `e=invalid-proof` or `e=unknown-user`, which is the peer declining
+		// the material it was presented — the same claim 28P01 carries below,
+		// in SCRAM's vocabulary instead of a SQLSTATE.
 		return domain.StateFail, domain.FailureAuthCredentialsRejected
 	}
 

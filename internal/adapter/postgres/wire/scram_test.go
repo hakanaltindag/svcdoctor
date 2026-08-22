@@ -306,7 +306,10 @@ func TestVerifyServerFinal(t *testing.T) {
 
 		{"invalid-proof", "e=invalid-proof", ErrSCRAMRejected},
 		{"unknown-user", "e=unknown-user", ErrSCRAMRejected},
-		{"invalid-username-encoding", "e=invalid-username-encoding", ErrSCRAMRejected},
+		// Not a credential refusal: an encoding fault in the username field.
+		// Unreachable in practice — this client sends an empty username — and
+		// classified conservatively rather than as a rejection.
+		{"invalid-username-encoding", "e=invalid-username-encoding", ErrUnexpectedResponse},
 		{"other-error", "e=other-error", ErrUnexpectedResponse},
 		{"no-resources", "e=no-resources", ErrUnexpectedResponse},
 		{"an extension token", "e=vendor-specific-thing", ErrUnexpectedResponse},

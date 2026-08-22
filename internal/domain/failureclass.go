@@ -27,6 +27,10 @@ import (
 //     budget means nothing was learned about the target.
 //   - A capability svcdoctor does not support, and a privilege svcdoctor does
 //     not hold, are gaps in svcdoctor rather than defects in the target.
+//   - In a mechanism where both parties authenticate, the two directions stay
+//     distinct: "the peer refused what I presented" and "the peer could not
+//     prove itself to me" are different observations that lead to opposite
+//     actions, and neither may be normalized into the other.
 //
 // The zero FailureClass is FailureNone, which is valid: the report schema states
 // that failureClass is meaningless on a PASS node.
@@ -149,6 +153,36 @@ const (
 	// The root cause is therefore unknown at this layer. Naming a likely one is
 	// a hypothesis, and a hypothesis is diagnosis work over frozen evidence.
 	FailureAuthCredentialsRejected
+	// FailureAuthPeerVerificationFailed means the peer failed to prove its own
+	// knowledge of the authentication material, in a mechanism where both
+	// parties authenticate.
+	//
+	// **It is the opposite direction from FailureAuthCredentialsRejected**, and
+	// the two must never share a class. That one says the peer refused what
+	// svcdoctor presented. This one says svcdoctor refused what the *peer*
+	// presented: in a mutual mechanism the peer must prove itself in turn, and
+	// this class records that proof failing svcdoctor's own check. Reaching it
+	// normally requires the peer to have already accepted what it was given,
+	// so reporting it as a rejected credential inverts what happened.
+	//
+	// The observation proves exactly one thing: **the value the peer presented
+	// failed svcdoctor's verification.** It does not state that the peer refused
+	// svcdoctor's credential, that the credential is wrong, that the peer is
+	// malicious, that anything sits on the path, that the peer is not the
+	// service it claims to be, or that the root cause is known. A peer that does
+	// not hold the credential, an intermediary answering in its place, and a
+	// defective implementation produce the same observation.
+	//
+	// It is service-neutral: any mechanism that authenticates both parties has
+	// this outcome, and the class carries no mechanism name and no protocol
+	// detail. Which mechanism was performed belongs on the evidence node as an
+	// attribute.
+	//
+	// "your credential was refused" sends a reader to a secret store; "this peer
+	// could not prove itself" tells them to stop and establish what they are
+	// talking to. Collapsing the two would send them to the wrong place, which
+	// is the same argument the three classes above rest on.
+	FailureAuthPeerVerificationFailed
 
 	// Authorization.
 
@@ -258,9 +292,10 @@ var failureClassNames = [...]string{
 	FailureProtocolMalformedResponse:     "PROTOCOL_MALFORMED_RESPONSE",
 	FailureProtocolPeerClosed:            "PROTOCOL_PEER_CLOSED",
 
-	FailureAuthMechanismUnsupported: "AUTH_MECHANISM_UNSUPPORTED",
-	FailureAuthMechanismNotOffered:  "AUTH_MECHANISM_NOT_OFFERED",
-	FailureAuthCredentialsRejected:  "AUTH_CREDENTIALS_REJECTED",
+	FailureAuthMechanismUnsupported:   "AUTH_MECHANISM_UNSUPPORTED",
+	FailureAuthMechanismNotOffered:    "AUTH_MECHANISM_NOT_OFFERED",
+	FailureAuthCredentialsRejected:    "AUTH_CREDENTIALS_REJECTED",
+	FailureAuthPeerVerificationFailed: "AUTH_PEER_VERIFICATION_FAILED",
 
 	FailureAuthzDenied:            "AUTHZ_DENIED",
 	FailureAuthzScopeInsufficient: "AUTHZ_SCOPE_INSUFFICIENT",

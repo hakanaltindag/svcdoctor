@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres/wire"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
@@ -618,6 +619,10 @@ func TestAuthenticationPassesOnlyOnTheConjunction(t *testing.T) {
 			state: domain.StatePass,
 		},
 		{
+			// The peer accepted the proof — it would not have sent a server-final
+			// otherwise — and then failed to prove itself. That is svcdoctor
+			// refusing the peer, the opposite direction from a rejected
+			// credential, and it has its own class as of Phase 4.6a.5.
 			name: "signature is forged, AuthenticationOk still arrives",
 			respond: func(w io.Writer, _ []byte) {
 				forged := bytes.Repeat([]byte{0xAA}, 32)
@@ -625,7 +630,7 @@ func TestAuthenticationPassesOnlyOnTheConjunction(t *testing.T) {
 				_, _ = w.Write(authFrame(0, nil))
 			},
 			state: domain.StateFail,
-			class: domain.FailureAuthCredentialsRejected,
+			class: domain.FailureAuthPeerVerificationFailed,
 		},
 		{
 			name: "no server-final at all, AuthenticationOk arrives",
@@ -662,6 +667,29 @@ func TestAuthenticationPassesOnlyOnTheConjunction(t *testing.T) {
 			},
 			state: domain.StateFail,
 			class: domain.FailureAuthCredentialsRejected,
+		},
+		{
+			// unknown-user is the same direction: the peer declining what it was
+			// presented, because there is no principal to verify it against.
+			name: "server-final carries the unknown-user token",
+			respond: func(w io.Writer, _ []byte) {
+				_, _ = w.Write(authFrame(12, []byte("e=unknown-user")))
+				_, _ = w.Write(authFrame(0, nil))
+			},
+			state: domain.StateFail,
+			class: domain.FailureAuthCredentialsRejected,
+		},
+		{
+			// An encoding fault in the username field, which is not a decision
+			// about the material and must not read as one. Unreachable in
+			// practice: this client sends an empty username.
+			name: "server-final carries the invalid-username-encoding token",
+			respond: func(w io.Writer, _ []byte) {
+				_, _ = w.Write(authFrame(12, []byte("e=invalid-username-encoding")))
+				_, _ = w.Write(authFrame(0, nil))
+			},
+			state: domain.StateFail,
+			class: domain.FailureProtocolUnexpectedResponse,
 		},
 		{
 			name: "server-final is neither a verifier nor an error",
@@ -856,8 +884,8 @@ func TestPoolerCollapseNeverBecomesACredentialClaim(t *testing.T) {
 //
 // AUTH_CREDENTIALS_REJECTED is produced from `28P01` — PostgreSQL's own
 // `invalid_password`, where the peer asserted the refusal — and from a SCRAM
-// server-final that svcdoctor itself refused. It is never produced by inferring
-// a cause from a generic code plus a protocol position.
+// server-final carrying the peer's own refusal token. It is never produced by
+// inferring a cause from a generic code plus a protocol position.
 func TestOnlyThePeersOwnCodeProducesACredentialClaim(t *testing.T) {
 	for _, sqlState := range []string{
 		"08P01", "08006", "53300", "57P03", "3D000", "42501", "XX000", "",
@@ -1278,4 +1306,117 @@ func hasBlocker(g domain.Graph, node, blocker domain.EvidenceID) bool {
 		}
 	}
 	return false
+}
+
+// --- The direction contract -------------------------------------------------
+
+// TestCredentialRejectionIsDirectionalAndSoIsItsClass is the guard the whole of
+// Phase 4.6a.5 exists for.
+//
+// SCRAM authenticates both parties, so a failure has a direction, and the two
+// directions are different observations that lead to opposite actions:
+//
+//	peer -> svcdoctor   the peer refused the material it was presented
+//	svcdoctor -> peer   the peer failed to prove it knows the credential
+//
+// Until Phase 4.6a.5 both produced AUTH_CREDENTIALS_REJECTED, which was not
+// merely imprecise: a server sends a server-final **only after accepting the
+// client proof**, so on the second path the peer had accepted the material and
+// the class stated the opposite of what happened. See ADR 0038 amendment D.
+//
+// This test does not go through the wire at all. It drives classify() directly,
+// so it fails on the mapping itself rather than on any scripted peer, and it
+// stays green only while the two directions keep separate classes.
+func TestCredentialRejectionIsDirectionalAndSoIsItsClass(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		want      domain.FailureClass
+		direction string
+	}{
+		{
+			name:      "the peer refused the proof",
+			err:       wire.ErrSCRAMRejected,
+			want:      domain.FailureAuthCredentialsRejected,
+			direction: "peer refused svcdoctor",
+		},
+		{
+			name:      "svcdoctor refused the peer's signature",
+			err:       wire.ErrServerSignatureMismatch,
+			want:      domain.FailureAuthPeerVerificationFailed,
+			direction: "svcdoctor refused the peer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			observed := authObservation{err: tt.err, scram: wire.SCRAM{Iterations: 4096}}
+
+			state, class := observed.classify()
+			if state != domain.StateFail {
+				t.Errorf("state = %s, want FAIL", state)
+			}
+			if class != tt.want {
+				t.Fatalf("class = %s, want %s (%s)", class, tt.want, tt.direction)
+			}
+		})
+	}
+
+	// Stated separately and negatively, because this is the assertion a future
+	// simplification is most likely to undo by "tidying" the two branches back
+	// into one.
+	mismatch := authObservation{err: wire.ErrServerSignatureMismatch}
+	if _, class := mismatch.classify(); class == domain.FailureAuthCredentialsRejected {
+		t.Error("a server-signature mismatch must never be AUTH_CREDENTIALS_REJECTED: " +
+			"the peer accepted the material and then failed to prove itself")
+	}
+
+	// And the converse, so the split cannot be satisfied by moving both.
+	rejected := authObservation{err: wire.ErrSCRAMRejected}
+	if _, class := rejected.classify(); class == domain.FailureAuthPeerVerificationFailed {
+		t.Error("a peer-side SCRAM refusal must never be AUTH_PEER_VERIFICATION_FAILED: " +
+			"svcdoctor verified nothing on that path")
+	}
+}
+
+// TestPeerVerificationFailureRecordsNoSCRAMValue pins that the new class carries
+// no new evidence with it.
+//
+// The distinction is the FailureClass and nothing else. No attribute was added
+// for it, so there is no field into which a signature, an expected signature or
+// any other derived value could be placed — which is why this correction needed
+// no redaction change. The attribute set is asserted exactly, so adding one
+// later is a deliberate act rather than a drift.
+func TestPeerVerificationFailureRecordsNoSCRAMValue(t *testing.T) {
+	observed := authObservation{
+		err:   wire.ErrServerSignatureMismatch,
+		scram: wire.SCRAM{Iterations: 4096},
+	}
+
+	attributes := observed.attributes()
+
+	want := map[domain.AttributeKey]bool{
+		AttrSASLMechanism:   true,
+		AttrSCRAMIterations: true,
+	}
+	for key := range attributes {
+		if !want[key] {
+			t.Errorf("unexpected attribute %q on a peer-verification failure", key)
+		}
+	}
+	for key := range want {
+		if _, ok := attributes[key]; !ok {
+			t.Errorf("attribute %q is missing", key)
+		}
+	}
+
+	// Nothing derived from the exchange can be here, because wire.SCRAM holds
+	// none of it: there is no signature, proof, nonce, salt or auth message on
+	// the struct to copy. Asserted through the rendered values rather than by
+	// reading fields that do not exist.
+	for key, value := range attributes {
+		if strings.Contains(strings.ToLower(value.String()), "signature") {
+			t.Errorf("attribute %q renders a signature-shaped value: %q", key, value.String())
+		}
+	}
 }
