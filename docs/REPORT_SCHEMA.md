@@ -279,6 +279,8 @@ redaction at the same time. An uncontrolled payload defeats all three.
 
 ## 7. findings
 
+`docs/DIAGNOSIS_EXAMPLES.md` shows what a real finding looks like in both output modes.
+
 Conceptual finding model:
 
 ```text
@@ -354,7 +356,68 @@ identifier is well formed. The cross-object invariant — every reference resolv
 the report's evidence graph — is validated when the report is assembled, because the report is
 the first thing that owns both sets. See ADR 0014.
 
+#### `evidenceRefs` is minimal proof, not a display list
+
+The references are the **smallest set that proves the claim**. They are deliberately not
+everything a reader would want to see: a rule that cited every node of a sweep would bury the
+two or three that matter (ADR 0034 section 11.3).
+
+So a renderer building a causal trail is expected to **traverse the graph from the cited
+nodes**, not to display the reference list verbatim. The graph is in the same report and
+carries `parents` and `blockedBy` for exactly this. A useful terminal view of one finding is
+typically:
+
+```text
+cited node -> its parents        the successful context (a lookup that resolved, a
+                                 connection that was established)
+cited node -> its blockedBy      why a downstream step never ran
+```
+
+Two consequences follow, and both are intended:
+
+- **A `PASS` node may be absent from `evidenceRefs` and still belong on screen.** It is reached
+  by traversal, not by citation.
+- **A renderer must classify the references it was given rather than assume their roles.** The
+  contrast half of a finding is the cited nodes in state `PASS`; the causal half is the cited
+  nodes that are not. Both are available structurally, on the nodes themselves.
+
 ---
+
+### 7.5 layer
+
+A finding's `layer` is the layer its **claim** belongs to — the layer of the thing the finding
+is about. It is not the layer the failure was observed at, and it is not derived from `code`
+(see `docs/FINDINGS.md` section 3).
+
+The distinction is load-bearing because the two can differ, and the first real finding is a
+case where they always do:
+
+```json
+"findings": [ { "code": "KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE", "layer": "L6", ... } ],
+"summary": { "firstBrokenLayer": "L2", ... }
+```
+
+That report is consistent, and reading it as a contradiction is the mistake this section
+exists to prevent:
+
+| Field | Answers | Derived from |
+|---|---|---|
+| `findings[].layer` | *what kind of thing is this claim about?* | the rule, from the fact it is anchored at |
+| `summary.firstBrokenLayer` | *where did the run first break?* | the graph, as the lowest layer holding a `FAIL` node |
+
+`KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` is `L6` because advertised-endpoint reachability is a
+topology claim about a broker the cluster named; the transport failure that proves it may sit
+at L1, L2 or L3, and does, in different runs.
+
+**A consumer that wants "where did it break?" must not read `findings[].layer`.** It reads
+`summary.firstBrokenLayer` for the run, or resolves the finding's `evidenceRefs` against the
+graph and takes the lowest layer among the nodes in state `FAIL` — which is per-finding and is
+what a renderer should display.
+
+**Reopen when** a finding needs to state both independently. Adding an observed-failure layer
+to the model was considered and rejected for v0.1: it would be a second, cacheable copy of a
+fact the evidence graph already carries exactly, and ADR 0013's rule is that relationships and
+derived facts belong to the graph rather than to a value beside it.
 
 ## 8. summary
 

@@ -6,7 +6,8 @@ enumeration of every future svcdoctor finding.
 The goal is to fix the conventions before coding, so that finding identifiers stay stable
 once they are exposed to users and automation.
 
-See `docs/REPORT_SCHEMA.md` for the finding model itself.
+See `docs/REPORT_SCHEMA.md` for the finding model itself, and `docs/DIAGNOSIS_EXAMPLES.md`
+for what the findings svcdoctor actually produces look like.
 
 ## 1. Finding code convention
 
@@ -110,13 +111,75 @@ Phase 1.4a settled which of these are required at the type level:
   recommendation. Nothing consumes them yet and no renderer exists.
 
 `layer` is supplied by the caller and never derived from `code`, so the core never holds a
-code-to-layer mapping that every new service would have to edit.
+code-to-layer mapping that every new service would have to edit. It is the layer the finding's
+**claim** belongs to, not the layer its failure was observed at — the two differ routinely, and
+`docs/REPORT_SCHEMA.md` section 7.5 defines the distinction and says which field a consumer
+should read for "where did it break?".
 
 A `CONFIRMED` finding must not carry a discriminator: a discriminator states what would
 settle an open question, and a confirmed finding has none. A `HYPOTHESIS` without one is
 accepted — this document says to *prefer* stating it and `docs/REPORT_SCHEMA.md` says the
 model *allows* one, so requiring it would be diagnosis policy rather than structural
 validation.
+
+## 3.1 The finding quality bar
+
+Reviewed against the first real finding in Phase 3.6.5, and binding on every finding after it.
+A rule that cannot satisfy a line here is either not ready or is describing a claim the model
+does not yet support — and the second case is an ADR, not a workaround.
+
+**The claim**
+
+1. **One finding is one independent claim.** If removing another finding would not change what
+   this one asserts, they are independent. If it would, they are the same finding or a
+   causal parent and child, and section 5 decides which survives.
+2. **Never claim more than the evidence carries.** Including in prose: a sentence that names a
+   value the graph does not hold is as wrong as a field that does.
+3. **The three outcomes stay distinct.** *Proven*, *not proven*, and *not measured* are
+   different claims. Collapsing the last two is the fastest way to make the tool untrustworthy.
+4. **Partial success never becomes total failure**, and withholding a finding is not
+   withholding information — the evidence stays in the report either way.
+
+**The fields**
+
+5. **Severity is the impact of this finding's claim about its own subject.** Never a count,
+   never a cluster verdict, never a proxy for confidence.
+6. **Confidence is epistemic strength only.** If the belief weakened, do not lower severity;
+   change the claim and let the impact follow.
+7. **`kind` matches the evidence.** `HYPOTHESIS` when alternatives remain, with a
+   discriminator that names the *observation* that would settle it — never a remediation.
+8. **`vantageDependent` is set whenever the claim depends on network position**, and set
+   unconditionally where it always does.
+9. **`layer` is the claim's layer**, per section 3 above.
+
+**The evidence**
+
+10. **`evidenceRefs` is minimal sufficient proof**: enough to establish the claim, and nothing
+    that merely decorates it. Both halves of a contrast are part of the proof.
+11. **A blocked step is never cited as a cause.** Its blocker owns the failure.
+12. **Every reference resolves in the report's graph** — enforced at assembly (ADR 0014), and
+    a rule must not knowingly produce a dangling one.
+
+**The presentation**
+
+13. **A renderer must never parse `summary` to recover semantics.** Anything a consumer needs
+    structurally must be a field, or derivable from `evidenceRefs` plus the graph. Prose is for
+    humans and is free to change; the code and the fields are the contract.
+14. **`summary` is one stable sentence a human can act on.** Technical specifics belong in
+    `detail` or on the evidence.
+15. **Prose carries no identity that structure already carries.** Put the hostname on the
+    subject and the evidence, where redaction transforms it; a finding whose prose must be
+    rewritten to be shareable is a finding that will leak the day someone edits it.
+16. **The finding still makes sense after pseudonymization.** Read it with every host and
+    address replaced before deciding it reads well.
+17. **Recommendations follow the evidenced failure and nothing else.** No guessed root cause,
+    no single generic catch-all, and never an executable command.
+18. **Text is deterministic.** Same graph, same bytes: sort anything collected from a map or a
+    traversal.
+
+**The check that catches the rest:** render the finding with the hostnames removed and ask
+whether an on-call engineer who has never read this repository knows what failed, how sure we
+are, and what to look at next. If answering needs the raw graph, the finding is not finished.
 
 ## 4. Claim discipline
 

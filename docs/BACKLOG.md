@@ -55,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule, 3.6.5 diagnosis output review complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -1154,6 +1154,58 @@ unambiguous: §11.5 states "no reference is ever a PASS node" immediately after 
 every row includes the `kafka.metadata` node, which §5 requires to be PASS. The invariant is
 §11.3's, and §11.3 scopes it correctly to the *causal set*. The implementation follows §11's
 numbered list: exchange + advertisement + causal set, and no PASS node among the causal set.
+
+### Phase 3.6.5 — Diagnosis output review (complete)
+
+**A product checkpoint, not a feature.** The first finding was inspected as a user-facing
+artifact across seven real scenarios — confirmed DNS/TCP/TLS, partial success, incomplete
+measurement, multi-broker, and bootstrap-equals-advertised — in both `LOCAL_FULL` and
+`SHAREABLE_REDACTED` form, to decide whether the finding contract scales to many findings
+before many findings exist.
+
+**Verdict: the machine contract passes and needed no change.** A sketch renderer built from
+structured fields and graph traversal alone reproduced every fact the prose carries, without
+parsing a sentence. No policy, code, kind, severity, confidence, evidence-reference or
+partial-success semantics changed.
+
+- [x] **One real defect found and fixed (wording only).** The finding's `detail` named a
+      terminal layer on a sweep whose lookup produced no address — a case ADR 0034 §4 calls
+      **unknowable**, because such a sweep mints no TCP node and nothing records whether a
+      handshake would have been required. It always said `L2`, which is wrong for every
+      TLS-required cluster with broken DNS. The layer is now named only when a transport path
+      was actually measured, and the impossibility is carried by a type (`reachability`) rather
+      than by a comment
+- [x] **A second wording defect fixed:** "no measured path reached L2" beside a summary naming
+      L2 as the failing layer reads as a contradiction. A path *arrives at* a layer and then
+      fails to *complete* it; the verb now says so, and the layer label (`L2 (tcp)`) is
+      included for operators who do not think in layer numbers
+- [x] **`finding.layer` semantics documented** — `docs/REPORT_SCHEMA.md` §7.5. It was listed in
+      three documents and defined in none, while `layer: "L6"` sits beside
+      `firstBrokenLayer: "L2"` in the same report. It is the layer of the **claim**; the
+      section says which field a consumer should read for "where did it break?"
+- [x] **The `evidenceRefs` renderer contract documented** — `docs/REPORT_SCHEMA.md` §7.4.
+      References are minimal proof, not a display list; a renderer traverses the graph from
+      them, and classifies cited nodes by their own `state` rather than assuming their roles
+- [x] **The finding quality bar written** — `docs/FINDINGS.md` §3.1, eighteen items binding on
+      every future rule. The load-bearing one is *a renderer must never parse `summary`*
+- [x] **`docs/DIAGNOSIS_EXAMPLES.md` created**, because the product output was previously
+      invisible without writing a harness. Illustrative, with the tests named as authoritative
+
+**Reviewed and deliberately not changed:**
+
+- [ ] **The `summary` string is overloaded** — it ends with `earliest evidenced failure L2
+      TCP_CONNECTION_REFUSED, TCP_CONNECTION_TIMEOUT`, a comma-joined list of enum constants
+      inside prose, and every part of it is already derivable structurally. It violates
+      §3.1 item 14 in spirit while satisfying item 13 in fact. Left alone because changing it
+      is a product decision that wants a renderer to judge against, and no renderer exists.
+      **Reopen when** the first renderer lands, or when a second finding has to imitate the
+      style — whichever comes first
+- [ ] **A `PROBLEMS_FOUND` report says nothing about cluster availability**, and cannot: an
+      unreachable advertised broker is per-subject impact. The wording risk is real but the
+      fix belongs to a renderer, not to the finding
+- [ ] **A shareable report's `evidenceRefs` become opaque** (`evidence-004`), so raw shareable
+      JSON is materially harder to read than raw local JSON. Correct per ADR 0018 and worth
+      knowing before someone reads one without a renderer
 
 ### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
 
