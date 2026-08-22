@@ -55,11 +55,29 @@ const (
 // advertisement's subject and a second copy would create two sources for one
 // fact.
 const (
-	// AttrMetadataControllerID is the node the cluster named as its controller.
+	// AttrMetadataControllerID is the controller identifier the response
+	// carried, and it is a record of the field rather than of the cluster.
 	//
 	// Kafka's own default is -1, meaning the responding broker knows of no
 	// controller. That is a statement rather than an absence, so it is recorded
 	// whenever the exchange completed.
+	//
+	// # It does not name the controller under KRaft
+	//
+	// Measured against a real Apache Kafka 4.0 KRaft cluster during Phase 3
+	// integration validation: eight consecutive Metadata reads of an idle,
+	// stable three-broker cluster returned 1, 1, 2, 1, 1, 3, 2, 3, while the
+	// quorum's actual leader stayed node 1 throughout. KRaft controllers are not
+	// brokers, so the field cannot name one; a broker answers with an arbitrary
+	// live broker instead, so that a legacy client routing admin requests "to
+	// the controller" reaches something that can serve them.
+	//
+	// So this attribute is evidence of what one response said, and nothing may
+	// be concluded from it about which node controls the cluster. ADR 0034
+	// section 15 already refuses to let controller identity affect a finding, on
+	// the weaker grounds that a controller moves on election. Reality is
+	// stronger: a rule that read this field would have produced a different
+	// severity on identical runs.
 	AttrMetadataControllerID domain.AttributeKey = "kafka.metadata.controller_id"
 
 	// AttrMetadataBrokerCount is how many distinct advertisements were recorded.
