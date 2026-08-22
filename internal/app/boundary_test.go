@@ -54,6 +54,7 @@ func parse(t *testing.T, name string) *ast.File {
 func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 	allowed := map[string]bool{
 		"github.com/hakanaltindag/svcdoctor/internal/domain":             true,
+		"github.com/hakanaltindag/svcdoctor/internal/probe":              true,
 		"github.com/hakanaltindag/svcdoctor/internal/probe/dns":          true,
 		"github.com/hakanaltindag/svcdoctor/internal/probe/tcp":          true,
 		"github.com/hakanaltindag/svcdoctor/internal/probe/transport":    true,
@@ -61,6 +62,7 @@ func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 		"github.com/hakanaltindag/svcdoctor/internal/diagnosis":          true,
 		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/postgres": true,
 		"github.com/hakanaltindag/svcdoctor/internal/security":           true,
+		"github.com/hakanaltindag/svcdoctor/internal/vocabulary":         true,
 	}
 
 	for _, name := range productionFiles(t) {
@@ -235,27 +237,114 @@ func render(n ast.Node) string {
 	return ""
 }
 
-// TestTheRunCreatesNoSelectionEvidence pins that orchestration records nothing.
+// TestTheRunCreatesExactlyOneKindOfEvidence pins the narrowed authority of
+// ADR 0042 section 3.
 //
-// The run sequences stages that record their own evidence. It must not add a
-// node, an attribute or a step of its own — "which path was selected" is already
-// carried by the authentication node's Subject and parent chain, and a second
-// representation is what ADR 0013 refuses.
-func TestTheRunCreatesNoSelectionEvidence(t *testing.T) {
+// Phase 4.8b banned evidence construction here outright, and that guard was right
+// about everything it defended: stages record their own observations, and a
+// second representation of which path was selected is what ADR 0013 refuses.
+//
+// ADR 0042 opens exactly one hole in it. The run may create the L0
+// requested-target anchor, because it is the only layer holding the operator's
+// logical endpoint, and without it a generic transport rule can neither identify
+// the operator's sweep nor name its subject. Everything else stays banned:
+//
+//   - no finding, ever. Orchestration that diagnoses is not orchestration.
+//   - no attribute of any kind. The anchor's subject is the whole fact.
+//   - no parent or blockedBy edge. The run declares a cause through
+//     transport.Params.Parent and the producer records the edge.
+//   - no second evidence node, not even another anchor.
+//
+// The hole is an allowlist of one function in one file, checked structurally, so
+// widening it means editing this test — which is the point.
+func TestTheRunCreatesExactlyOneKindOfEvidence(t *testing.T) {
+	// Banned everywhere, with no exception anywhere.
 	banned := map[string]bool{
-		"NewEvidence": true, "AddEvidence": true, "AddParent": true, "AddBlockedBy": true,
-		"NewFinding": true, "StringAttr": true, "BoolAttr": true, "IntAttr": true,
+		"AddParent": true, "AddBlockedBy": true, "NewFinding": true,
+		"StringAttr": true, "BoolAttr": true, "IntAttr": true,
 		"IdentityAttr": true, "HostAttr": true, "StringListAttr": true,
+	}
+	// Banned everywhere except the one authorized site below.
+	restricted := map[string]bool{"NewEvidence": true, "AddEvidence": true}
+
+	const (
+		authorizedFile = "target.go"
+		authorizedFunc = "recordRequestedTarget"
+	)
+
+	counts := map[string]int{}
+
+	for _, name := range productionFiles(t) {
+		file := parse(t, name)
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			authorized := name == authorizedFile && fn.Name.Name == authorizedFunc
+
+			ast.Inspect(fn, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				switch {
+				case banned[sel.Sel.Name]:
+					t.Errorf("%s: %s calls %s; orchestration records no relationship, "+
+						"attribute or finding", name, fn.Name.Name, render(sel))
+				case restricted[sel.Sel.Name] && !authorized:
+					t.Errorf("%s: %s calls %s; only %s in %s may construct evidence "+
+						"(ADR 0042 section 3)",
+						name, fn.Name.Name, render(sel), authorizedFunc, authorizedFile)
+				case restricted[sel.Sel.Name]:
+					counts[sel.Sel.Name]++
+				}
+				return true
+			})
+		}
+	}
+
+	// The allowlist is one *site*, not one function that may grow. Two anchors
+	// in one run is mutation B, and it starts by being constructible.
+	for _, call := range []string{"NewEvidence", "AddEvidence"} {
+		if counts[call] != 1 {
+			t.Errorf("%s is called %d times in %s; the anchor is minted exactly once",
+				call, counts[call], authorizedFile)
+		}
+	}
+}
+
+// TestTheRunNamesNoProvenanceConcept pins that the anchor did not become Origin.
+//
+// ADR 0042 section 10 rests on a distinction that is easy to state and easy to
+// erode: the anchor records which *execution* the operator caused, and `Origin`
+// would record how an arbitrary *subject* entered the run. The first is one node
+// this package writes; the second is a per-node provenance field that
+// REPORT_SCHEMA.md defers and that the advertised-back counterexample refutes.
+//
+// A field, variable or parameter named for provenance here would be the first
+// step of that erosion, and it would arrive looking helpful.
+//
+// The check is over the AST, so the doc comments above — which discuss
+// provenance at length — do not trip it.
+func TestTheRunNamesNoProvenanceConcept(t *testing.T) {
+	forbidden := map[string]string{
+		"Origin":     "provenance is not recorded per node; the anchor names an execution",
+		"origin":     "provenance is not recorded per node; the anchor names an execution",
+		"Provenance": "the graph records derivation, never provenance",
+		"provenance": "the graph records derivation, never provenance",
+		"SweepScope": "a scope labels an execution and must never be read for meaning",
 	}
 
 	for _, name := range productionFiles(t) {
 		ast.Inspect(parse(t, name), func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok || !banned[sel.Sel.Name] {
+			ident, ok := n.(*ast.Ident)
+			if !ok {
 				return true
 			}
-			t.Errorf("%s calls %s; stages record their own evidence and orchestration adds none",
-				name, render(sel))
+			if why, banned := forbidden[ident.Name]; banned {
+				t.Errorf("%s names %s: %s", name, ident.Name, why)
+			}
 			return true
 		})
 	}

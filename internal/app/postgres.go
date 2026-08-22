@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
@@ -164,7 +162,12 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 	startedAt := time.Now()
 	builder := domain.NewGraphBuilder()
 
-	if err := measurePostgres(ctx, builder, params); err != nil {
+	// One value, two projections. The anchor's subject and the report's target
+	// are both rendered from this and never from each other, which is what keeps
+	// them from drifting. See logicalTarget.
+	target := logicalTarget{host: params.Host, port: params.Port}
+
+	if err := measurePostgres(ctx, builder, target, params); err != nil {
 		return Result{}, err
 	}
 
@@ -194,7 +197,7 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 		diagnosispostgres.Session,
 	).Diagnose(graph)
 
-	report, err := buildReport(graph, findings, params, startedAt)
+	report, err := buildReport(graph, findings, target, params, startedAt)
 	if err != nil {
 		return Result{}, err
 	}
@@ -206,18 +209,35 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 // It reports only whether the run could be performed. Whether it *finished* is
 // read from the context once, by the caller — see DiagnosePostgres.
 func measurePostgres(
-	ctx context.Context, builder *domain.GraphBuilder, params PostgresParams,
+	ctx context.Context, builder *domain.GraphBuilder, target logicalTarget, params PostgresParams,
 ) error {
+	// The run records what it was asked about before it measures anything. This
+	// is the only evidence this package creates, and it is created here — after
+	// validation, before measurement — so that a cancelled run still carries the
+	// target it was asked about alongside whatever it managed to measure.
+	requested, err := recordRequestedTarget(builder, target, time.Now())
+	if err != nil {
+		return err
+	}
+
 	// DNS and TCP for every resolved address. TLS is deliberately **not**
 	// requested from the chain: PostgreSQL negotiates encryption in band, so the
 	// handshake belongs after SSLRequest and internal/adapter/postgres performs
 	// it on the same socket.
+	//
+	// **Parent declares the sweep's cause**, and the chain records the edge. A
+	// sweep the operator asked for hangs off the requested-target anchor; a sweep
+	// a service caused hangs off the service evidence that caused it. That
+	// declaration is what lets a future generic rule tell the two apart without
+	// provenance, an identifier parse or a service switch (ADR 0042 sections 7
+	// and 9).
 	sweep, err := transport.Run(ctx, builder, transport.Params{
 		Host:        params.Host,
 		Port:        params.Port,
 		Resolver:    params.Resolver,
 		Dialer:      params.Dialer,
 		StepTimeout: params.StepTimeout,
+		Parent:      requested,
 	})
 	if err != nil {
 		return fmt.Errorf("transport discovery: %w", err)
@@ -388,7 +408,8 @@ const authMethodNone = "ok"
 // only thing that may produce it — from a finished local report, at the output
 // boundary, after diagnosis has run on truthful evidence (ADR 0018).
 func buildReport(
-	graph domain.Graph, findings []domain.Finding, params PostgresParams, startedAt time.Time,
+	graph domain.Graph, findings []domain.Finding, target logicalTarget,
+	params PostgresParams, startedAt time.Time,
 ) (domain.Report, error) {
 	service, err := domain.NewServiceID("postgres")
 	if err != nil {
@@ -398,7 +419,7 @@ func buildReport(
 	if err != nil {
 		return domain.Report{}, fmt.Errorf("building run metadata: %w", err)
 	}
-	target, err := domain.NewTarget(endpointLabel(params.Host, params.Port))
+	reportTarget, err := target.target()
 	if err != nil {
 		return domain.Report{}, fmt.Errorf("building target: %w", err)
 	}
@@ -410,7 +431,7 @@ func buildReport(
 
 	report, err := domain.NewReport(domain.ReportInput{
 		Run:      run,
-		Target:   target,
+		Target:   reportTarget,
 		Vantage:  params.Vantage,
 		Graph:    graph,
 		Findings: findings,
@@ -420,9 +441,4 @@ func buildReport(
 		return domain.Report{}, fmt.Errorf("building report: %w", err)
 	}
 	return report, nil
-}
-
-// endpointLabel renders the logical endpoint the operator asked about.
-func endpointLabel(host string, port uint16) string {
-	return net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10))
 }
