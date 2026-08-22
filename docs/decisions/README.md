@@ -395,6 +395,65 @@ A deferral is a decision too, and each names the condition that should reopen it
   supplying no credential stays valid input, because `POSTGRES_CREDENTIAL_NOT_CONFIGURED` is a
   truthful diagnosis rather than a usage error — which is what makes a prompt unnecessary.
 
+- **[0050](0050-kafka-discovered-broker-credential-authority.md) — A credential is authorized for
+  the endpoint the operator named, and a cluster cannot widen that.** The security prerequisite
+  for `DiagnoseKafka`, and the first record whose subject is an *authority* rather than a claim.
+  Kafka's Metadata response names brokers, and the tempting reading — the cluster told us these
+  are its brokers, so the credential belongs there — converts a compromised broker into credential
+  exfiltration through one protocol field. Verified TLS does not help: it proves *you are talking
+  to attacker.example*, not *attacker.example belongs to the cluster you asked about*, and Kafka
+  has no cluster-identity assertion to verify. So the invariant is **discovery may create evidence;
+  discovery must not create secret authority**, advertised measurement stays transport-only as
+  ADR 0033 already had it, and the rule binds the composition root because `security.NewCredential`
+  is unrestricted by design and the root is the only layer that could rebind. `security.Credential`
+  is reused unchanged; no delegation type, no cluster identity, no `Origin`.
+
+- **[0051](0051-kafka-run-completeness.md) — A Kafka run is complete when every advertisement it
+  promised to measure reached a verdict.** ADR 0047's `established` short-circuit has no Kafka
+  analogue, because BASIC promises two things — a bootstrap journey *and* a topology assessment —
+  so `kafka.metadata` PASS ends the journey but not the run. The decision is an asymmetry that the
+  first draft got wrong and a security review corrected: **PASS is existential, FAIL is universal.**
+  One working address resolves an advertisement outright; a refused address plus an unmeasured
+  sibling does *not* prove the endpoint unreachable, because a client selecting the unmeasured path
+  might have connected. That is ADR 0043's TCP rule applied one level down. `Result` keeps one
+  boolean, and finding confidence stays orthogonal to it: a CONFIRMED endpoint claim can coexist
+  with an incomplete run.
+
+- **[0052](0052-kafka-product-outcome-semantics.md) — Kafka has no session, so the report says what
+  it obtained instead.** Kafka has no `ReadyForQuery` and no session establishment, so the
+  renderer's one PostgreSQL-specific line becomes a per-service `outcome`, and Kafka's terminal
+  fact is `kafka.metadata` PASS — the first exchange requiring authentication *and* authorization
+  to have worked. The wording is deliberately narrower than it could be: **`Kafka metadata
+  obtained`**, not `cluster metadata obtained`, because the request is v1 with `Topics = []` and
+  obtains no topic, partition, replica or ISR state at all. Topology is a separate line counting
+  **endpoints reached**, past tense and observational, with `not measured` never collapsed into
+  `not reached` — and never `usable`, because ADR 0050 means a discovered broker is never
+  authenticated. Four axes stay independent: status, outcome, topology, execution. No schema change.
+
+- **[0053](0053-requested-target-generic-tls-diagnosis.md) — A certificate is presented by an
+  endpoint, so a generic TLS finding names one.** Satisfies 0043 §14's reopen condition exactly:
+  Kafka bootstrap composition is the first production producer of a `tls.handshake` whose parent is
+  a requested `tcp.connect`, and `collectSweep` never inspects a connect's children, so the node
+  would be *invisible* rather than rejected. The scope decision resolves a real tension rather than
+  copying a precedent: DNS and TCP claims are about a logical address set and withhold on partial
+  success, but a certificate is presented by one endpoint, so a sibling succeeding cannot falsify
+  what this one presented. Endpoint-scoped, no withholding — which keeps it coherent with 0044
+  instead of making scope depend on whether a service negotiates in band. Five codes, two of them
+  renamed during review because `TLS_PEER_NOT_TLS` mirrored its `FailureClass` exactly and generic
+  codes carry no prefix, so evidence and finding namespaces would have collided on one string.
+
+- **[0054](0054-production-evidence-ownership-invariant.md) — Evidence that can fail does not ship
+  before something can explain it.** The generalization of what PostgreSQL closure kept finding:
+  a stage produced evidence nobody could explain, and the report presented the silence as health.
+  0043, 0044, 0046 and 0047 each closed one instance, always late and always by audit rather than
+  by the phase that introduced the producer — because a missing finding fails no test and looks
+  exactly like a healthy target. So: a production-reachable FAIL-producing stage does not land
+  unless its outcomes have an owner or an Accepted ADR says evidence-only is intentional and why.
+  UNKNOWN and SKIPPED need a visibility policy rather than necessarily a finding. The escape hatch
+  is real — 0033's advertised sweep used it correctly for two phases. Accepted as policy with
+  **enforcement deferred**: the per-service closure test it specifies does not exist yet, and a
+  static lint cannot do the job because reachability is not decidable from imports.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention
