@@ -298,13 +298,28 @@ linters:
 
       # The one place security.Reveal may be called: a service adapter's wire
       # package, which is the last layer before the socket and holds no state
-      # between exchanges. As of Phase 3.2c there is exactly one call, in
-      # internal/adapter/kafka/wire/saslauthenticate.go, and this exclusion is
-      # what makes it legal there and illegal everywhere else. Verified in both
-      # directions against deliberate violations before that call was written.
+      # between exchanges. As of Phase 4.4b there are exactly two calls, one per
+      # service — internal/adapter/kafka/wire/saslauthenticate.go and
+      # internal/adapter/postgres/wire/scram.go — and this exclusion is what
+      # makes them legal there and illegal everywhere else. Verified in both
+      # directions against deliberate violations in every phase that touched it.
+      #
+      # **Narrowed in Phase 4.4b**, and the reason is worth recording. This
+      # exclusion previously named no `text`, so it exempted wire packages from
+      # *every* forbidigo rule — including the two channel-authority rules below.
+      # A wire package could therefore name `security.ChannelTLSVerified`, which
+      # ADR 0029's amendment reserves to `internal/probe/tls` alone. Nothing
+      # exploited it: a wire package holds no connection and has no carrier to
+      # put a channel on. But a blanket grant is not the same as a grant for the
+      # one thing that was argued, and the gap was found by re-verifying the
+      # boundary in every direction rather than only in the two that were
+      # expected. Matching on the message text grants exactly the reveal
+      # authority and nothing else, which is the technique the channel rules
+      # already use.
       - path: internal/adapter/[^/]+/wire/
         linters:
           - forbidigo
+        text: 'security.Reveal turns a masked secret'
 
       # internal/security is where Reveal is defined and where its own leak
       # matrix proves what it returns. Those calls are in-package and are not
@@ -348,7 +363,12 @@ linters:
       # those come only from the probe that handshakes — and the security.Reveal
       # ban is untouched, which matters because this phase sends no credential.
       # Verified in every direction against deliberate violations.
-      - path: internal/adapter/postgres/
+      #
+      # **Narrowed in Phase 4.4b**: the path was a prefix, so it also covered
+      # internal/adapter/postgres/wire/, which never decides anything about
+      # encryption and has no connection to leave in the clear. The pattern now
+      # matches only files directly in the adapter directory.
+      - path: internal/adapter/postgres/[^/]+\.go$
         linters:
           - forbidigo
         text: 'plaintext channel constant'
