@@ -55,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule, 3.6.5 diagnosis output review, 3.7 unusable advertisement diagnosis complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule, 3.6.5 diagnosis output review, 3.7 unusable advertisement diagnosis, 3.7.5 redaction residual-scan correctness complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -1252,7 +1252,7 @@ class, no structured reason field, no engine change, no schema change, no domain
 
 **Open, recorded rather than solved:**
 
-- [ ] **A pre-existing redaction defect, surfaced here and not caused here.** A broker
+- [x] **A pre-existing redaction defect, surfaced here and not caused here — fixed in Phase 3.7.5.** A broker
       advertising `host="" port=0` produces the subject `:0`. Redaction classifies it as a
       hostname, then `verifyNoResidual` scans the encoded report for the literal `:0` — which
       every report contains, in `"info":0` among the severity counts and in any timestamp with
@@ -1270,6 +1270,63 @@ class, no structured reason field, no engine change, no schema change, no domain
 - [ ] **An `ENDPOINT` subject that is not a usable endpoint.** Reusing the producer's kind is
       right — the alternative invents a target — but the oddity is real. **Reopen when** a
       subject kind for a reported-but-unusable target is justified on its own evidence
+
+### Phase 3.7.5 — Redaction residual-scan correctness (complete)
+
+**A security correctness fix**, triggered by a producible Kafka state and fixed generically.
+No ADR: the contract in ADR 0018 is unchanged — fail closed, structural, no inference — and
+this phase corrects an implementation that did not match it. `docs/SECURITY.md` gained the
+residual-scan section that states it explicitly.
+
+**The reported symptom.** A broker advertising `host="" port=0` produces the advertisement
+subject `:0`. Redaction transformed the report correctly and then refused it, because the
+residual scan searched the raw encoding for `:0` and found it in `"info":0` among the severity
+counts. No shareable report could be produced for such a run.
+
+**Two defects, both generic, neither Kafka-specific:**
+
+- [x] **Identity discovery treated a whole endpoint reference as a hostname when its port was
+      not a usable port number.** `splitHostPort` reported "no port" for `:0`, `broker:0` and
+      `[2001:db8::1]:0` alike, and every caller then read the entire display string as the
+      identity. Split into a syntactic `endpointParts` and a `looksLikeEndpoint` predicate that
+      keeps the *undeclared plain string* heuristic exactly as narrow as it was
+- [x] **The residual scan searched serialized bytes rather than string positions.** It now
+      decodes and checks string leaves and object keys, which is complete for every value the
+      package protects — all of them are string-typed in the schema — and removes collisions
+      with punctuation, numbers, timestamps and durations entirely
+
+**Three further correctness bugs fell out of the first fix, all previously silent:**
+
+- [x] **A pseudonym was invented where no host existed.** `:0` redacted to `host-001`, telling a
+      reader the cluster named a host it never named. It now passes through as `:0`
+- [x] **An IPv6 literal with an out-of-range port was pseudonymized and counted as a hostname.**
+      `[2001:db8::1]:0` now becomes `ip-001:0`, and the IP and hostname counts are right
+- [x] **One host could hold two pseudonyms.** `broker` on an attribute and `broker:0` in a
+      subject were different map keys, so the same host redacted two ways and the hostname
+      count was inflated. The port is now preserved and the host resolves to one pseudonym
+
+**Fail-closed proven, not assumed.** Ten surfaces are planted with a raw value in turn —
+hostname, IPv4 and IPv6 in a subject, declared host attribute, declared host list, hostname and
+IP in prose, original evidence identifier, target, vantage — and each must be rejected. Seven
+production mutations were run and every one was caught, including relabelling a `LOCAL_FULL`
+report as shareable without transforming it.
+
+**Open, recorded rather than solved:**
+
+- [ ] **An identity whose text occurs inside other report text still trips the scan.** A host
+      named `kafka` collides with the service identifier, `host` with an attribute key and with
+      the pseudonym `host-001`, `0` with a timestamp. Such a run fails closed and cannot produce
+      a shareable report. It is far narrower than what it replaced — that broke every endpoint
+      with an out-of-range port — and no shape-based rule can settle it, because whether an
+      occurrence of `host` is the hostname or part of `probe.host` is a question about
+      provenance rather than text. **The fix is verification that checks identity-bearing
+      surfaces structurally instead of searching the serialized document**, keeping the
+      byte-level net only for surfaces the transformer does not know. Pinned by
+      `TestKnownLimitationIdentityTextOccurringInOtherReportText`. **Reopen when** a shareable
+      report is blocked in practice, or before the first release that publishes them
+- [ ] **Disabling the residual scan breaks no test, by construction.** It is dead code on a
+      correct transformation, so its behaviour is covered by calling it directly rather than
+      through `Redact`. A wiring regression would not be caught; the trade is deliberate
 
 ### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
 

@@ -46,7 +46,7 @@ does not overturn it, and both remain authoritative.
 | 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4 |
 | 0033 | An advertised endpoint is measured once per advertisement, and only at L1-L3 | Accepted | The consumer 0031 was built to feed and the first caller of 0032. Answers the execution-dedup question by deliberately not deduplicating |
 | 0034 | A Kafka rule owns advertised-endpoint reachability, anchored at the advertisement | Accepted (policy), implemented in Phase 3.6 | Revisits the two questions 0017 deferred and answers them for service-anchored rules. Authorizes one finding code and fixes every field of it; `internal/diagnosis/kafka` implements it and invents nothing |
-| 0035 | An unusable broker advertisement is its own claim, and it is not vantage-dependent | Accepted | Takes the case 0034 §14 placed out of scope. First finding with `vantageDependent: false`; records a pre-existing redaction defect it surfaced and declines to fix it here |
+| 0035 | An unusable broker advertisement is its own claim, and it is not vantage-dependent | Accepted | Takes the case 0034 §14 placed out of scope. First finding with `vantageDependent: false`; the redaction defect it surfaced was fixed generically in Phase 3.7.5 |
 
 ## Decisions that govern work not yet written
 

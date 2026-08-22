@@ -235,6 +235,12 @@ security-critical component with its own failure modes, and it deserves a decisi
 patch smuggled into a diagnosis phase. It is pinned by a test named as a known defect, which
 fails when the behaviour changes.
 
+**Fixed in Phase 3.7.5**, generically and without a Kafka special case. Identity discovery no
+longer treats an endpoint reference with an out-of-range port as one opaque hostname, and the
+residual scan checks string positions rather than serialized bytes. `:0` now redacts to `:0`,
+inventing no host. See `docs/SECURITY.md`, "The residual scan, and what it is allowed to call
+an identity".
+
 ## Rejected alternatives
 
 | Rejected | Why | Reconsider when |

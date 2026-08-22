@@ -472,6 +472,43 @@ below are there to catch, rather than a property of the model.
 Treat a shareable report as safe for identity svcdoctor declared, which is all of it today.
 See ADR 0018, ADR 0022 and `docs/BACKLOG.md`.
 
+### The residual scan, and what it is allowed to call an identity
+
+After the transformation, redaction re-reads the finished report and fails if any value it
+knew to be identifying still appears. This is a safety net rather than the mechanism: the
+values were already replaced structurally, and the check exists so that **a field added later
+without a matching transformation fails loudly instead of shipping an identifier**.
+
+Two properties, both load-bearing:
+
+- **It searches string positions, not the serialized bytes.** Every value redaction protects
+  is string-typed in the canonical schema, so an identity that genuinely survived is
+  necessarily inside a JSON string. Searching the raw encoding instead meant a value whose
+  text occurred in the document's own punctuation or numbers — `"info":0` in the severity
+  counts, a timestamp, a negative integer attribute — was reported as surviving.
+- **Only the identity-bearing part of a reference is an identity.** An endpoint reference is
+  host, punctuation and port; the host is identity and the rest is not. Reading a port that is
+  out of range as "this reference has no port" made the whole display string an identity, and
+  that is what produced the failure above: a cluster advertising `host="" port=0` yields the
+  subject `:0`, which was then hunted for in every report and found in `"info":0`.
+
+**Fail-closed is unchanged.** A real hostname, IP address, declared host attribute, evidence
+identifier, target, vantage or prose identity that survives still fails the whole redaction,
+and `internal/security/redaction/residual_test.go` plants each of those in turn to prove it.
+There is no partially redacted result and no way to relabel a `LOCAL_FULL` report as shareable
+without transforming it.
+
+**Remaining limit, recorded rather than papered over.** The scan asks whether an identity's
+text appears in any string the report contains, so an identity that is a substring of ordinary
+report text — a host named `kafka`, matching the service identifier, or `host`, matching an
+attribute key and the pseudonym `host-001` — is still reported as surviving when it has not.
+Such a run cannot produce a shareable report. It fails **closed**, and it is far narrower than
+what it replaced, which broke every endpoint whose port was out of range. No shape-based rule
+can settle it: whether an occurrence of `host` is the hostname or part of `probe.host` is a
+question about provenance, not about text. Settling it needs verification that checks
+identity-bearing surfaces structurally instead of searching the serialized document. Pinned by
+`TestKnownLimitationIdentityTextOccurringInOtherReportText`; see `docs/BACKLOG.md`.
+
 ### Producer obligation: declare identity-bearing values
 
 A producer that records identity **declares** it, using the value's type:

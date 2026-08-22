@@ -173,9 +173,14 @@ func (t *table) text(s string) string {
 // A port is diagnostic information rather than an identifier: knowing a check
 // targeted 9092 says which protocol was expected, not who was running it.
 func (t *table) endpointRef(ref string) string {
-	host, port, hasPort := splitHostPort(ref)
+	host, port, hasPort := endpointParts(ref)
 	if !hasPort {
 		return t.value(ref)
+	}
+	if host == "" {
+		// Nothing to pseudonymize, and nothing may be invented: a reader of the
+		// shareable report must not be shown a host the cluster never named.
+		return joinHostPort("", port)
 	}
 	return joinHostPort(t.value(host), port)
 }
@@ -188,13 +193,32 @@ func (t *table) value(v string) string {
 	return t.host(v)
 }
 
-// splitHostPort separates a trailing ":port" from a reference.
+// endpointParts separates a trailing ":port" from a reference that is already
+// known to name an endpoint.
 //
 // It deliberately does not use net.SplitHostPort. internal/security/endpoint.go
 // made the same choice for the same reason: importing net would link the network
 // stack into a package that only needs the bracketing rule. A host containing a
 // colon is an IPv6 literal, which is bracketed when a port follows.
-func splitHostPort(ref string) (host, port string, ok bool) {
+//
+// # hasPort is syntactic, and that is the whole point
+//
+// It reports that a port *component* is present, never that the component is a
+// usable port number. Conflating the two was a defect: a reference whose port is
+// out of range — ":0", "broker:0", "[2001:db8::1]:0", all of which a Kafka
+// cluster can advertise — was read as having no port at all, so the entire
+// display string became the "host". Three things went wrong at once:
+//
+//   - the whole string was registered as a hostname identity, which is how ":0"
+//     came to be searched for in every report and found in `"info":0`;
+//   - an IPv6 literal was pseudonymized and counted as a hostname;
+//   - a host that also appeared elsewhere got two different pseudonyms, because
+//     "broker" and "broker:0" are different map keys.
+//
+// Whether a port is usable is a question about a *target*, and this package does
+// not connect to anything. It only needs to know which part of the text is the
+// identity. See looksLikeEndpoint for the one place validity still matters.
+func endpointParts(ref string) (host, port string, hasPort bool) {
 	if strings.HasPrefix(ref, "[") {
 		end := strings.LastIndex(ref, "]")
 		if end < 0 {
@@ -204,7 +228,7 @@ func splitHostPort(ref string) (host, port string, ok bool) {
 		if !strings.HasPrefix(rest, ":") {
 			return ref, "", false
 		}
-		return ref[1:end], rest[1:], validPort(rest[1:])
+		return ref[1:end], rest[1:], true
 	}
 
 	idx := strings.LastIndex(ref, ":")
@@ -212,7 +236,22 @@ func splitHostPort(ref string) (host, port string, ok bool) {
 		// No port, or a bare IPv6 literal with several colons.
 		return ref, "", false
 	}
-	return ref[:idx], ref[idx+1:], validPort(ref[idx+1:])
+	return ref[:idx], ref[idx+1:], true
+}
+
+// looksLikeEndpoint reports whether a string nobody declared to be identity can
+// still be read as an endpoint reference.
+//
+// This is the opportunistic route in collectAttr, and it is the one place a
+// usable port is still required — not as a property of the target, but as the
+// evidence that the text is an endpoint at all. Without it "cipher:aes" and
+// "TLSv1.3" would start being pseudonymized as hosts.
+//
+// A *declared* host attribute never comes through here (ADR 0022): it is
+// identity because its producer said so, whatever it looks like.
+func looksLikeEndpoint(s string) bool {
+	host, port, hasPort := endpointParts(s)
+	return hasPort && host != "" && validPort(port)
 }
 
 func validPort(p string) bool {
@@ -232,8 +271,16 @@ func joinHostPort(host, port string) string {
 }
 
 // classify records a reference's identifying part for later assignment.
+//
+// Only the host component is identity. A port is diagnostic information — the
+// same reasoning endpointRef already applied when rewriting one — and the
+// punctuation between them is neither. A reference with a port component but no
+// host, which is what a cluster advertising no host produces, therefore
+// contributes nothing: there is no identity in ":0" to remove, and registering
+// the whole string as a hostname is what made redaction hunt for that text in
+// every report.
 func classify(ref string, hosts, ips *[]string) {
-	host, _, hasPort := splitHostPort(ref)
+	host, _, hasPort := endpointParts(ref)
 	if !hasPort {
 		host = ref
 	}

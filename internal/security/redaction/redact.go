@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
@@ -161,7 +162,7 @@ func classifyAttrString(s string, hosts, ips *[]string) {
 		*ips = append(*ips, s)
 		return
 	}
-	if host, _, hasPort := splitHostPort(s); hasPort && host != "" {
+	if looksLikeEndpoint(s) {
 		classify(s, hosts, ips)
 	}
 }
@@ -352,7 +353,10 @@ func (t *table) attrValue(s string) string {
 	if _, ok := t.hosts[s]; ok {
 		return t.host(s)
 	}
-	if host, port, hasPort := splitHostPort(s); hasPort {
+	// The split is syntactic, and the lookup is what decides: only a host
+	// component this table already knows is rewritten, so an attribute whose
+	// text merely contains a colon is left exactly as it arrived.
+	if host, port, hasPort := endpointParts(s); hasPort {
 		if _, known := t.ips[host]; known {
 			return joinHostPort(t.ip(host), port)
 		}
@@ -418,49 +422,132 @@ func redactFindings(t *table, findings []domain.Finding) ([]domain.Finding, erro
 
 // verifyNoResidual is the safety net.
 //
-// It re-reads the finished report and fails if any value the transformation
-// knew to be identifying still appears. It checks exact known values rather
-// than scanning for patterns, so it cannot produce a false alarm and cannot be
-// satisfied by output that merely looks clean.
+// It re-reads the finished report and fails if any value the transformation knew
+// to be identifying still appears in it. It checks exact known values rather
+// than scanning for patterns, so it cannot be satisfied by output that merely
+// looks clean.
 //
 // This is a last line of defence, not the redaction mechanism: the values were
 // already replaced structurally before serialization. It exists so that a future
 // field added to the report without a matching transformation fails loudly
 // instead of shipping an identifier.
+//
+// # It inspects string positions, not the serialized bytes
+//
+// The scan used to search the raw JSON text, and that was wrong in a way that
+// took a real cluster to expose. A report's encoding is full of characters that
+// belong to the document rather than to any value — `"info":0` in the severity
+// counts, `T09:14:03Z` in a timestamp, `-1` in an integer attribute — and an
+// identity whose text happens to occur among them was reported as having
+// survived. Redaction then failed closed on a transformation that had succeeded,
+// so a run could not produce a shareable report at all.
+//
+// Decoding first and checking only string leaves and object keys removes that
+// entire class, and gives up nothing: every value this package protects is
+// string-typed in the canonical schema, so an identity that genuinely survived
+// is necessarily inside a JSON string. A field added later without a
+// transformation still carries its raw value in exactly that position, which is
+// the case the net exists for.
+//
+// # What it can still not distinguish
+//
+// Containment inside another *string* remains ambiguous for an identity short
+// enough to occur in ordinary text: a host literally named "0" is a substring of
+// the pseudonym "host-001" and of the port "9093". Such an identity is reported
+// as surviving when it has not. That fails closed rather than open, it is
+// recorded in docs/SECURITY.md, and no shape-based rule can settle it — which is
+// why one is not attempted here.
 func verifyNoResidual(t *table, out domain.Report) error {
-	encoded, err := marshalForScan(out)
+	text, err := stringPositions(out)
 	if err != nil {
 		return err
 	}
 
-	for original := range t.hosts {
-		if strings.Contains(encoded, original) {
+	for _, original := range sortedKeys(t.hosts) {
+		if containsAny(text, original) {
 			return fmt.Errorf("%w: a hostname survived redaction", ErrRedaction)
 		}
 	}
-	for original := range t.ips {
-		if strings.Contains(encoded, original) {
+	for _, original := range sortedKeys(t.ips) {
+		if containsAny(text, original) {
 			return fmt.Errorf("%w: an IP address survived redaction", ErrRedaction)
 		}
 	}
-	for original := range t.ids {
-		if strings.Contains(encoded, string(original)) {
+	for _, original := range sortedIDs(t.ids) {
+		if containsAny(text, string(original)) {
 			return fmt.Errorf("%w: an evidence identifier survived redaction", ErrRedaction)
 		}
 	}
 	return nil
 }
 
-// marshalForScan renders the report so the safety net can inspect every field
-// at once, including any added later that this package does not know about.
+// sortedKeys returns a map's keys in order, so that a report with several
+// residual values always reports the same one.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func sortedIDs(m map[domain.EvidenceID]domain.EvidenceID) []domain.EvidenceID {
+	out := make([]domain.EvidenceID, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// containsAny reports whether any string position holds the value.
+func containsAny(positions []string, value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, p := range positions {
+		if strings.Contains(p, value) {
+			return true
+		}
+	}
+	return false
+}
+
+// stringPositions returns every string the encoded report contains: object keys
+// and string-valued leaves, and nothing else.
 //
-// The offending value is never named in an error. Reporting "10.20.30.40 leaked"
-// would put the identifier into a log line, which is where it was being kept out
-// of in the first place.
-func marshalForScan(out domain.Report) (string, error) {
+// Numbers, booleans and nulls are skipped because no value this package protects
+// can be encoded as one. Keys are included because they are cheap to check and a
+// future map keyed by something identifying would otherwise slip past.
+func stringPositions(out domain.Report) ([]string, error) {
 	encoded, err := json.Marshal(out)
 	if err != nil {
-		return "", fmt.Errorf("%w: encoding the redacted report: %w", ErrRedaction, err)
+		return nil, fmt.Errorf("%w: encoding the redacted report: %w", ErrRedaction, err)
 	}
-	return string(encoded), nil
+
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return nil, fmt.Errorf("%w: re-reading the redacted report: %w", ErrRedaction, err)
+	}
+
+	var positions []string
+	var walk func(any)
+	walk = func(node any) {
+		switch v := node.(type) {
+		case string:
+			positions = append(positions, v)
+		case []any:
+			for _, item := range v {
+				walk(item)
+			}
+		case map[string]any:
+			for key, item := range v {
+				positions = append(positions, key)
+				walk(item)
+			}
+		}
+	}
+	walk(decoded)
+	return positions, nil
 }

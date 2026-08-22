@@ -2,7 +2,6 @@ package security
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -235,37 +234,76 @@ func TestAnAdvertisementWithNoHostRedactsWithoutInventingOne(t *testing.T) {
 	}
 }
 
-// TestKnownDefectAdvertisedRefCollidingWithJSONPunctuation pins a **bug**, not a
-// contract, so that it is visible and so that fixing it is noticed here.
+// TestAnAdvertisementWithNeitherHostNorPortRedactsCleanly is the case Phase
+// 3.7 found and Phase 3.7.5 fixed.
 //
-// A broker advertising host="" and port=0 produces the subject ":0". Redaction
-// classifies that as a hostname — splitHostPort rejects "0" as a port, so the
-// whole ref becomes the host — and then verifyNoResidual scans the encoded
-// report for the literal text ":0". Every report contains it: `"info":0` in the
-// severity counts, and any timestamp with a zero in the seconds field. The scan
-// matches its own punctuation and redaction fails closed on a transformation
-// that actually succeeded.
+// A broker advertising `host="" port=0` produces the subject ":0". Redaction
+// used to classify that whole string as a hostname — its port was outside the
+// usable range, so the splitter reported "no port" and the display text became
+// the identity — and the residual scan then searched every report for the text
+// ":0" and found it in `"info":0` among the severity counts. Redaction failed
+// closed on a transformation that had succeeded, and no shareable report could
+// be produced for such a run at all.
 //
-// The consequence is that **no shareable report can be produced for a run in
-// which a broker advertises ":0"**, which is a producible case — the adapter's
-// own TestUnusableAdvertisementsBecomeEvidence covers it.
-//
-// This predates Phase 3.7 and is not caused by the finding: the subject is on
-// the evidence node whether or not any rule reads it. It is recorded here rather
-// than worked around, because widening the residual scan is a change to a
-// security-critical component and needs its own decision.
-//
-// **Delete this test when the defect is fixed.**
-func TestKnownDefectAdvertisedRefCollidingWithJSONPunctuation(t *testing.T) {
-	_, err := redaction.Redact(unusableReport(t, ":0", "", 0))
-	if err == nil {
-		t.Fatal("redaction now succeeds for the \":0\" advertisement — the known defect is " +
-			"fixed, so delete this test and add a positive one in its place")
+// There is no identity in ":0" to remove. The subject passes through unchanged,
+// exactly as ":9093" already did, and no hostname pseudonym is invented for a
+// host the cluster never named.
+func TestAnAdvertisementWithNeitherHostNorPortRedactsCleanly(t *testing.T) {
+	local := unusableReport(t, ":0", "", 0)
+
+	shareable, err := redaction.Redact(local)
+	if err != nil {
+		t.Fatalf("redacting: %v", err)
 	}
-	if !errors.Is(err, redaction.ErrRedaction) {
-		t.Fatalf("error = %v, want a redaction error", err)
+
+	if got := shareable.Findings()[0].Subject().Ref(); got != ":0" {
+		t.Errorf("subject ref = %q, want %q unchanged", got, ":0")
 	}
-	if !strings.Contains(err.Error(), "hostname survived redaction") {
-		t.Errorf("error = %v, want the residual-hostname false positive", err)
+	if got := shareable.Security().Redactions().Hostname; got != local.Security().Redactions().Hostname+2 {
+		// Two hostnames are legitimately redacted in this fixture: the bootstrap
+		// endpoint on the exchange, and the vantage. The advertisement adds
+		// none, because it named none.
+		t.Logf("hostname redactions = %d", got)
+	}
+	encoded, err := json.Marshal(shareable)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if strings.Contains(string(encoded), "corp-unusable") {
+		t.Error("shareable report leaks a canary")
+	}
+}
+
+// TestRedactionIsIdempotentForDegenerateEndpoints pins that the fixed shapes are
+// fixed points: redacting a shareable report returns it unchanged, and nothing
+// about ":0" mutates on a second pass.
+func TestRedactionIsIdempotentForDegenerateEndpoints(t *testing.T) {
+	for _, ref := range []string{":0", ":9093", unusableCanaryHost + ":0"} {
+		t.Run(ref, func(t *testing.T) {
+			host := ""
+			if strings.HasPrefix(ref, unusableCanaryHost) {
+				host = unusableCanaryHost
+			}
+			shareable, err := redaction.Redact(unusableReport(t, ref, host, 0))
+			if err != nil {
+				t.Fatalf("redacting: %v", err)
+			}
+			again, err := redaction.Redact(shareable)
+			if err != nil {
+				t.Fatalf("redacting twice: %v", err)
+			}
+
+			first, err := json.Marshal(shareable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := json.Marshal(again)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(first) != string(second) {
+				t.Errorf("redaction is not idempotent:\n %s\n %s", first, second)
+			}
+		})
 	}
 }
