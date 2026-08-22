@@ -902,6 +902,9 @@ v0.1 uses typed Go rules. Do not add an external DSL. Rules must be deterministi
 - Unit and package-level fixtures live in a package-adjacent `testdata/` directory,
   for example `internal/adapter/kafka/testdata/` and `internal/diagnosis/kafka/testdata/`.
 - Cross-package and environment-dependent tests live under `test/integration/` and `test/security/`.
+- `test/integration/kafka/` runs the Kafka vertical against a real three-broker cluster behind
+  the `integration` build tag, so `go test ./...` never needs Docker. It is the Phase 3
+  acceptance gate; results are recorded in `docs/validation/KAFKA_PHASE3_VALIDATION.md`.
 
 ## 18. Open implementation decisions
 

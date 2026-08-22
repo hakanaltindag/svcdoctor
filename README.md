@@ -86,9 +86,20 @@ answered, and then advertised an address this client cannot reach" without ever 
 an endpoint entered the run — which is why the same host being both bootstrap target and
 advertised broker stays two honest measurements and one finding.
 
+**The Kafka slice is validated against a real cluster.** `make integration-kafka` runs the
+whole vertical — DNS, TCP, TLS, ApiVersions, SASL/PLAIN, Metadata, advertised-endpoint
+reachability, diagnosis and redaction — against three real Apache Kafka 4.0 brokers in KRaft
+mode, and differentially against `kcat`. Broker identifiers, advertised endpoints and topology
+agree exactly; injected DNS, TCP and TLS failures produce exactly the findings the policy
+authorizes and no others; a partially reachable endpoint produces none. See
+[`docs/validation/KAFKA_PHASE3_VALIDATION.md`](docs/validation/KAFKA_PHASE3_VALIDATION.md).
+It needs Docker and is deliberately not part of `make check`.
+
 What is not implemented: SCRAM and every other SASL mechanism, protocol checks against
 discovered brokers, topic and partition analysis, PostgreSQL, generic transport rules,
-renderers and the CLI. Those directories contain no Go code.
+renderers and the CLI. Those directories contain no Go code. svcdoctor also cannot yet reach
+Metadata on a cluster with no SASL, which is this repository's restriction rather than Kafka's
+(ADR 0031).
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
 > It reconstructs the mental model, the locked invariants, the rejected alternatives and the

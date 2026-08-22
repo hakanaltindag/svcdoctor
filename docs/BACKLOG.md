@@ -55,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule, 3.6.5 diagnosis output review, 3.7 unusable advertisement diagnosis, 3.7.5 redaction residual-scan correctness complete |
+| 3 | Kafka Vertical Slice | **Validated** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule, 3.6.5 diagnosis output review, 3.7 unusable advertisement diagnosis, 3.7.5 redaction residual-scan correctness complete; **integration validated against a real 3-broker KRaft cluster** |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -698,7 +698,7 @@ Recorded so the move is traceable rather than looking like a loss:
 
 ---
 
-## Phase 3 — Kafka Vertical Slice: IN PROGRESS
+## Phase 3 — Kafka Vertical Slice: VALIDATED
 
 ### Phase 3.1 — Adapter boundary and ApiVersions (complete)
 
@@ -1412,9 +1412,43 @@ ADR 0017 exists to prevent.
 
 ### Validation
 
-- [ ] Kafka integration environment and fixtures
+- [x] **Kafka integration environment and fixtures** — `test/integration/kafka/`, a real
+      three-broker Apache Kafka 4.0 KRaft cluster behind `make integration-kafka`. Excluded
+      from `go test ./...` by the `integration` build tag; the ordinary gate needs no Docker
+- [x] **Phase 3 integration validation: PASS.** See
+      `docs/validation/KAFKA_PHASE3_VALIDATION.md`. Healthy baseline, advertised DNS/TCP/TLS
+      failures, partial-address success, multi-broker partial failure, SASL/PLAIN success and
+      rejection, connection ownership and redaction all validated against the real cluster and
+      differentially against kcat
 - [ ] Canonical JSON report acceptance tests for the Kafka slice. Terminal, Markdown and HTML
       renderers are Phase 5; JSON is already canonical and needs no renderer
+
+**What the real cluster taught us, beyond confirming the contracts:**
+
+- [x] **The Metadata `controllerId` field does not name the controller under KRaft.** Eight
+      consecutive reads of an idle three-broker cluster returned `1, 1, 2, 1, 1, 3, 2, 3`
+      while the quorum leader stayed node 1: KRaft controllers are not brokers, so a broker
+      answers with an arbitrary live one. **This vindicates ADR 0034 §15** — a rule reading it
+      would have produced different severities on identical runs. The attribute's doc comment
+      claimed it named the controller and was corrected; no behaviour changed
+- [x] **A real Kafka broker cannot emit an unusable advertisement.** `port=0` is replaced by
+      the bound port and an empty host is replaced by the broker's hostname, so
+      `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE` (ADR 0035) has no `advertised.listeners` route. Its
+      realistic sources are a proxy rewriting Metadata, a non-Kafka implementation, or a
+      corrupted response. The finding stays: svcdoctor does not get to assume the response came
+      from Apache Kafka. Recorded as a negative result
+- [x] **No real run produced an unrepresentable Metadata entry**, so that gap stays open at its
+      existing priority rather than rising
+- [x] **The Phase 3.7.5 residual-scan limitation did not occur naturally.** Every hostname the
+      environment produces redacts cleanly, so it remains a backlog item and not a release
+      blocker
+- [ ] **svcdoctor cannot reach Metadata on a cluster without SASL.** `kafka.Metadata` takes an
+      `*AuthenticatedSession` whose only constructor is a successful authentication, so a
+      PLAINTEXT or SSL-only listener — the common development shape — has no path to topology
+      discovery. Already recorded in `internal/adapter/kafka/metadata.go` and ADR 0031 as this
+      repository's restriction rather than Kafka's; integration made its practical cost
+      concrete, because the validation cluster had to be SASL_SSL to exercise anything above
+      L5. **Reopen when** application orchestration exists and has to configure a real run
 
 ---
 
