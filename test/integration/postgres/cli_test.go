@@ -167,7 +167,7 @@ func TestCLIHealthyTrustEndpoint(t *testing.T) {
 	// The validation server's pg_hba grants trustuser `trust` over TLS, which is
 	// where a healthy no-credential session is reachable. The plaintext container
 	// runs its own default configuration and demands SCRAM.
-	inv := runCLI(t, bin, "diagnose", "postgres",
+	inv := runCLI(t, bin, asJSON("diagnose", "postgres",
 		"--host", pgHost,
 		"--port", strconv.Itoa(pgTLSPort),
 		"--user", trustRole,
@@ -175,7 +175,7 @@ func TestCLIHealthyTrustEndpoint(t *testing.T) {
 		"--tls-ca-file", certPath(t),
 		"--tls-server-name", pgHost,
 		"--timeout", "30s",
-	)
+	)...)
 
 	decoded := inv.canonical(t)
 	if got := summaryStatus(t, decoded); got != "OK" {
@@ -201,7 +201,7 @@ func TestCLIHealthyTrustEndpoint(t *testing.T) {
 func TestCLINoCredentialAgainstSCRAM(t *testing.T) {
 	bin := binary(t)
 
-	inv := runCLI(t, bin, "diagnose", "postgres",
+	inv := runCLI(t, bin, asJSON("diagnose", "postgres",
 		"--host", pgHost,
 		"--port", strconv.Itoa(pgTLSPort),
 		"--user", scramRole,
@@ -209,7 +209,7 @@ func TestCLINoCredentialAgainstSCRAM(t *testing.T) {
 		"--tls-ca-file", certPath(t),
 		"--tls-server-name", pgHost,
 		"--timeout", "30s",
-	)
+	)...)
 
 	decoded := inv.canonical(t)
 
@@ -248,13 +248,13 @@ func TestCLITargetSideProblemExitsOne(t *testing.T) {
 	bin := binary(t)
 
 	// The plaintext server declines the SSL negotiation this run requires.
-	inv := runCLI(t, bin, "diagnose", "postgres",
+	inv := runCLI(t, bin, asJSON("diagnose", "postgres",
 		"--host", pgHost,
 		"--port", strconv.Itoa(pgPlaintextPort),
 		"--user", trustRole,
 		"--tls", "require",
 		"--timeout", "30s",
-	)
+	)...)
 
 	decoded := inv.canonical(t)
 	if got := summaryStatus(t, decoded); got != "PROBLEMS_FOUND" {
@@ -275,12 +275,12 @@ func TestCLIIncompleteRunExitsFour(t *testing.T) {
 
 	// A routable address that never answers, with budgets short enough to be
 	// deterministic. 203.0.113.0/24 is TEST-NET-3 and is not routed anywhere.
-	inv := runCLI(t, bin, "diagnose", "postgres",
+	inv := runCLI(t, bin, asJSON("diagnose", "postgres",
 		"--host", "203.0.113.1",
 		"--user", "app",
 		"--timeout", "20s",
 		"--step-timeout", "2s",
-	)
+	)...)
 
 	decoded := inv.canonical(t)
 	if inv.code != 4 {
@@ -401,9 +401,9 @@ func interrupt(t *testing.T, bin string, settle time.Duration) (inv invocation, 
 
 	// TEST-NET-3, which is not routed, with budgets long enough that only the
 	// signal can end the run.
-	cmd := exec.CommandContext(ctx, bin, "diagnose", "postgres",
+	cmd := exec.CommandContext(ctx, bin, asJSON("diagnose", "postgres",
 		"--host", "203.0.113.1", "--user", "app",
-		"--timeout", "60s", "--step-timeout", "50s")
+		"--timeout", "60s", "--step-timeout", "50s")...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -454,6 +454,15 @@ func passwordFile(t *testing.T, contents string) string {
 	return path
 }
 
+// asJSON names the canonical form explicitly.
+//
+// The command's default output became text in Phase 5.3. Tests that assert on
+// the canonical artifact therefore say so rather than relying on a default,
+// which also keeps them honest if the default ever moves again.
+func asJSON(args ...string) []string {
+	return append(args, "--output", "json")
+}
+
 // scramArgs is the invocation that reaches the real SCRAM endpoint.
 func scramArgs(t *testing.T) []string {
 	t.Helper()
@@ -501,8 +510,8 @@ func TestCLICorrectCredentialReachesASession(t *testing.T) {
 			name:    "from a file",
 			payload: scramPassword,
 			run: func() invocation {
-				return runCLI(t, bin, append(scramArgs(t),
-					"--password-file", passwordFile(t, scramPassword+"\n"))...)
+				return runCLI(t, bin, asJSON(append(scramArgs(t),
+					"--password-file", passwordFile(t, scramPassword+"\n"))...)...)
 			},
 		},
 		{
@@ -510,7 +519,7 @@ func TestCLICorrectCredentialReachesASession(t *testing.T) {
 			payload: scramPassword,
 			run: func() invocation {
 				return runCLIStdin(t, bin, scramPassword,
-					append(scramArgs(t), "--password-stdin")...)
+					asJSON(append(scramArgs(t), "--password-stdin")...)...)
 			},
 		},
 		{
@@ -518,8 +527,8 @@ func TestCLICorrectCredentialReachesASession(t *testing.T) {
 			name:    "from a file with no trailing newline",
 			payload: scramPassword,
 			run: func() invocation {
-				return runCLI(t, bin, append(scramArgs(t),
-					"--password-file", passwordFile(t, scramPassword))...)
+				return runCLI(t, bin, asJSON(append(scramArgs(t),
+					"--password-file", passwordFile(t, scramPassword))...)...)
 			},
 		},
 	}
@@ -564,10 +573,11 @@ func TestCLIWrongCredentialIsRejected(t *testing.T) {
 		t.Run(source, func(t *testing.T) {
 			var inv invocation
 			if source == "file" {
-				inv = runCLI(t, bin, append(scramArgs(t),
-					"--password-file", passwordFile(t, wrong+"\n"))...)
+				inv = runCLI(t, bin, asJSON(append(scramArgs(t),
+					"--password-file", passwordFile(t, wrong+"\n"))...)...)
 			} else {
-				inv = runCLIStdin(t, bin, wrong, append(scramArgs(t), "--password-stdin")...)
+				inv = runCLIStdin(t, bin, wrong,
+					asJSON(append(scramArgs(t), "--password-stdin")...)...)
 			}
 
 			decoded := inv.canonical(t)
@@ -596,10 +606,10 @@ func TestCLIWrongCredentialIsRejected(t *testing.T) {
 func TestCLIShareableRedactsARealRun(t *testing.T) {
 	bin := binary(t)
 
-	local := runCLI(t, bin, append(scramArgs(t),
-		"--password-file", passwordFile(t, scramPassword+"\n"))...)
-	shared := runCLI(t, bin, append(scramArgs(t),
-		"--password-file", passwordFile(t, scramPassword+"\n"), "--shareable")...)
+	local := runCLI(t, bin, asJSON(append(scramArgs(t),
+		"--password-file", passwordFile(t, scramPassword+"\n"))...)...)
+	shared := runCLI(t, bin, asJSON(append(scramArgs(t),
+		"--password-file", passwordFile(t, scramPassword+"\n"), "--shareable")...)...)
 
 	localDoc := local.canonical(t)
 	sharedDoc := shared.canonical(t)
@@ -641,8 +651,8 @@ func TestCLIShareableRedactsARealRun(t *testing.T) {
 func TestCLIShareableKeepsAnErrorReportAtExitOne(t *testing.T) {
 	bin := binary(t)
 
-	inv := runCLI(t, bin, append(scramArgs(t),
-		"--password-file", passwordFile(t, "CANARY-WRONG\n"), "--shareable")...)
+	inv := runCLI(t, bin, asJSON(append(scramArgs(t),
+		"--password-file", passwordFile(t, "CANARY-WRONG\n"), "--shareable")...)...)
 
 	decoded := inv.canonical(t)
 	if got := outputModeOf(t, decoded); got != "SHAREABLE_REDACTED" {
@@ -666,7 +676,7 @@ func TestCLIShareableKeepsAnErrorReportAtExitOne(t *testing.T) {
 func TestCLIInsecureTLSWithholdsTheCredential(t *testing.T) {
 	bin := binary(t)
 
-	inv := runCLI(t, bin, "diagnose", "postgres",
+	inv := runCLI(t, bin, asJSON("diagnose", "postgres",
 		"--host", pgHost,
 		"--port", strconv.Itoa(pgTLSPort),
 		"--user", scramRole,
@@ -674,7 +684,7 @@ func TestCLIInsecureTLSWithholdsTheCredential(t *testing.T) {
 		"--tls-insecure",
 		"--password-file", passwordFile(t, scramPassword+"\n"),
 		"--timeout", "30s",
-	)
+	)...)
 
 	decoded := inv.canonical(t)
 	codes := findingCodes(t, decoded)
@@ -806,5 +816,196 @@ func requireJSONRefsResolve(t *testing.T, decoded map[string]any) {
 					finding["code"], ref)
 			}
 		}
+	}
+}
+
+// --- Phase 5.3: terminal output through the real binary -----------------------
+
+// TestCLITextIsTheDefaultOutput closes the Phase 5.1 deviation, in the product.
+func TestCLITextIsTheDefaultOutput(t *testing.T) {
+	bin := binary(t)
+
+	inv := runCLI(t, bin, append(scramArgs(t),
+		"--password-file", passwordFile(t, scramPassword+"\n"))...)
+
+	if inv.code != 0 {
+		t.Fatalf("exit = %d: %s", inv.code, inv.stderr)
+	}
+	if inv.stderr != "" {
+		t.Errorf("stderr = %q, want empty", inv.stderr)
+	}
+	if !strings.HasPrefix(inv.stdout, "svcdoctor · postgres ·") {
+		t.Errorf("the default output is not the terminal report:\n%s", inv.stdout)
+	}
+	if strings.Contains(inv.stdout, "\x1b") {
+		t.Error("the terminal output contains an escape sequence")
+	}
+	// The three facts, all present, on a run that really authenticated.
+	for _, want := range []string{"session    established", "execution  complete", "status     OK"} {
+		if !strings.Contains(inv.stdout, want) {
+			t.Errorf("the Result section is missing %q:\n%s", want, inv.stdout)
+		}
+	}
+}
+
+// TestCLITextNoCredentialCannotReadAsSuccess is the product invariant, rendered.
+func TestCLITextNoCredentialCannotReadAsSuccess(t *testing.T) {
+	bin := binary(t)
+	inv := runCLI(t, bin, scramArgs(t)...)
+
+	if inv.code != 0 {
+		t.Fatalf("exit = %d, want 0: %s", inv.code, inv.stderr)
+	}
+	out := inv.stdout
+
+	if !strings.Contains(out, "⚠ WARN") ||
+		!strings.Contains(out, string(diagnosispostgres.CodeCredentialNotConfigured)) {
+		t.Errorf("the warning is not visible:\n%s", out)
+	}
+	if !strings.Contains(out, "NOT established") {
+		t.Errorf("the absent session is not stated:\n%s", out)
+	}
+	if !strings.Contains(out, "no target-side error was proven") {
+		t.Errorf("status OK is printed without its gloss:\n%s", out)
+	}
+	// Nothing in the document may read as a successful session.
+	for _, misleading := range []string{"PostgreSQL OK", "✓ OK", "session    established"} {
+		if strings.Contains(out, misleading) {
+			t.Errorf("the output could be read as a successful session: %q", misleading)
+		}
+	}
+}
+
+// TestCLITextWrongCredential renders the target-side failure and hides the secret.
+func TestCLITextWrongCredential(t *testing.T) {
+	bin := binary(t)
+	const wrong = "CANARY-WRONG-TEXT-3b71"
+
+	inv := runCLI(t, bin, append(scramArgs(t),
+		"--password-file", passwordFile(t, wrong+"\n"))...)
+
+	if inv.code != 1 {
+		t.Fatalf("exit = %d, want 1", inv.code)
+	}
+	out := inv.stdout
+	if !strings.Contains(out, "✗ FAIL") || !strings.Contains(out, "Authentication") {
+		t.Errorf("the failed authentication is not shown:\n%s", out)
+	}
+	if !strings.Contains(out, string(diagnosispostgres.CodeCredentialsRejected)) {
+		t.Error("the rejection finding is missing")
+	}
+	if !strings.Contains(out, "NOT established") {
+		t.Error("the absent session is not stated")
+	}
+	if strings.Contains(out, wrong) || strings.Contains(inv.stderr, wrong) {
+		t.Error("the credential appeared in the output")
+	}
+}
+
+// TestCLITextTLSFailure covers the in-band TLS path through the renderer.
+func TestCLITextTLSFailure(t *testing.T) {
+	bin := binary(t)
+
+	// No trust material, so the chain does not verify against this run's context.
+	inv := runCLI(t, bin, "diagnose", "postgres",
+		"--host", pgHost,
+		"--port", strconv.Itoa(pgTLSPort),
+		"--user", scramRole,
+		"--timeout", "30s",
+	)
+
+	if inv.code != 1 {
+		t.Fatalf("exit = %d, want 1: %s", inv.code, inv.stderr)
+	}
+	out := inv.stdout
+	// The negotiation succeeded and the handshake did not, in that order.
+	sslAt := strings.Index(out, "SSLRequest")
+	tlsAt := strings.Index(out, "TLS ")
+	if sslAt < 0 || tlsAt < 0 || sslAt > tlsAt {
+		t.Errorf("the in-band ordering is wrong or missing:\n%s", out)
+	}
+	if !strings.Contains(out, "✗ FAIL") {
+		t.Errorf("the failed handshake is not shown:\n%s", out)
+	}
+	if !strings.Contains(out, "first break") || !strings.Contains(out, "L3") {
+		t.Errorf("the first broken layer is missing:\n%s", out)
+	}
+}
+
+// TestCLITextIncompleteRun renders svcdoctor's own limit without blaming anyone.
+func TestCLITextIncompleteRun(t *testing.T) {
+	bin := binary(t)
+
+	inv := runCLI(t, bin, "diagnose", "postgres",
+		"--host", "203.0.113.1", "--user", "app",
+		"--timeout", "20s", "--step-timeout", "2s")
+
+	if inv.code != 4 {
+		t.Fatalf("exit = %d, want 4: %s", inv.code, inv.stderr)
+	}
+	out := inv.stdout
+	if !strings.Contains(out, "? UNKNOWN") {
+		t.Errorf("the undetermined stage is not shown as UNKNOWN:\n%s", out)
+	}
+	if strings.Contains(out, "✗ FAIL") {
+		t.Error("an UNKNOWN stage was rendered as a failure")
+	}
+	if !strings.Contains(out, "INCOMPLETE") {
+		t.Error("the incomplete execution is not stated")
+	}
+	if !strings.Contains(out, "EXEC_LOCAL_TIMEOUT") {
+		t.Error("the local-timeout class is not shown")
+	}
+	for _, blame := range []string{"slow", "latency", "endpoint timed out"} {
+		if strings.Contains(strings.ToLower(out), blame) {
+			t.Errorf("the output blames the target with %q", blame)
+		}
+	}
+}
+
+// TestCLITextShareableRemovesIdentity is the redaction sweep on text output.
+func TestCLITextShareableRemovesIdentity(t *testing.T) {
+	bin := binary(t)
+	args := append(scramArgs(t), "--password-file", passwordFile(t, scramPassword+"\n"))
+
+	local := runCLI(t, bin, args...)
+	shared := runCLI(t, bin, append(args, "--shareable")...)
+
+	if local.code != shared.code {
+		t.Errorf("exit changed under --shareable: %d -> %d", local.code, shared.code)
+	}
+	if !strings.Contains(shared.stdout, "Shareable report · identities redacted") {
+		t.Error("the shareable text does not announce itself")
+	}
+	if !strings.Contains(local.stdout, pgHost) {
+		t.Fatal("the local text has no host; this test proves nothing")
+	}
+	for _, identity := range []string{pgHost, scramRole, database, scramPassword} {
+		if strings.Contains(shared.stdout, identity) {
+			t.Errorf("the shareable text still carries %q", identity)
+		}
+	}
+	// The diagnosis survives.
+	if !strings.Contains(shared.stdout, "established") {
+		t.Error("the shareable text lost the session status")
+	}
+}
+
+// TestCLIJSONStillCanonical pins that Phase 5.3 changed nothing about JSON.
+func TestCLIJSONStillCanonical(t *testing.T) {
+	bin := binary(t)
+
+	inv := runCLI(t, bin, append(scramArgs(t),
+		"--password-file", passwordFile(t, scramPassword+"\n"), "--output", "json")...)
+
+	decoded := inv.canonical(t)
+	if decoded["schemaVersion"] != float64(1) {
+		t.Errorf("schemaVersion = %v", decoded["schemaVersion"])
+	}
+	if !sessionEstablished(t, decoded) {
+		t.Error("the JSON lost the passing session")
+	}
+	if inv.code != 0 {
+		t.Errorf("exit = %d, want 0", inv.code)
 	}
 }

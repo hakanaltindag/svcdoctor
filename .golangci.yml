@@ -259,6 +259,11 @@ linters:
               desc: a renderer performs no network I/O
             - pkg: net/http
               desc: a renderer performs no network I/O
+            - pkg: os
+              desc: >-
+                a renderer opens no file, reads no environment and inspects no
+                terminal; output that changed with where it was written would
+                stop being the artifact a test and a pipeline both read
             - pkg: os/exec
               desc: a renderer runs no commands
             - pkg: math/rand

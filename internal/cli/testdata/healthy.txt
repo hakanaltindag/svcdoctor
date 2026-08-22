@@ -1,0 +1,20 @@
+svcdoctor · postgres · db.internal:<port>
+
+  ✓ PASS  DNS  <duration>
+
+  Path 127.0.0.1:<port> · continued
+    ✓ PASS  TCP  <duration>
+    · SKIPPED  SSLRequest  EXEC_SKIPPED_BY_POLICY
+    ·  TLS  not reached
+    ✓ PASS  Startup  <duration>
+    ·  Authentication  not attempted
+    ✓ PASS  Session  <duration>
+
+Findings
+  none
+
+Result
+  status  OK  no target-side error was proven
+  session  established
+  execution  complete
+  duration  <duration>

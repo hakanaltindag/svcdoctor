@@ -1,0 +1,33 @@
+svcdoctor · postgres · db.internal:<port>
+
+  ✓ PASS  DNS  <duration>
+
+  Path 10.0.0.1:<port> · continued
+    ✓ PASS  TCP  <duration>
+    · SKIPPED  SSLRequest  EXEC_SKIPPED_BY_POLICY
+    ·  TLS  not reached
+    ✓ PASS  Startup  <duration>
+    ·  Authentication  not attempted
+    ✓ PASS  Session  <duration>
+
+  Path 10.0.0.2:<port>
+    ✓ PASS  TCP  <duration>
+    · SKIPPED  SSLRequest  EXEC_SKIPPED_BY_POLICY
+    ·  TLS  not reached
+    ✗ FAIL  Startup  <duration>  PROTOCOL_PEER_CLOSED
+    ·  Authentication  not reached
+    ·  Session  not reached
+
+Findings
+  ✗ ERROR  POSTGRES_STARTUP_FAILED  10.0.0.2:<port>
+    The PostgreSQL startup exchange did not complete at this endpoint, and no authentication was requested
+    The startup message reached this endpoint and the exchange ended without an authentication request.
+    → Review this endpoint's connection-level logs for the role and database this run requested
+    evidence: 1
+
+Result
+  status  PROBLEMS FOUND
+  session  established
+  execution  complete
+  first break  L4  protocol
+  duration  <duration>

@@ -1,0 +1,28 @@
+svcdoctor · postgres · host-001:<port>
+Shareable report · identities redacted
+
+  ✓ PASS  DNS  <duration>
+
+  Path ip-001:<port>
+    ✓ PASS  TCP  <duration>
+    ✗ FAIL  SSLRequest  <duration>  PROTOCOL_UNEXPECTED_RESPONSE
+    · SKIPPED  TLS  EXEC_SKIPPED_PREREQUISITE_FAILED
+    · SKIPPED  Startup  EXEC_SKIPPED_PREREQUISITE_FAILED
+    ·  Authentication  not reached
+    ·  Session  not reached
+
+Findings
+  ✗ ERROR  POSTGRES_SSL_NEGOTIATION_FAILED  ip-001:<port>
+    The PostgreSQL SSL negotiation did not complete at this endpoint
+    svcdoctor sent an SSLRequest because this run required an encrypted channel, and the exchange did not complete. What arrived instead — an answer the protocol does not define, a peer that closed, or a reply that could not be decoded — is recorded on the referenced evidence.
+    This does not establish what is at this endpoint. A PostgreSQL server behind something that rewrites its answers and a service that speaks another protocol entirely can produce the same observation, and svcdoctor observed neither.
+    The exchange stopped here: nothing was encrypted, and nothing was presented to this endpoint afterwards.
+    → Check that this endpoint is the PostgreSQL service this run was meant to reach, and read the referenced evidence for what the exchange observed
+    evidence: 1
+
+Result
+  status  PROBLEMS FOUND
+  session  NOT established
+  execution  complete
+  first break  L3  tls
+  duration  <duration>

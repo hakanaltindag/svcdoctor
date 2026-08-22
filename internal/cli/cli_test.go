@@ -478,7 +478,6 @@ func TestInvalidInvocations(t *testing.T) {
 		{"tls mode unknown", []string{"--host", "db", "--user", "app", "--tls", "prefer"}},
 		{"tls mode verify-full", []string{"--host", "db", "--user", "app", "--tls", "verify-full"}},
 		{"output unknown", []string{"--host", "db", "--user", "app", "--output", "yaml"}},
-		{"output text is not yet implemented", []string{"--host", "db", "--user", "app", "--output", "text"}},
 		{"unknown flag", []string{"--host", "db", "--user", "app", "--sslmode", "require"}},
 		{"positional argument", []string{"--host", "db", "--user", "app", "extra"}},
 		{"ca file missing", []string{"--host", "db", "--user", "app", "--tls-ca-file", "/nonexistent/ca.pem"}},
@@ -700,7 +699,8 @@ func TestReportProducingRunsWriteOnlyTheArtifact(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newHarness(tt.result(t), nil)
-			code := h.run("diagnose", "postgres", "--host", "db", "--user", "app")
+			code := h.run("diagnose", "postgres", "--host", "db", "--user", "app",
+				"--output", "json")
 
 			if code != tt.want {
 				t.Errorf("exit = %d, want %d", code, tt.want)
@@ -742,7 +742,8 @@ func TestIncompleteIsNotInTheReport(t *testing.T) {
 	}
 
 	h := newHarness(result, nil)
-	if code := h.run("diagnose", "postgres", "--host", "db", "--user", "app"); code != ExitIncomplete {
+	if code := h.run("diagnose", "postgres", "--host", "db", "--user", "app",
+		"--output", "json"); code != ExitIncomplete {
 		t.Fatalf("exit = %d, want %d", code, ExitIncomplete)
 	}
 	if strings.Contains(h.stdout.String(), "incomplete") {
@@ -903,12 +904,13 @@ func TestShareableSelectsTheRedactedProjection(t *testing.T) {
 	result := resultProblemsComplete(t)
 
 	local := newHarness(result, nil)
-	if code := local.run("diagnose", "postgres", "--host", "db", "--user", "app"); code != ExitProblemsFound {
+	if code := local.run("diagnose", "postgres", "--host", "db", "--user", "app",
+		"--output", "json"); code != ExitProblemsFound {
 		t.Fatalf("local exit = %d: %s", code, local.stderr.String())
 	}
 	shared := newHarness(result, nil)
 	if code := shared.run("diagnose", "postgres", "--host", "db", "--user", "app",
-		"--shareable"); code != ExitProblemsFound {
+		"--shareable", "--output", "json"); code != ExitProblemsFound {
 		t.Fatalf("shareable exit = %d: %s", code, shared.stderr.String())
 	}
 
@@ -983,9 +985,10 @@ func TestShareablePreservesTheDiagnosis(t *testing.T) {
 	result := resultProblemsComplete(t)
 
 	local := newHarness(result, nil)
-	local.run("diagnose", "postgres", "--host", "db", "--user", "app")
+	local.run("diagnose", "postgres", "--host", "db", "--user", "app", "--output", "json")
 	shared := newHarness(result, nil)
-	shared.run("diagnose", "postgres", "--host", "db", "--user", "app", "--shareable")
+	shared.run("diagnose", "postgres", "--host", "db", "--user", "app",
+		"--shareable", "--output", "json")
 
 	localDoc := decode(t, local.stdout.Bytes())
 	sharedDoc := decode(t, shared.stdout.Bytes())
@@ -1106,7 +1109,7 @@ func TestCredentialReachesTheParameters(t *testing.T) {
 		h := newHarness(resultOKComplete(t), nil)
 		path := writeFile(t, "hunter2\n")
 		if code := h.run("diagnose", "postgres", "--host", "db.internal", "--user", "app",
-			"--password-file", path); code != ExitOK {
+			"--output", "json", "--password-file", path); code != ExitOK {
 			t.Fatalf("exit = %d: %s", code, h.stderr.String())
 		}
 		requireBoundCredential(t, h)
@@ -1115,7 +1118,8 @@ func TestCredentialReachesTheParameters(t *testing.T) {
 	t.Run("from stdin", func(t *testing.T) {
 		h := newHarness(resultOKComplete(t), nil)
 		if code := h.runWithStdin("hunter2\n", "diagnose", "postgres",
-			"--host", "db.internal", "--user", "app", "--password-stdin"); code != ExitOK {
+			"--host", "db.internal", "--user", "app", "--output", "json",
+			"--password-stdin"); code != ExitOK {
 			t.Fatalf("exit = %d: %s", code, h.stderr.String())
 		}
 		requireBoundCredential(t, h)
@@ -1293,7 +1297,7 @@ func TestShareablePreservesAWarning(t *testing.T) {
 
 	h := newHarness(result, nil)
 	if code := h.run("diagnose", "postgres", "--host", "db", "--user", "app",
-		"--shareable"); code != ExitOK {
+		"--shareable", "--output", "json"); code != ExitOK {
 		t.Fatalf("exit = %d: %s", code, h.stderr.String())
 	}
 

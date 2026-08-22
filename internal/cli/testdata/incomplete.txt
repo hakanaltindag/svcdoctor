@@ -1,0 +1,20 @@
+svcdoctor · postgres · db.internal:<port>
+
+  ✓ PASS  DNS  <duration>
+
+  Path 10.0.0.1:<port>
+    ? UNKNOWN  TCP  <duration>  EXEC_LOCAL_TIMEOUT
+    ·  SSLRequest  not reached
+    ·  TLS  not reached
+    ·  Startup  not reached
+    ·  Authentication  not reached
+    ·  Session  not reached
+
+Findings
+  none
+
+Result
+  status  OK  no target-side error was proven
+  session  NOT established
+  execution  INCOMPLETE  svcdoctor did not finish the intended measurement
+  duration  <duration>

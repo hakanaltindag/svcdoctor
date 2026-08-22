@@ -151,6 +151,7 @@ func TestTheRendererIsPresentationOnly(t *testing.T) {
 		"internal/diagnosis",
 		"internal/security",
 		"internal/platform",
+		"internal/cli",
 		"net/http",
 		"os/exec",
 	}
@@ -163,6 +164,60 @@ func TestTheRendererIsPresentationOnly(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestTheRendererInterpretsNothing pins what presentation may not become.
+//
+// A renderer that summed stage durations would publish a total the run never
+// measured; one that read SummaryStatus to decide whether a session happened
+// would call a no-credential run successful; one that graded a duration would
+// invent the latency diagnosis PostgreSQL BASIC is frozen without. Each is a
+// single line away, so each is checked in the source rather than left to review.
+func TestTheRendererInterpretsNothing(t *testing.T) {
+	root := filepath.Join(repoRoot(t), "internal", "render")
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		code := codeWithoutComments(t, path)
+
+		for _, forbidden := range []string{
+			// The total comes from the run's own metadata, never a sum.
+			"+= node.Duration", "+= n.Duration", "total +=", "sum +=",
+			// Session establishment is a passing session node, nothing else.
+			"SummaryStatusOK &&", "FindingCount() == 0 &&",
+			// No performance vocabulary anywhere in the decisions.
+			"\"slow\"", "\"fast\"", "\"degraded\"", "threshold",
+			// No identifiers parsed, no environment, no terminal.
+			"strings.Split(string(", "os.Getenv", "os.Stdin", "isatty", "Isatty",
+			// No escape sequences.
+			"\\x1b", "\\033",
+		} {
+			if strings.Contains(code, forbidden) {
+				t.Errorf("%s references %q; a renderer presents and interprets nothing",
+					path, forbidden)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+}
+
+// TestTheTotalDurationIsRunMetadata is the Phase 4.11c-R2 closure invariant,
+// enforced where a renderer would break it.
+func TestTheTotalDurationIsRunMetadata(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "internal", "render", "terminal", "report.go")
+	code := codeWithoutComments(t, path)
+
+	if !strings.Contains(code, "Run().Duration()") {
+		t.Error("the terminal renderer does not take its total from the run metadata")
 	}
 }
 

@@ -1,0 +1,19 @@
+svcdoctor · postgres · db.internal:<port>
+
+  ✗ FAIL  DNS  <duration>  DNS_NO_ADDRESS
+
+Findings
+  ✗ ERROR  DNS_NAME_NOT_RESOLVED  db.internal:<port>
+    The requested hostname did not resolve to a usable address from this vantage point
+    The resolver answered, and the answer contained no address this client could use.
+    This does not establish that the hostname is unknown: the same answer is returned for a name that has no address record, and many resolvers do not distinguish the two. It also says nothing about whether the service behind the name is running.
+    Resolution depends on which resolver this host uses, so a different vantage point may resolve the same name.
+    → Check that the hostname is spelled as intended and that it has an address record visible to the resolver this host is configured to use
+    evidence: 1
+
+Result
+  status  PROBLEMS FOUND
+  session  NOT established
+  execution  complete
+  first break  L1  dns
+  duration  <duration>
