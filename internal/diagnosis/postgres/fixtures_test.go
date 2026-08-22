@@ -6,6 +6,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
+	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
 
 // A graph builder for PostgreSQL shapes, kept deliberately close to what the
@@ -196,9 +197,31 @@ func allFindings(g domain.Graph) []domain.Finding {
 	out = append(out, Session(g)...)
 	out = append(out, Authentication(g)...)
 	out = append(out, Startup(g)...)
+	out = append(out, TLS(g)...)
 	out = append(out, SSLRequest(g)...)
 	domain.SortFindings(out)
 	return out
+}
+
+// tlsNode adds a handshake node beneath a negotiation, in the shape
+// internal/adapter/postgres records: the generic step, L3, the same concrete
+// subject as its parent, and the negotiation as its single parent.
+func (b *builder) tlsNode(state domain.State, class domain.FailureClass) domain.EvidenceID {
+	return b.add(nodeSpec{
+		id: idTLS, subject: addr, layer: domain.LayerTLS,
+		step: vocabulary.StepTLSHandshake, state: state, class: class, parent: idSSL,
+	})
+}
+
+// inBandTLS is the common shape: a negotiation that succeeded, and a handshake
+// beneath it with the given outcome.
+func inBandTLS(t *testing.T, state domain.State, class domain.FailureClass) domain.Graph {
+	t.Helper()
+
+	b := newBuilder(t)
+	b.sslNode(domain.StatePass, domain.FailureNone, boolPtr(true))
+	b.tlsNode(state, class)
+	return b.freeze()
 }
 
 // only asserts exactly one finding and returns it.

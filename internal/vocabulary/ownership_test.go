@@ -208,6 +208,10 @@ func TestOnlyTheAuthorizedGenericFindingCodesExist(t *testing.T) {
 		"DNS_RESOLUTION_FAILED":          true,
 		"TCP_CONNECTION_NOT_ESTABLISHED": true,
 	}
+	// A *generic* TLS code is still rejected outright. ADR 0044 gave PostgreSQL
+	// five codes for the in-band handshake, and every one of them is namespaced
+	// POSTGRES — so none matches a prefix below, and the deferral of generic TLS
+	// keeps its mechanical guard untouched.
 	prefixes := []string{"DNS_", "TCP_", "TLS_", "TARGET_"}
 
 	root := repoRoot(t)
