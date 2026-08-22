@@ -1036,3 +1036,85 @@ func TestAppHealthyRunProducesNoTLSFinding(t *testing.T) {
 		t.Errorf("a healthy run produced %v", codesIn(report))
 	}
 }
+
+// --- the final BASIC terminal gaps (ADR 0045, ADR 0046) ------------------------
+
+// TestAppNoCredentialAgainstARealServer is the ADR 0046 integration.
+//
+// A real PostgreSQL server demanding SCRAM, and a run configured with no
+// credential. Before this the same run reported `findings: []`, `status: OK` and
+// no broken layer — every step it took passed, and the missing session was
+// invisible.
+func TestAppNoCredentialAgainstARealServer(t *testing.T) {
+	params := runParams(t, scramRole, "", database) // "" means no credential
+	if !params.Credential.IsZero() {
+		t.Fatal("the fixture supplied a credential; this test needs none")
+	}
+
+	result := runApp(t, params)
+	report := result.Report()
+
+	auth := nodesAt(report, servicepostgres.StepAuthentication)
+	if len(auth) != 1 {
+		t.Fatalf("got %d authentication nodes, want 1", len(auth))
+	}
+	if got := auth[0].State(); got != domain.StateSkipped {
+		t.Errorf("state = %s, want SKIPPED", got)
+	}
+	if got := auth[0].FailureClass(); got != domain.FailureExecRequiredInputMissing {
+		t.Errorf("class = %s, want EXEC_REQUIRED_INPUT_MISSING", got)
+	}
+	if got := auth[0].AttributeCount(); got != 0 {
+		t.Errorf("the node carries %d attributes, want 0", got)
+	}
+
+	finding := requireSingleFinding(t, report, diagnosispostgres.CodeCredentialNotConfigured)
+	t.Logf("finding = %s (%s)", finding.Code(), finding.Severity())
+	t.Logf("subject = %s", finding.Subject().Ref())
+
+	if got := finding.Severity(); got != domain.SeverityWarn {
+		t.Errorf("severity = %s, want WARN", got)
+	}
+	if !finding.VantageDependent() {
+		t.Error("vantageDependent = false")
+	}
+
+	// The endpoint is not accused of anything, and the run finished what it could.
+	if got := report.Summary().Status(); got != domain.SummaryStatusOK {
+		t.Errorf("status = %s, want OK", got)
+	}
+	if got := report.Summary().FirstBrokenLayer(); got != domain.LayerUnspecified {
+		t.Errorf("firstBrokenLayer = %s, want unset", got)
+	}
+	if result.Incomplete() {
+		t.Error("Incomplete() = true; nothing was cancelled")
+	}
+
+	// No session, and nothing reached the server that could count as an attempt.
+	if got := len(nodesAt(report, servicepostgres.StepSession)); got != 0 {
+		t.Errorf("got %d session nodes, want 0", got)
+	}
+}
+
+// TestAppTrustWithNoCredentialProducesNoFinding pins the other half: when the
+// endpoint asks for nothing, having nothing is not a limitation.
+func TestAppTrustWithNoCredentialProducesNoFinding(t *testing.T) {
+	// The TLS listener, where pg_hba grants trustuser `trust` on hostssl. No
+	// port switch: the point is the authentication method, not the channel.
+	result := runApp(t, runParams(t, trustRole, "", database))
+	report := result.Report()
+
+	for _, f := range report.Findings() {
+		if f.Code() == diagnosispostgres.CodeCredentialNotConfigured {
+			t.Error("a trust endpoint produced a missing-credential finding")
+		}
+	}
+	for _, n := range nodesAt(report, servicepostgres.StepAuthentication) {
+		if n.FailureClass() == domain.FailureExecRequiredInputMissing {
+			t.Errorf("a trust endpoint recorded %s", n.FailureClass())
+		}
+	}
+	if got := len(nodesAt(report, servicepostgres.StepSession)); got != 1 {
+		t.Errorf("got %d session nodes, want 1: trust should reach a session", got)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/app"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
@@ -586,5 +587,127 @@ func TestAToolWordAsARoleNameFailsClosed(t *testing.T) {
 	if _, err := redaction.Redact(result.Report()); err == nil {
 		t.Error("Redact succeeded; a collected identity's plaintext is present in the " +
 			"output and the residual scan must refuse")
+	}
+}
+
+// --- ADR 0046: a run with nothing to present -----------------------------------
+
+// noCredentialDialer answers a StartupMessage by demanding SCRAM.
+type noCredentialDialer struct{}
+
+func (noCredentialDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, error) {
+	client, server := net.Pipe()
+	go func() {
+		defer func() { _ = server.Close() }()
+		startup := make([]byte, 4096)
+		if _, err := server.Read(startup); err != nil {
+			return
+		}
+		_, _ = server.Write([]byte{
+			'R', 0, 0, 0, 23, 0, 0, 0, 10,
+			'S', 'C', 'R', 'A', 'M', '-', 'S', 'H', 'A', '-', '2', '5', '6', 0, 0,
+		})
+	}()
+	return client, nil
+}
+
+// TestAMissingCredentialLeaksNothing is the ADR 0046 security proof.
+//
+// This is the one finding in the repository whose subject is *the absence of a
+// secret*, which makes it the one most likely to describe the secret it does not
+// have. Nothing about the credential may reach evidence, prose or the report —
+// not its length, not that it was empty, not that one was looked for.
+func TestAMissingCredentialLeaksNothing(t *testing.T) {
+	vantage, err := domain.NewLocalVantage("anchor-runner-canary.local")
+	if err != nil {
+		t.Fatalf("NewLocalVantage: %v", err)
+	}
+
+	result, err := app.DiagnosePostgres(context.Background(), app.PostgresParams{
+		Host: anchorCanaryHost, Port: anchorCanaryPort,
+		Role:     "tenantrolecanary",
+		Resolver: anchorResolver{}, Dialer: noCredentialDialer{},
+		TLS:         postgres.TLSDisabled,
+		StepTimeout: 5 * time.Second,
+		Vantage:     vantage,
+		Version:     "0.0.0-security",
+	})
+	if err != nil {
+		t.Fatalf("DiagnosePostgres: %v", err)
+	}
+	local := result.Report()
+
+	findings := local.Findings()
+	if len(findings) == 0 {
+		t.Fatal("no finding was produced; the scan would be vacuous")
+	}
+	var subject string
+	for _, f := range findings {
+		if f.Code() != "POSTGRES_CREDENTIAL_NOT_CONFIGURED" {
+			continue
+		}
+		subject = f.Subject().Ref()
+
+		text := f.Summary() + " " + f.Detail()
+		for _, r := range f.Recommendations() {
+			text += " " + r.Action()
+		}
+		for _, leak := range []string{
+			anchorCanaryHost, anchorCanaryV4, anchorCanaryV6,
+			"tenantrolecanary", "empty", "zero-length", "blank",
+		} {
+			if strings.Contains(text, leak) {
+				t.Errorf("prose contains %q", leak)
+			}
+		}
+	}
+	if subject == "" {
+		t.Fatal("the missing-credential finding was not produced")
+	}
+
+	// The authentication node describes no credential at all.
+	for _, n := range local.Graph().Nodes() {
+		if n.Step() != "postgres.authentication" {
+			continue
+		}
+		if got := n.AttributeCount(); got != 0 {
+			t.Errorf("the authentication node carries %d attributes, want 0", got)
+		}
+	}
+
+	shareable, err := redaction.Redact(local)
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+	for _, f := range shareable.Findings() {
+		if f.Code() != "POSTGRES_CREDENTIAL_NOT_CONFIGURED" {
+			continue
+		}
+		if strings.Contains(f.Subject().Ref(), anchorCanaryHost) ||
+			strings.Contains(f.Subject().Ref(), anchorCanaryV4) {
+			t.Errorf("the shareable subject %q still names the endpoint", f.Subject().Ref())
+		}
+		for _, ref := range f.EvidenceRefs() {
+			if _, ok := shareable.Graph().Node(ref); !ok {
+				t.Errorf("evidence ref %s does not resolve after redaction", ref)
+			}
+		}
+	}
+
+	// Non-vacuity: the role really is in the local document, and gone from the
+	// shareable one.
+	localJSON, err := json.Marshal(local)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if !strings.Contains(string(localJSON), "tenantrolecanary") {
+		t.Fatal("the role is not in the local report; the scan below is vacuous")
+	}
+	shareableJSON, err := json.Marshal(shareable)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if strings.Contains(string(shareableJSON), "tenantrolecanary") {
+		t.Error("the role survived redaction")
 	}
 }
