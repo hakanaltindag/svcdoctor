@@ -49,6 +49,7 @@ does not overturn it, and both remain authoritative.
 | 0035 | An unusable broker advertisement is its own claim, and it is not vantage-dependent | Accepted | Takes the case 0034 §14 placed out of scope. First finding with `vantageDependent: false`; the redaction defect it surfaced was fixed generically in Phase 3.7.5 |
 | 0036 | A PostgreSQL session is one connection, and it is usable only at ReadyForQuery | Accepted (policy), implemented from Phase 4.3, **§4 amended by measurement** | First PostgreSQL record. Applies 0020, 0021 and 0024 to a protocol that negotiates TLS in-band; narrows 0029's channel authority; supplies the blocker carrier 0030 named; depends on 0037 |
 | 0037 | A principal or named resource is identity, and redaction must pseudonymize it | Accepted, **implemented in Phase 4.1** | Refines 0022 with a second identity category. Meets a reopen condition 0030 recorded. First report schema field added since v1 |
+| 0038 | PostgreSQL SCRAM-SHA-256, and the two facts that must both be true before authentication passes | **Accepted, implemented in Phase 4.4b**, §8 and §21 amended by implementation | Applies 0028's contract, 0029's mechanisms and 0030's ordering to a second protocol and adds no policy. Fixes the success boundary at *signature verified* **and** *AuthenticationOk*, both measured. Narrows scope to printable-ASCII passwords rather than adding a SASLprep dependency |
 
 ## Decisions that govern work not yet written
 
@@ -56,6 +57,10 @@ Some accepted records decide how something will be built rather than describe
 something that exists. That is intentional, and they are binding when that work
 starts: **0008** (Kafka wire client), **0009** (service registration), **0011**
 (CLI shape).
+
+**0038 has left this list.** It decided PostgreSQL authentication before any existed;
+Phase 4.4b implemented it, so it now describes code. Two of its sections were corrected by
+that implementation and the corrections are recorded inside it rather than smoothed away.
 
 **0028 has left this list.** It decided credentialed authentication before any
 existed; 0029 built the mechanisms it required and 0030 implemented it, so it now
@@ -178,6 +183,18 @@ A deferral is a decision too, and each names the condition that should reopen it
   survives redaction. It leaves two things unsolved and says so: identity embedded in a
   connection string, which belongs to L0 normalization, and identity arriving only inside a
   peer's own prose, which 0036 §6 answers by refusing to store server prose at all.
+
+- **0038** is the second record in this repository written *before* the code it governs,
+  for the reason 0028 was: the phase it describes transmits a credential. It decides nothing
+  new about policy — the ordering, the endpoint authority, the reveal boundary and the
+  ownership rules are 0027, 0028, 0029 and 0030 unchanged — and everything it *does* decide
+  is protocol. Two of its results were falsifying. `AuthenticationSASLFinal` verifying is not
+  success, measured through a pooler that follows it with an error and no `AuthenticationOk`;
+  and PostgreSQL applies SASLprep to passwords, measured on 14.24 and 18.6, so a client that
+  skips it reports a *correct* password as rejected. The second forced the only scope
+  narrowing in the record: printable-ASCII passwords are handled and everything else is
+  refused as a gap in svcdoctor, because that failure mode is visible and a disagreeing
+  second SASLprep implementation's is not.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

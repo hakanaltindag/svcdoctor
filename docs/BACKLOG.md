@@ -1578,18 +1578,67 @@ plaintext `StartupMessage` afterwards is read as a TLS record and the connection
 observed against PostgreSQL 18.6. The node is still recorded, as `SKIPPED` by policy, which
 preserves the plaintext blocker carrier the section wanted.
 
-### Phase 4.4 — Authentication: NOT STARTED
+### Phase 4.4a — SCRAM decision and protocol verification: COMPLETE
 
-- [ ] The demanded method and the advertised SASL mechanism list, recorded as facts
-- [ ] SCRAM-SHA-256 (RFC 5802) computed inside `wire` from `crypto/pbkdf2`,
-      `crypto/hmac`, `crypto/sha256`
-- [ ] The second and only other production `security.Reveal` call site
-- [ ] The channel gate, in ADR 0030's order: channel → policy → endpoint → `SecretFor` → wire
-- [ ] A policy refusal is `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, blocked by the
-      `postgres.ssl_request` node, with zero credential bytes sent
-- [ ] `28000` → `AUTHZ_NOT_PERMITTED`; `28P01` → `AUTH_CREDENTIALS_REJECTED`
-- [ ] Leak matrix: no password, no SCRAM intermediate, no salt, no nonce, no server prose
-- [ ] Decide whether svcdoctor performs MD5 authentication, or observes and declines it
+No Go code. The `security.Reveal` count, the dependency graph and the report schema are
+unchanged. ADR 0038 and `docs/validation/POSTGRES_PHASE4_SCRAM_STUDY.md` are the output.
+
+- [x] SCRAM-SHA-256 exchange verified against PostgreSQL 18.6, 14.24 and pgBouncer 1.25.2
+- [x] `AuthenticationSASLFinal` proven **insufficient** for success — measured through
+      pgBouncer, which follows a verifying signature with `08P01` and no `AuthenticationOk`
+- [x] `AuthenticationOk` proven insufficient on its own: nothing obliges a peer to prove
+      itself first, and RFC 5802 §5 makes the client's verification a MUST
+- [x] **PostgreSQL applies SASLprep to passwords** — a raw-password client gets `28P01` for a
+      correct password, on both majors. Scope narrowed to printable ASCII rather than adding
+      a second SASLprep implementation; ADR 0038 §11
+- [x] Iteration count measured as unbounded server-side (`max_val 2147483647`, ≈ 8 min of
+      CPU) and unbounded in libpq; ceiling fixed at 1 048 576
+- [x] `crypto/pbkdf2` confirmed present in the pinned toolchain — **no new dependency**
+- [x] `internal/adapter/postgres/wire` confirmed already able to call `security.Reveal`,
+      verified in both directions — **no lint change needed**
+- [x] Read-ahead boundary measured: a `bufio.Reader` steals 455 bytes of Phase 4.5's session;
+      `wire.ReadMessage`'s exact-length reads steal none
+- [x] MD5, cleartext and `SCRAM-SHA-256-PLUS` decided: observed and declined, each with its
+      own reason and its own failure class
+
+### Phase 4.4b — Authentication: COMPLETE
+
+Implements ADR 0038. **The second phase in svcdoctor that transmits credential-derived
+bytes**, and the second and last production `security.Reveal` call site.
+
+- [x] SCRAM-SHA-256 (RFC 5802) in `internal/adapter/postgres/wire/scram.go`, from
+      `crypto/pbkdf2`, `crypto/hmac`, `crypto/sha256`, `crypto/rand`, `encoding/base64`.
+      **No new dependency**
+- [x] Verified against the RFC 7677 published test vector, not only against itself
+- [x] The second production `security.Reveal` call site — two total, one per service
+- [x] The gate, in the implemented order: mechanism → channel → policy → endpoint →
+      `SecretFor` → wire → `Reveal` → printable-ASCII check (ADR 0038 amendment A)
+- [x] PASS requires **both** a verified ServerSignature and `AuthenticationOk`
+- [x] Stops at `AuthenticationOk`; `ParameterStatus`, `BackendKeyData` and `ReadyForQuery`
+      stay unread, proven against a real server
+- [x] Printable-ASCII password scope (`U+0020`–`U+007E`), refused outside it as `UNKNOWN` +
+      `EXEC_UNSUPPORTED_BY_SVCDOCTOR` with zero bytes sent. No SASLprep, no Unicode dependency
+- [x] Iteration ceiling 1 048 576, enforced before any PBKDF2 runs; low counts accepted
+      and recorded
+- [x] Server nonce must strictly extend the client nonce
+- [x] Policy refusal is `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, blocked by the
+      `postgres.ssl_request` node on a plaintext path and the `tls.handshake` node on an
+      unverified one
+- [x] `28P01` → `AUTH_CREDENTIALS_REJECTED`; `28000` → `AUTHZ_NOT_PERMITTED`; **`08P01`
+      deliberately unmapped** — it is pgBouncer's default code and proves nothing about the
+      cause, so it degrades to `PROTOCOL_UNEXPECTED_RESPONSE` (ADR 0038 amendment B, which
+      also corrects ADR 0036 §10)
+- [x] MD5, cleartext, GSS, SSPI, Kerberos, SCM and `-PLUS` observed and declined as
+      `UNKNOWN` + `AUTH_MECHANISM_UNSUPPORTED`, zero bytes, no fallback
+- [x] `AuthenticatedSession` type-state: a second authentication does not typecheck
+- [x] Leak matrix over every SCRAM intermediate, every fmt verb, evidence, report and errors
+- [x] 16 mutation guards, each verified to compile and to flip a test
+- [x] `forbidigo` verified in ten directions; **two blanket grants narrowed** (ADR 0038
+      amendment C)
+- [x] `make integration-postgres`: ten scenarios against real PostgreSQL 18.6
+
+**No `domain` change, no `FailureClass` added, no report schema change, no redaction change,
+no Kafka change.** Two attribute keys under the existing `postgres.` namespace.
 
 ### Phase 4.5 — Session and ReadyForQuery: NOT STARTED
 

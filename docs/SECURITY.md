@@ -109,12 +109,28 @@ check that makes credential use auditable — so denying the import would ban th
 safety check along with the escape hatch. The boundary is "which package may turn
 a secret into bytes", and that is a call-level rule.
 
-**There is exactly one call site**, in
-`internal/adapter/kafka/wire/saslauthenticate.go`, inside `plainAuthBytes`. The
-guard was installed in the phase *before* the first credential byte, deliberately:
-a rule added afterwards has to be argued against working code. It was re-verified
-against deliberate violations in an adapter package and a probe package before
-that byte was written, and both were rejected.
+**There are exactly two call sites, one per service:**
+
+| Service | Call site |
+|---|---|
+| Kafka | `internal/adapter/kafka/wire/saslauthenticate.go`, in `plainAuthBytes` |
+| PostgreSQL | `internal/adapter/postgres/wire/scram.go`, in `authenticateSCRAM` |
+
+Two is the number ADR 0027 sized the rule for. A third fails `make check` and CI.
+
+The guard was installed in the phase *before* the first credential byte,
+deliberately: a rule added afterwards has to be argued against working code. It
+was re-verified against deliberate violations in an adapter package and a probe
+package before that byte was written, and both were rejected.
+
+**Two blanket grants were narrowed in Phase 4.4b**, both found by re-verifying the
+boundary in every direction rather than only in the two that were expected. The
+wire-package exclusion named no message text, so it exempted wire packages from
+*every* `forbidigo` rule — including the channel-authority rules ADR 0029 reserves
+to `internal/probe/tls`. And the Phase 4.3 plaintext grant to
+`internal/adapter/postgres/` was a path prefix, so it also covered the `wire/`
+subpackage, which decides nothing about encryption. Neither was exploited; both
+are now matched by message text and by a path that stops at the directory.
 
 Re-verified before authentication was designed, and the re-verification found a
 hole worth knowing about: golangci-lint deduplicates issues by line, so a
@@ -378,6 +394,27 @@ session.Channel()                        what this connection proved
   -> security.Reveal                     one call, immediately before the write
 ```
 
+PostgreSQL follows the same order with **two mechanism checks in front of it**,
+because it has no separate handshake step to settle the mechanism first:
+
+```text
+result.AuthMethod() == "sasl"            did the peer ask for a family we do
+  -> "SCRAM-SHA-256" is advertised       … and the one mechanism we implement
+  -> result.Channel()                    what this connection proved
+  -> policy.PermitsCredentials(channel)  may a secret cross it
+  -> security.NewEndpoint(result)        the logical name, never the address
+  -> credential.SecretFor(endpoint)      is this credential authorized here
+  -> wire.AuthenticateSCRAM              the only layer that may reveal
+  -> security.Reveal                     first statement inside, then the
+                                         printable-ASCII check
+```
+
+The mechanism checks come first on purpose. A peer demanding md5 cannot be
+authenticated to whatever the channel is, so reporting a policy refusal there
+would imply that fixing TLS would help — and putting them first means
+`security.Reveal` is never reached, and `SecretFor` never called, for an endpoint
+svcdoctor cannot authenticate to at all.
+
 A refused channel never reaches the code that parses an endpoint. A credential
 bound elsewhere never reaches the wire package. **Nothing is revealed in either
 path, because nothing reaches the only function that can reveal.**
@@ -405,6 +442,59 @@ the protocol library has copied it into the frame it builds, and the string
 `Reveal` returns cannot be erased at all. A `Zero` call would imply a guarantee
 item 11 explicitly refuses. Lifecycle handling is best-effort; memory exposure is
 addressed by process hardening.
+
+### PostgreSQL SCRAM-SHA-256 specifics
+
+Success is a **conjunction**, and neither half alone is enough:
+
+```text
+authentication PASS  <=>  server signature verified  AND  AuthenticationOk received
+```
+
+A verifying signature followed by an `ErrorResponse` and no `AuthenticationOk` is
+a measured sequence, not a hypothetical: it is what a pooler returns for an
+unknown database. And nothing in the protocol obliges a peer to prove itself
+before sending `AuthenticationOk`, so a client that accepted one without a
+verified signature would have proved *itself* to the peer and learned nothing
+about the peer. RFC 5802 makes the client's verification a MUST.
+
+**A password must be printable ASCII (`U+0020`–`U+007E`) in this phase.**
+PostgreSQL applies SASLprep to passwords on both sides, and a client that skips it
+computes a different key — so the server answers `28P01` for a *correct* password.
+Measured on PostgreSQL 14.24 and 18.6. Over printable ASCII, SASLprep provably
+changes nothing; outside it svcdoctor refuses rather than guessing, as `UNKNOWN` +
+`EXEC_UNSUPPORTED_BY_SVCDOCTOR`, with zero bytes sent. That is a truthful
+"svcdoctor cannot do this", never a false "PostgreSQL rejected your credential".
+svcdoctor implements no SASLprep and adds no Unicode dependency; ADR 0038 §11.3
+gates any widening on adopting *and* differentially validating an implementation
+against `pg_saslprep`.
+
+**The server chooses the work factor, so svcdoctor bounds it.** PostgreSQL's
+`scram_iterations` maximum is 2147483647 — about eight minutes of PBKDF2 — and
+libpq imposes no ceiling at all. svcdoctor refuses above 1048576, *before* any
+derivation runs, as `UNKNOWN` + `EXEC_UNSUPPORTED_BY_SVCDOCTOR`. Counts below RFC
+7677's recommended 4096 are accepted and recorded rather than refused: that is a
+weak server configuration worth reporting, not a reason to go blind.
+
+**`08P01` is never read as a credential rejection.** A pooler collapses every
+failure into it — pgBouncer's own source says it "used to report SQLSTATE 08P01
+(protocol_violation) for all cases", and `disconnect_client()` still substitutes
+it whenever no specific code is supplied. Measured against pgBouncer 1.25.2, the
+same wrong password arrives in two different protocol positions depending on
+whether the pooler had the role's verifier cached, and a *correct* credential
+arrives in one of them when the pooler cannot serve the role. No arrangement of
+svcdoctor's own protocol state isolates the credential case, so svcdoctor states
+the weaker true claim — `PROTOCOL_UNEXPECTED_RESPONSE` — and records the SQLSTATE
+and the missing `V` field for a rule to reason over later.
+`AUTH_CREDENTIALS_REJECTED` comes only from `28P01`, where PostgreSQL itself
+asserted the refusal, or from a SCRAM signature svcdoctor refused.
+
+**MD5, cleartext and SCRAM-SHA-256-PLUS are observed and declined**, each as
+`UNKNOWN` + `AUTH_MECHANISM_UNSUPPORTED` with zero bytes sent. There is no
+fallback from any of them, on any channel. Cleartext is declined even over
+verified TLS: TLS protects against the network, not against the peer, and a
+`PasswordMessage` hands the peer the password itself — a different threat model
+from the one the transport policy covers.
 
 ### The broker's error message never leaves the wire package
 

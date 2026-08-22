@@ -423,9 +423,20 @@ unknown database become one code and three English sentences.
 Two consequences, both binding:
 
 - **A rule keyed on `28P01` must not assume it fires.** Behind a pooler it never will, and
-  the evidence honestly records `AUTH_CREDENTIALS_REJECTED` with `sqlstate=08P01`, because
-  the peer did refuse the material it was presented. The model degrades to a weaker true
-  claim instead of producing a false one.
+  the evidence honestly records the SQLSTATE it did receive. The model degrades to a weaker
+  true claim instead of producing a false one.
+
+  > **Corrected by ADR 0038 amendment B (Phase 4.4b).** This bullet originally said the
+  > evidence records `AUTH_CREDENTIALS_REJECTED` with `sqlstate=08P01`, "because the peer did
+  > refuse the material it was presented". That second clause does not follow. `08P01` is
+  > pgBouncer's *default* SQLSTATE — its own source says it "used to report SQLSTATE 08P01
+  > (protocol_violation) for all cases" — emitted for a SASL failure, an unknown user, an
+  > unconfigured auth database, `SSL required` and every `max_client_conn` limit alike. It
+  > proves the exchange ended with the peer's generic error code and nothing about the cause.
+  > `08P01` therefore maps to `PROTOCOL_UNEXPECTED_RESPONSE`, with the code and
+  > `postgres.error_is_native` recorded so a Phase 4.6 rule can form a hypothesis. The
+  > sentence this bullet exists to make — *degrade to a weaker true claim* — is unchanged;
+  > the original wording simply did not obey it.
 - **The wording of every finding says "this endpoint", never "PostgreSQL".** svcdoctor
   established a PostgreSQL session at an endpoint. Whether a real backend is behind it is a
   separate question, and `postgres.error_is_native` — the presence of the `V` field every
