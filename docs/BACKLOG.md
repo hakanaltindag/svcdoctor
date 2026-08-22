@@ -2331,9 +2331,43 @@ the exit code from `FindingCount()` escaped every unit test, because no unit fix
 finding on an `OK` report; a scripted SCRAM-demanding peer now makes the WARN+OK shape
 reachable without Docker, which is the invariant the whole phase exists to protect.
 
+### Phase 5.2 — credential sources and shareable output: COMPLETE
+
+**ADR 0049 implemented**; ADR 0048's redaction step implemented. No `FindingCode`, no
+`FailureClass`, no schema field, no dependency: counts stay 24 / 40 / **2 Reveal** / 1 / 1.
+
+- [x] `--password-file` and `--password-stdin`, mutually exclusive, **no precedence** —
+      supplying both is exit 2, and a failed source never falls back to the other
+- [x] Exactly one trailing `\n` or `\r\n` removed; `TrimSpace` forbidden and guarded, so a
+      password with leading or trailing spaces survives byte for byte
+- [x] 4 KiB bound on **the input as read**, not the trimmed secret; oversize is exit 2, never a
+      truncation, and the refusal names neither the material nor its size
+- [x] The read itself is bounded, not just checked afterwards — an endless stream returns
+      promptly instead of being consumed into memory
+- [x] An empty source builds **no credential at all**, so an empty file, a newline-only file
+      and no flag all reach `POSTGRES_CREDENTIAL_NOT_CONFIGURED`
+- [x] `--shareable` derives `SHAREABLE_REDACTED` in the command, once, from the finished
+      report; the renderer cannot import redaction and depguard now says so
+- [x] The exit code is decided from the result **before** the projection is chosen, so
+      redaction cannot turn a 1 into a 0
+- [x] A refused redaction — the committed role-name fail-closed case — is an output failure:
+      exit 3, nothing on stdout, no partially redacted artifact
+- [x] Real integration: correct credential from both sources reaches a session; wrong
+      credential is rejected at exit 1; `--tls-insecure` plus a credential still yields
+      `POSTGRES_CREDENTIAL_WITHHELD` with nothing presented
+- [x] 30 mutations applied, 26 caught, 4 not applicable. Five escapes were real test gaps and
+      were closed
+
+**What the mutation pass found, and it is worth remembering.** Replacing the bounded read with
+a plain `ReadAll` left every behavioural test passing, because the size check afterwards still
+refused the result — the property that changed was invisible to tests that only looked at
+outcomes. Closing stdin was invisible too, because a `strings.Reader` is not an `io.Closer`. And
+a projection that skipped redaction whenever a warning was present went unnoticed, because every
+shareable test used a report carrying an ERROR or none at all — which would have leaked identity
+on exactly the run an operator is most likely to share.
+
 ### Phase 5 — remaining CLI work: DECIDED, NOT IMPLEMENTED
 
-- **5.2** credential input (ADR 0049) and `--shareable`
 - **5.3** terminal renderer: stage tree, findings, session status, incompleteness, durations,
   multi-path, golden tests
 - **5.4** release validation: real PostgreSQL through the actual binary — exit codes,

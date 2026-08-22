@@ -2,7 +2,30 @@
 
 ## Status
 
-**Accepted. Not implemented — Phase 5.2.**
+**Accepted, and implemented in Phase 5.2.**
+
+`internal/cli` reads `--password-file` and `--password-stdin`, builds a
+`security.Secret`, binds it to the logical endpoint and hands it to
+`internal/app`. `security.Reveal` stays at **two** call sites, both in wire
+packages, and `internal/cli` cannot reach either — a depguard rule denies the
+wire import and forbidigo denies the call.
+
+**One edge the record implied rather than stated, now settled.** The 4 KiB bound
+applies to *the input as read*, not to the trimmed secret: §3 says "Read the file
+whole, subject to a bounded maximum" and "Reject **input** above the bound", and
+nothing here bounds the result. So a 4096-byte password followed by a newline is
+4097 bytes of input and is refused. The distinction is only visible within one
+byte of a limit no real password approaches, and refusing is the safe direction.
+
+**One consequence of the security API worth recording**, because it is not
+obvious and getting it wrong sends an empty password to a real server:
+`security.NewSecret("")` is the zero `Secret`, but `security.Credential.IsZero`
+reads only the **endpoint**. A credential built around an empty secret is
+therefore *not* zero, and `internal/adapter/postgres` would walk past its
+"nothing to present" branch and attempt SCRAM with an empty password. So an empty
+source builds **no credential at all**, which is the honest mapping: an empty
+file, a file holding one newline, and no flag at all all mean the run was given
+nothing to present, and all reach `POSTGRES_CREDENTIAL_NOT_CONFIGURED`.
 
 It decides how `svcdoctor diagnose postgres` accepts a password, which sources
 are refused and why, and what the CLI may do with the value once it holds one.

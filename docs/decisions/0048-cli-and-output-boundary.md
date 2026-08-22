@@ -18,9 +18,15 @@ ship a renderer nobody reviewed; accepting it and failing internally would repor
 svcdoctor as broken when the operator did nothing wrong. The default becomes
 `text` when 5.3 lands, and nothing is released before then.
 
-Still unimplemented: `--shareable` and section 6's redaction step (Phase 5.2,
-with ADR 0049's credential input), and the terminal renderer of sections 9
-through 12 (Phase 5.3).
+Phase 5.2 implemented section 6's redaction step: `--shareable` derives
+`SHAREABLE_REDACTED` from the finished `LOCAL_FULL` report through
+`internal/security/redaction`, in the command, once — the renderer cannot import
+redaction and a depguard rule says so. Diagnosis is not re-run and the exit code
+is decided from the result before the projection is chosen, so a run cannot exit
+differently because it was rendered for sharing.
+
+Still unimplemented: the terminal renderer of sections 9 through 12 (Phase 5.3),
+and with it the `text` output form.
 
 It fixes the command tree, the ownership split between `cmd`, `internal/cli`,
 `internal/app` and `internal/render`, the JSON artifact, the stdout/stderr

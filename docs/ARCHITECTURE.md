@@ -206,9 +206,28 @@ internal/cli     select the output security mode
 internal/render  the artifact on stdout
 ```
 
-Implemented in Phase 5.1 except the redaction step and the terminal renderer, which are
-Phases 5.2 and 5.3. `internal/render` currently imports `internal/domain` and nothing else,
-and a `render-is-presentation-only` depguard rule keeps it that way.
+Implemented in Phases 5.1 and 5.2 except the terminal renderer, which is Phase 5.3.
+`internal/render` imports `internal/domain` and nothing else, and a
+`render-is-presentation-only` depguard rule keeps it that way — including denying
+`internal/security/redaction`, because the projection is chosen *before* a renderer runs.
+
+The credential travels the other direction and stops well short of the report:
+
+```text
+--password-file / --password-stdin   read once, bounded, at the command boundary
+    ↓
+security.Secret                      masked in every formatting verb
+    ↓
+security.Credential                  bound to the logical endpoint, never an address
+    ↓
+internal/app → internal/adapter/postgres
+    ↓
+wire, and only there, security.Reveal
+```
+
+`internal/cli` may construct a `Secret` and may not open one: depguard denies it the wire
+packages and forbidigo denies the call. No secret reaches a renderer, a report, an evidence
+node or an error string.
 
 The command layer owns process outcome; the renderer owns presentation and owns nothing else.
 A renderer chooses no exit code, performs no diagnosis, applies no redaction and imports no
