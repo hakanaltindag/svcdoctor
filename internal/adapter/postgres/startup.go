@@ -10,10 +10,14 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres/wire"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
+	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
 
 // StepStartup names the startup exchange this adapter performs.
-const StepStartup domain.Step = "postgres.startup"
+//
+// An alias; the definition lives in internal/service/postgres. See
+// StepSSLRequest.
+const StepStartup = servicepostgres.StepStartup
 
 // The attributes the startup exchange records.
 const (
@@ -23,7 +27,10 @@ const (
 
 	// AttrAuthMethod is the authentication the server demanded, normalized.
 	// It is the fact that proves startup got far enough to matter.
-	AttrAuthMethod domain.AttributeKey = "postgres.auth_method"
+	//
+	// An alias. A session rule reads it to recognize the `trust` path, where no
+	// authentication node exists and a session's parent is this node.
+	AttrAuthMethod = servicepostgres.AttrAuthMethod
 
 	// AttrSASLMechanisms lists the SASL mechanisms the server advertised, in its
 	// stated preference order. A real server offers SCRAM-SHA-256-PLUS only over
@@ -32,7 +39,9 @@ const (
 
 	// AttrSQLState is the server's SQLSTATE when it rejected the startup. Five
 	// characters, machine-readable, carrying no identity.
-	AttrSQLState domain.AttributeKey = "postgres.sqlstate"
+	//
+	// An alias. A floor finding renders it verbatim and never translates it.
+	AttrSQLState = servicepostgres.AttrSQLState
 
 	// AttrErrorSeverity is the non-localized severity field. It exists only
 	// because the localized one cannot be compared across locales.
@@ -43,9 +52,12 @@ const (
 	//
 	// Every genuine PostgreSQL backend since 9.6 sends it and pgBouncer does
 	// not, so this is the one structural, non-prose signal svcdoctor has for
-	// whether it is talking to a real backend. It is recorded as a fact and read
-	// by nothing yet (ADR 0036 section 10).
-	AttrErrorIsNative domain.AttributeKey = "postgres.error_is_native"
+	// whether it is talking to a real backend.
+	//
+	// An alias. A floor finding may state its absence as an observation, and may
+	// not conclude a peer implementation from it: ADR 0040 section 18.1 makes
+	// that normative and a guard enforces it.
+	AttrErrorIsNative = servicepostgres.AttrErrorIsNative
 
 	// AttrRole and AttrDatabase are the identities the StartupMessage declared.
 	//

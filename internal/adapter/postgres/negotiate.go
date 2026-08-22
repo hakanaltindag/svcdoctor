@@ -15,20 +15,27 @@ import (
 	probetls "github.com/hakanaltindag/svcdoctor/internal/probe/tls"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
+	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
 
 // StepSSLRequest names the SSL negotiation this adapter performs.
 //
-// It is exported because it is part of the report contract: the same string
-// appears in every report and will be matched by automation.
-const StepSSLRequest domain.Step = "postgres.ssl_request"
+// It is an alias. The definition moved to internal/service/postgres in Phase
+// 4.6b, because internal/diagnosis/postgres anchors a rule at this step and
+// depguard denies diagnosis this package. The name stays here so that callers
+// and tests are unaffected by where the constant lives (ADR 0040 section 22).
+const StepSSLRequest = servicepostgres.StepSSLRequest
 
 // The attributes the SSL negotiation records.
 const (
 	// AttrSSLOffered is whether the server agreed to encrypt this connection.
 	// It is always recorded when svcdoctor asked, because "the server said no"
 	// is a statement rather than an absence.
-	AttrSSLOffered domain.AttributeKey = "postgres.ssl.offered"
+	//
+	// An alias: a diagnosis rule requires this attribute to tell a declined
+	// negotiation from one that was never answered, so the definition lives in
+	// internal/service/postgres.
+	AttrSSLOffered = servicepostgres.AttrSSLOffered
 
 	// AttrTLSPlan is what the run asked for: "required" or "disabled".
 	//

@@ -10,10 +10,14 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres/wire"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
+	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
 
 // StepSession names the session-establishment step.
-const StepSession domain.Step = "postgres.session"
+//
+// An alias; the definition lives in internal/service/postgres. See
+// StepSSLRequest.
+const StepSession = servicepostgres.StepSession
 
 // The attributes session establishment records.
 //

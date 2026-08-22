@@ -12,10 +12,14 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
+	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
 
 // StepAuthentication names the authentication exchange this step performs.
-const StepAuthentication domain.Step = "postgres.authentication"
+//
+// An alias; the definition lives in internal/service/postgres. See
+// StepSSLRequest.
+const StepAuthentication = servicepostgres.StepAuthentication
 
 // The attributes authentication records.
 const (
