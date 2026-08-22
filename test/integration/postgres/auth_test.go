@@ -31,7 +31,16 @@ import (
 )
 
 const (
-	pgHost = "localhost"
+	// A loopback literal rather than "localhost", and the difference is not
+	// cosmetic. "localhost" resolves to both 127.0.0.1 and ::1, so the chain
+	// produces **two** completed paths and every caller must then choose one —
+	// which ADR 0024 §3 refuses to let any layer do implicitly.
+	//
+	// This suite has no basis for choosing, so it removes the choice instead of
+	// making it: one address, one path, asserted rather than assumed. The
+	// generated certificate carries IP:127.0.0.1 in its SANs, so verification is
+	// unaffected. Production selection is deferred to ADR 0041.
+	pgHost = "127.0.0.1"
 	pgPort = 55432
 
 	scramRole = "scramuser"
@@ -94,10 +103,9 @@ func startupFor(t *testing.T, plan postgres.TLSPlan, insecure bool, role, db str
 	}
 	t.Cleanup(func() { _ = result.Close() })
 
-	paths := result.Continuations()
-	if len(paths) == 0 {
-		t.Skip("no TCP path reached the validation server; is it running?")
-	}
+	// A fixture precondition, never a selection policy. See
+	// requireSingleContinuation.
+	path := requireSingleContinuation(t, result)
 
 	options := postgres.TLSOptions{ServerName: pgHost}
 	if insecure {
@@ -106,7 +114,7 @@ func startupFor(t *testing.T, plan postgres.TLSPlan, insecure bool, role, db str
 		options.RootCAs = rootCAs(t)
 	}
 
-	session, err := postgres.Negotiate(ctx, builder, paths[0], postgres.Params{
+	session, err := postgres.Negotiate(ctx, builder, path, postgres.Params{
 		TLS: plan, TLSOptions: options,
 	})
 	if err != nil {
