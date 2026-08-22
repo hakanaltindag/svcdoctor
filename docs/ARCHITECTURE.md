@@ -206,10 +206,17 @@ internal/cli     select the output security mode
 internal/render  the artifact on stdout
 ```
 
-Implemented in Phases 5.1 and 5.2 except the terminal renderer, which is Phase 5.3.
-`internal/render` imports `internal/domain` and nothing else, and a
-`render-is-presentation-only` depguard rule keeps it that way — including denying
-`internal/security/redaction`, because the projection is chosen *before* a renderer runs.
+Implemented across Phases 5.1 to 5.3. The command builds a `render.Input` — the chosen
+report projection plus whether execution completed — and dispatches to `internal/render/json`
+or `internal/render/terminal`. Both forms describe the same run and neither chooses an exit
+code.
+
+`internal/render` imports `internal/domain`, `internal/vocabulary` and
+`internal/service/postgres` for step labels, and nothing else. A
+`render-is-presentation-only` depguard rule keeps it that way — denying
+`internal/security/redaction`, because the projection is chosen *before* a renderer runs, and
+denying `os`, because output that varied with where it was written would stop being the
+artifact a test and a pipeline both read.
 
 The credential travels the other direction and stops well short of the report:
 

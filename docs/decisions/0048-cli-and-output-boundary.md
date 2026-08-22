@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted. Implemented through Phase 5.1; the rest lands in Phases 5.2 and 5.3.**
+**Accepted, and fully implemented as of Phase 5.3.**
 
 Phase 5.1 built the spine: `cmd/svcdoctor`, `internal/cli`, `internal/render/json`
 and `internal/platform/local`. `svcdoctor diagnose postgres` runs end to end
@@ -25,8 +25,21 @@ redaction and a depguard rule says so. Diagnosis is not re-run and the exit code
 is decided from the result before the projection is chosen, so a run cannot exit
 differently because it was rendered for sharing.
 
-Still unimplemented: the terminal renderer of sections 9 through 12 (Phase 5.3),
-and with it the `text` output form.
+**Phase 5.3 implemented sections 9 through 12 and closed the temporary
+deviation.** `internal/render/terminal` renders the stage tree, the findings and
+the Result section; `--output text|json` both work and `text` is the default, as
+this record fixed. Both forms receive the same already-projected report through
+`render.Input`, and both leave the exit code to the command.
+
+The renderer holds to section 3 mechanically: it imports `internal/domain`,
+`internal/vocabulary` and `internal/service/postgres` and nothing else, with
+`os` denied outright so no output can vary with where it was written. Session
+establishment is read from a passing `postgres.session` node, incompleteness
+comes from `render.Input`, and the total elapsed time comes from
+`RunMetadata.Duration()` — never a sum of stage durations.
+
+ADR 0048 is now fully implemented. What remains in Phase 5 is release
+validation, not decisions this record makes.
 
 It fixes the command tree, the ownership split between `cmd`, `internal/cli`,
 `internal/app` and `internal/render`, the JSON artifact, the stdout/stderr

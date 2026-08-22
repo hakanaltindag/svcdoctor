@@ -119,6 +119,9 @@ v0.1 target outputs:
 JSON is the canonical representation. Terminal, Markdown, and HTML are derived from the
 canonical report model. HTML lands later in v0.1, once the core is stable.
 
+**Terminal and JSON are implemented** as of Phase 5.3: `svcdoctor diagnose postgres
+--output text|json`, with `text` the default. Markdown and HTML are not.
+
 The canonical report model is specified in `docs/REPORT_SCHEMA.md`.
 
 ## Exit code contract

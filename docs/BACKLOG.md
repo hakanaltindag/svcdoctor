@@ -2366,10 +2366,42 @@ a projection that skipped redaction whenever a warning was present went unnotice
 shareable test used a report carrying an ERROR or none at all — which would have leaked identity
 on exactly the run an operator is most likely to share.
 
-### Phase 5 — remaining CLI work: DECIDED, NOT IMPLEMENTED
+### Phase 5.3 — terminal renderer: COMPLETE
 
-- **5.3** terminal renderer: stage tree, findings, session status, incompleteness, durations,
-  multi-path, golden tests
+**ADR 0048 fully implemented.** `--output text|json`, default `text`. No `FindingCode`, no
+`FailureClass`, no schema field, no dependency: counts stay 24 / 40 / 2 / 1 / 1, and no
+production code outside `internal/render` and `internal/cli` changed.
+
+- [x] `internal/render.Input` — the report projection plus one boolean, and nothing else
+- [x] `internal/render/terminal` — header, per-path stage tree, findings, Result section
+- [x] Three facts rendered separately and never collapsed: `status`, `session`, `execution`.
+      `OK` never prints without "no target-side error was proven"
+- [x] Session establishment read from a passing `postgres.session` node — never from the
+      status, the absence of findings, or a passing startup or authentication
+- [x] Incompleteness read from `render.Input`, never re-derived from the graph
+- [x] Absence distinguished from SKIPPED, structurally: "not reached", "not attempted" and
+      "not attempted on this path" — so a `trust` path and an unselected path read differently
+      and neither is described as a missing credential
+- [x] `continued` marked only from a real authentication or session node, never from other
+      paths lacking children, sorting, address family or timing
+- [x] Failure classes rendered verbatim; no prose is invented and no cause is named
+- [x] Total from `RunMetadata.Duration()`; stage durations never summed; no threshold and no
+      `slow`/`fast`/`degraded` vocabulary anywhere
+- [x] No colour, no TTY detection, no width query — `os` is denied to the renderer, so output
+      is byte-identical piped, redirected and interactive
+- [x] Seven golden files rendered from **real** app runs against loopback sockets
+- [x] Real binary integration: default text, no-credential, wrong credential, TLS failure,
+      incomplete, shareable, and JSON unchanged
+- [x] 28 mutations applied, 25 caught, 3 not applicable. Three escapes were real test gaps
+
+**What the mutation pass found.** A hardcoded "IPv4 before IPv6" path order was invisible
+because the obvious multi-path fixture uses two IPv4 addresses — the test now uses
+`2001:db8::1` and `9.9.9.9`, where canonical order and family order genuinely disagree. And a
+renderer that inspected `os.Stdout` to change its glyphs escaped every test, because tests
+write to a buffer; `os` is now denied to `internal/render` outright.
+
+### Phase 5 — remaining work: RELEASE VALIDATION
+
 - **5.4** release validation: real PostgreSQL through the actual binary — exit codes,
   stdout/stderr discipline, JSON automation, text output, redaction, signals, security
 
