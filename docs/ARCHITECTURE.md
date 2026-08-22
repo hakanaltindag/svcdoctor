@@ -830,6 +830,14 @@ Additional claim rules:
 - An unsupported capability is not a FAIL. svcdoctor not supporting a mechanism is a gap in
   svcdoctor, not a defect in the target. Use `UNKNOWN`.
 
+- **A normalized failure class is scoped to the protocol step that proved it.** As of Phase
+  4.5b the PostgreSQL adapter has three SQLSTATE classifiers, one per step, and merging them
+  into a shared dictionary is a rejected alternative rather than an open refactor. The same
+  `3D000` means *the requested database does not exist* at session establishment and means
+  nothing at startup or authentication, because neither of those steps has named a database
+  for a lookup to fail on. A code arriving where its meaning is not established gets the
+  honest weak class. See ADR 0039 section 7.1.
+
   This rule has teeth as of Phase 4.4b, which is the first phase with several ways to be
   unable to do something. A PostgreSQL server demanding md5, a server offering only
   `SCRAM-SHA-256-PLUS`, a password outside the range svcdoctor can prepare, and an iteration

@@ -43,6 +43,10 @@ const (
 	md5Role       = "md5user"
 	cleartextRole = "clearuser"
 
+	norightsRole     = "norights"
+	norightsPassword = "pw-norights"
+	closedDatabase   = "closeddb"
+
 	database = "appdb"
 )
 
@@ -64,6 +68,15 @@ func rootCAs(t *testing.T) *x509.CertPool {
 
 // startup runs DNS, TCP, SSLRequest, TLS and Startup against the real server.
 func startup(t *testing.T, plan postgres.TLSPlan, insecure bool, role string) (
+	*postgres.StartupResult, *domain.GraphBuilder,
+) {
+	t.Helper()
+	return startupFor(t, plan, insecure, role, database)
+}
+
+// startupFor is startup with an explicit database, for the cases where the
+// database is what the test is about.
+func startupFor(t *testing.T, plan postgres.TLSPlan, insecure bool, role, db string) (
 	*postgres.StartupResult, *domain.GraphBuilder,
 ) {
 	t.Helper()
@@ -102,7 +115,7 @@ func startup(t *testing.T, plan postgres.TLSPlan, insecure bool, role string) (
 	t.Cleanup(func() { _ = session.Close() })
 
 	startupResult, err := postgres.Startup(ctx, builder, session, postgres.StartupParams{
-		User: role, Database: database,
+		User: role, Database: db,
 	})
 	if err != nil {
 		t.Fatalf("Startup: %v", err)
@@ -193,20 +206,123 @@ func TestRealServerSCRAMOverVerifiedTLS(t *testing.T) {
 		t.Error("no scram iteration count was recorded")
 	}
 
-	// 10. The returned connection continues toward the session phase: the very
-	// next frame is the first ParameterStatus, unread by authentication.
-	conn, ok := session.TakeConn()
-	if !ok {
-		t.Fatal("the authenticated session held no connection")
+	// 10. The session step continues on the same socket and reaches
+	// ReadyForQuery.
+	established, err := postgres.EstablishSession(
+		context.Background(), builder, session, postgres.SessionParams{})
+	if err != nil {
+		t.Fatalf("EstablishSession: %v", err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	if established == nil {
+		t.Fatal("session establishment did not reach ReadyForQuery against a real server")
+	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	kind, body := readFrame(t, conn)
-	if kind != 'S' {
-		t.Fatalf("first frame after authentication is %q, want 'S' (ParameterStatus)", kind)
+	sessionNode := nodeOf(t, builder, postgres.StepSession)
+	if sessionNode.State() != domain.StatePass {
+		t.Fatalf("session state = %s (%s), want PASS",
+			sessionNode.State(), sessionNode.FailureClass())
 	}
-	t.Logf("first unread frame: ParameterStatus %q", printable(body))
+	for key, want := range map[domain.AttributeKey]string{
+		postgres.AttrTransactionStatus:          "idle",
+		postgres.AttrInHotStandby:               "off",
+		postgres.AttrDefaultTransactionReadOnly: "off",
+	} {
+		if got := attr(sessionNode, key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	t.Logf("server_version=%q is_superuser=%q",
+		attr(sessionNode, postgres.AttrServerVersion),
+		attr(sessionNode, postgres.AttrIsSuperuser))
+
+	// The four kept keys, the transaction status, and nothing else.
+	if got := len(sessionNode.Attributes()); got != 5 {
+		t.Errorf("session node has %d attributes, want 5: %+v",
+			got, sessionNode.Attributes())
+	}
+	for _, forbidden := range []domain.AttributeKey{
+		"postgres.session_authorization", "postgres.search_path",
+		"postgres.backend_key", "postgres.application_name",
+	} {
+		if _, present := sessionNode.Attributes()[forbidden]; present {
+			t.Errorf("%s reached the session node", forbidden)
+		}
+	}
+}
+
+// nodeOf returns the node for a step, failing if absent.
+func nodeOf(t *testing.T, builder *domain.GraphBuilder, step domain.Step) domain.Evidence {
+	t.Helper()
+	graph, err := builder.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	for _, n := range graph.Nodes() {
+		if n.Step() == step {
+			return n
+		}
+	}
+	t.Fatalf("no %s node in the graph", step)
+	return domain.Evidence{}
+}
+
+func attr(node domain.Evidence, key domain.AttributeKey) string {
+	if v, ok := node.Attributes()[key]; ok {
+		return v.String()
+	}
+	return "<absent>"
+}
+
+// establish runs the whole chain and returns the session node.
+func establish(t *testing.T, plan postgres.TLSPlan, role, password, database string) domain.Evidence {
+	t.Helper()
+
+	result, builder := startupFor(t, plan, false, role, database)
+	session, err := postgres.Authenticate(context.Background(), builder, result,
+		credential(t, role, password), postgres.AuthParams{})
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if session == nil {
+		t.Fatalf("authentication for %s did not succeed", role)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	if _, err := postgres.EstablishSession(
+		context.Background(), builder, session, postgres.SessionParams{}); err != nil {
+		t.Fatalf("EstablishSession: %v", err)
+	}
+	return nodeOf(t, builder, postgres.StepSession)
+}
+
+// TestRealServerSessionFailures covers the three SQLSTATEs that arrive after
+// AuthenticationOk on a genuine backend.
+func TestRealServerSessionFailures(t *testing.T) {
+	t.Run("unknown database is RESOURCE_NOT_FOUND", func(t *testing.T) {
+		node := establish(t, postgres.TLSRequired, scramRole, scramPassword, "nosuchdb_qk7z")
+		if node.State() != domain.StateFail {
+			t.Errorf("state = %s, want FAIL", node.State())
+		}
+		if node.FailureClass() != domain.FailureResourceNotFound {
+			t.Errorf("class = %s, want RESOURCE_NOT_FOUND", node.FailureClass())
+		}
+		if got := attr(node, postgres.AttrSQLState); got != "3D000" {
+			t.Errorf("sqlstate = %q, want 3D000", got)
+		}
+	})
+
+	t.Run("CONNECT denied is AUTHZ_DENIED", func(t *testing.T) {
+		node := establish(t, postgres.TLSRequired, norightsRole, norightsPassword, closedDatabase)
+		if node.State() != domain.StateFail {
+			t.Errorf("state = %s, want FAIL", node.State())
+		}
+		if node.FailureClass() != domain.FailureAuthzDenied {
+			t.Errorf("class = %s, want AUTHZ_DENIED", node.FailureClass())
+		}
+		if got := attr(node, postgres.AttrSQLState); got != "42501" {
+			t.Errorf("sqlstate = %q, want 42501", got)
+		}
+	})
 }
 
 // 2. Verified TLS, wrong password.

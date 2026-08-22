@@ -45,6 +45,9 @@ const (
 
 	pgAuthIterations = 4096
 	pgAuthServerTail = "AUTHSERVERNONCEtail1234="
+
+	// Identity planted in the two ParameterStatus values svcdoctor drops.
+	pgCanarySearchPath = `"$user", schema_QK7z_payments`
 )
 
 func pgAuthSalt() []byte { return []byte("fedcba9876543210") }
@@ -162,6 +165,19 @@ func (p *pgAuthPeer) serve(conn net.Conn, cert cryptotls.Certificate) {
 	var out bytes.Buffer
 	out.Write(pgAuthFrame('R', pgAuthCode(12, []byte("v="+base64.StdEncoding.EncodeToString(signature)))))
 	out.Write(pgAuthFrame('R', pgAuthCode(0, nil)))
+
+	// The session-establishment burst: the four parameters svcdoctor keeps, the
+	// two it must drop as identity, a BackendKeyData whose halves are
+	// unmistakable, and ReadyForQuery.
+	out.Write(pgAuthParam("in_hot_standby", "off"))
+	out.Write(pgAuthParam("session_authorization", pgAuthRole))
+	out.Write(pgAuthParam("search_path", pgCanarySearchPath))
+	out.Write(pgAuthParam("server_version", "18.6 (Debian 18.6-1.pgdg13+2)"))
+	out.Write(pgAuthParam("default_transaction_read_only", "off"))
+	out.Write(pgAuthParam("is_superuser", "on"))
+	out.Write(pgAuthFrame('K', pgBackendKey()))
+	out.Write(pgAuthFrame('Z', []byte{'I'}))
+
 	_, _ = server.Write(out.Bytes())
 
 	time.Sleep(200 * time.Millisecond)
@@ -199,6 +215,23 @@ func pgAuthFrame(kind byte, body []byte) []byte {
 func pgAuthCode(code uint32, payload []byte) []byte {
 	body := binary.BigEndian.AppendUint32(nil, code)
 	return append(body, payload...)
+}
+
+// pgAuthParam builds a ParameterStatus message.
+func pgAuthParam(key, value string) []byte {
+	body := make([]byte, 0, len(key)+len(value)+2)
+	body = append(body, key...)
+	body = append(body, 0)
+	body = append(body, value...)
+	body = append(body, 0)
+	return pgAuthFrame('S', body)
+}
+
+// pgBackendKey is a BackendKeyData body whose two halves are unmistakable, so a
+// leak assertion is about the report rather than about a value that might not
+// have been there.
+func pgBackendKey() []byte {
+	return []byte{0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0xBE, 0xEF}
 }
 
 // pgAuthRead reads one framed client message and returns its body.
@@ -320,6 +353,15 @@ func pgAuthRun(t *testing.T) (domain.Report, *pgAuthPeer) {
 	}
 	t.Cleanup(func() { _ = authenticated.Close() })
 
+	established, err := postgres.EstablishSession(
+		context.Background(), builder, authenticated, postgres.SessionParams{})
+	if err != nil {
+		t.Fatalf("EstablishSession: %v", err)
+	}
+	if established == nil {
+		t.Fatal("session establishment did not reach ReadyForQuery")
+	}
+
 	graph, err := builder.Freeze()
 	if err != nil {
 		t.Fatalf("Freeze: %v", err)
@@ -409,7 +451,9 @@ func TestPostgresAuthLocalReportIsAlreadyFreeOfCredentialMaterial(t *testing.T) 
 	if got := peer.connections(); got != 1 {
 		t.Errorf("peer accepted %d connections, want 1", got)
 	}
-	for _, present := range []string{"postgres.authentication", "SCRAM-SHA-256", "PASS"} {
+	for _, present := range []string{
+		"postgres.authentication", "postgres.session", "SCRAM-SHA-256", "PASS",
+	} {
 		if !strings.Contains(encoded, present) {
 			t.Fatalf("the report does not contain %q; the assertions below are unreliable", present)
 		}
@@ -436,17 +480,32 @@ func TestPostgresAuthShareableReportRemovesIdentityAndKeepsTheDiagnosis(t *testi
 	}
 	encoded := encodeReport(t, redacted)
 
-	// Identity is gone.
-	for _, identity := range []string{pgAuthHost, pgAuthAddr, pgAuthRole, pgAuthDB, pgAuthVantage} {
+	// Identity is gone, including the two ParameterStatus values the session
+	// step drops at the wire boundary.
+	for _, identity := range []string{
+		pgAuthHost, pgAuthAddr, pgAuthRole, pgAuthDB, pgAuthVantage,
+		pgCanarySearchPath, "schema_QK7z_payments", "$user",
+	} {
 		if strings.Contains(encoded, identity) {
 			t.Errorf("the shareable report still contains %q", identity)
 		}
 	}
 
-	// The diagnosis survives.
-	for _, keep := range []string{"postgres.authentication", "SCRAM-SHA-256", "PASS", "L5"} {
+	// The diagnosis survives, session facts included.
+	for _, keep := range []string{
+		"postgres.authentication", "postgres.session", "SCRAM-SHA-256", "PASS", "L5",
+		"postgres.in_hot_standby", "postgres.transaction_status", "idle",
+		"postgres.server_version", "postgres.is_superuser",
+	} {
 		if !strings.Contains(encoded, keep) {
 			t.Errorf("redaction removed %q, which carries no identity", keep)
+		}
+	}
+
+	// The backend key never existed in the model to begin with.
+	for _, canary := range []string{"3405691582", "3735928559", "cafebabe", "deadbeef"} {
+		if strings.Contains(strings.ToLower(encoded), canary) {
+			t.Errorf("a BackendKeyData value (%s) reached the shareable report", canary)
 		}
 	}
 

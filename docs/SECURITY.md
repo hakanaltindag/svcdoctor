@@ -496,6 +496,29 @@ verified TLS: TLS protects against the network, not against the peer, and a
 `PasswordMessage` hands the peer the password itself — a different threat model
 from the one the transport policy covers.
 
+### PostgreSQL session establishment: what is kept, and what has nowhere to go
+
+The window between `AuthenticationOk` and `ReadyForQuery` is where a real server volunteers
+fifteen `ParameterStatus` values, two of which are identity. svcdoctor keeps **four** —
+`server_version`, `in_hot_standby`, `default_transaction_read_only`, `is_superuser` — and
+the allowlist is a **struct with four fields**, not a filter. `session_authorization` is the
+role and `search_path` carries deployment schema names; neither has anywhere to be stored,
+so nothing downstream has to remember to drop them.
+
+`BackendKeyData` is validated for length and discarded whole. Its secret key exists for
+`CancelRequest`, and svcdoctor issues no statement, so keeping it would create a second
+secret carrier for a feature that does not exist. Its process ID is dropped too — no rule
+reads it, and behind a pooler it is a fabricated number.
+
+**A passing session node claims one thing:** a PostgreSQL-protocol session reached
+`ReadyForQuery` at this endpoint, for the role and database the run named. It does **not**
+claim that a PostgreSQL server is behind the endpoint — measured, with its backend stopped,
+pgBouncer served a complete passing session from cache — nor that the session is writable,
+nor that any schema or table exists.
+
+The step is terminal: `Terminate`, then close, on the success path, and close on every other.
+No connection is returned, because nothing in v0.1 runs after `ReadyForQuery`.
+
 ### The broker's error message never leaves the wire package
 
 `SASLAuthenticateResponse` carries an `ErrorMessage` written by the deployment

@@ -13,6 +13,7 @@ services:
       - ./certs:/etc/pg-certs:ro
       - ./pg_hba.conf:/etc/pg-hba.conf:ro
       - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./init2.sql:/docker-entrypoint-initdb.d/02-init.sql:ro
     command:
       - -c
       - ssl=on
