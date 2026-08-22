@@ -1883,26 +1883,84 @@ Phase 4.4a/4.5a studies remain the authority), and the `53300` session floor.
 **Production composition remains deliberately absent.** `internal/app`, `cmd/svcdoctor` and
 `internal/render` are empty and a test asserts it.
 
-### Decision — ADR 0041: the application run boundary and path selection: NOT STARTED
+### Decision — ADR 0041: the application run boundary and path selection: COMPLETE
 
-Blocks any production composition root. ADR 0028 §1 already names this record's job:
-*"when application orchestration exists it selects and records why."*
+**ADR 0041 — "A run discovers broadly and authenticates narrowly."** Accepted as policy;
+no production code. It closes the deferral ADR 0028 §1 left open and partially supersedes
+ADR 0011's command tree.
 
-- [ ] Which continuation may be authenticated, and on what stated basis
-- [ ] Whether more than one continuation may ever be authenticated — an attempt is logged,
-      counted, and in directory-backed deployments a step towards lockout (ADR 0028)
-- [ ] Where the whole-run execution budget lives, and how cancellation propagates
-      (`docs/ARCHITECTURE.md` §3.2 assigns both to this boundary)
-- [ ] The relationship between a run and its output modes — `NewReportSecurity` refuses
-      `SHAREABLE_REDACTED`, so `redaction.Redact` is the only producer, and when a run calls
-      it is undecided
-- [ ] Whether and how service registration belongs at the composition root (ADR 0009)
+- [x] Which continuation may be authenticated — every path is measured through
+      **credential-free discovery** first, then exactly one *eligible* path is selected by a
+      deterministic canonical-order tie-break among those already measured
+- [x] Whether more than one may ever be authenticated — **no.** At most one
+      credential-bearing attempt per logical endpoint per run, counted by authentication
+      execution rather than by connection
+- [x] Whole-run budget and cancellation — the root context deadline, no second framework;
+      the run deadline always wins, and unattempted work is never a target failure
+- [x] Run and output modes — the run produces `LOCAL_FULL`; redaction is a derivative at the
+      output boundary
+- [x] Service registration — principle pinned (explicit, no generic `Adapter` interface),
+      mechanics left to implementation
 
-Phase 4.8a measured enough to inform the first two: `localhost` really does produce two
-paths, so the question is live rather than theoretical, and every scenario below reached a
-conclusion over exactly one path.
+**The decisive fact.** PostgreSQL's startup exchange presents no secret, and `pg_hba`
+selects behaviour by source address — so a family-dependent `reject`, a different mechanism,
+or a different backend is observable **without spending a credential attempt on each path**.
+That is why the two symmetric alternatives were both rejected: refusing to authenticate when
+several paths exist withholds the tool's main function on every dual-stack endpoint, and
+authenticating every path multiplies the one thing that is logged, counted and
+lockout-relevant.
 
-### Phase 4.8b — Real PostgreSQL integration validation under a composition root: BLOCKED on ADR 0041
+**Deferred by ADR 0041, each with a reopen condition:** `inspect`'s output contract,
+`--address` and any `--prefer-*` flag, retry/fallback, service-registration mechanics, and
+concurrent path discovery.
+
+### Phase 4.8b — Production composition root: COMPLETE
+
+`internal/app` implements ADR 0041 and nothing else: `DiagnosePostgres`, a pure `selectPath`,
+and a `Result` carrying the report plus whether the run got to finish.
+
+- [x] The run — root context, one `GraphBuilder`, transport discovery, credential-free
+      discovery on every permitted path, one selection, one credential attempt, closure of
+      unselected continuations, freeze, diagnosis, `LOCAL_FULL` report
+- [x] Structural guards: import allowlist, no socket, no SQL, no `EvidenceID` parsing, no
+      evidence construction, no registry or generic adapter, no exit code, no redaction
+- [x] **Real dual-stack, measured**: `localhost` → 2 transport paths, **2 startup
+      observations, 1 authentication**, selected path = canonical minimum, read from the
+      authentication node's own `Subject`
+- [x] **Connection lifecycle proven** through the production `tcp.Dialer` seam:
+      `opened=2 closed=2` — the unselected path is closed deliberately
+- [x] Real failure runs through the production run: wrong password, unknown role, `3D000`,
+      `42501`, `pg_hba` reject, md5, TLS declined, trust
+- [x] 21 mutations applied, compiled, caught and restored
+- [x] No generic `Adapter` interface; no CLI; no renderer; no registry
+
+**One guard changed on purpose.** Phase 4.8a asserted `internal/app` was empty. ADR 0041
+authorized filling it, so that guard now covers only what is still absent — the CLI and the
+renderers — plus a new one keeping the composition root PostgreSQL-only.
+
+**Corrected by an adversarial review before commit.** The first implementation selected purely
+by canonical order over every startup-successful path, so a `trust` path that sorted first was
+continued and a configured credential was **never exercised** — a run that reported `OK`
+without answering the question it was asked. ADR 0041 gained §8.1: candidates are partitioned
+by whether the endpoint demanded authentication, and the run prefers the class it can carry
+furthest. Credential attempts remain ≤ 1; nothing else moved. The same review found
+`Incomplete()` blind to a cancellation that landed inside a protocol stage, now reconciled from
+the run context in one place.
+
+**Three limitations recorded rather than worked around.** A run carrying no credential against
+a server that demands one presents nothing and records no authentication node; there is no
+finding saying "no credential was configured", because that is diagnosis work and no rule
+exists. The class partition distinguishes *demanded* from *not demanded*, not *performable*
+from *not performable*, so an `md5`/SCRAM split by family could select the `md5` path
+(ADR 0041 §8.1). And an end-to-end run over a genuinely mixed-method endpoint is not
+reproducible here: Docker translates both loopback families to one container-side address, so
+`pg_hba` cannot distinguish them — measured, and pinned by a test that fails if the
+environment ever gains the capability.
+
+### Phase 5 — CLI, renderers and productization: NOT STARTED
+
+The action-first tree ADR 0041 fixed: `svcdoctor diagnose <service>`, with `inspect`
+reserved and its output contract deferred.
 
 Driving production paths end to end — real resolver, real dialer, real TLS, real protocol,
 real graph, real diagnosis, real report, real redaction. No hand-authored evidence and no

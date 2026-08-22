@@ -158,9 +158,24 @@ sides of an architecture boundary:
 Anything that chooses a *service*, assembles a *report*, or decides what the *process* does
 is application orchestration and does not belong in a probe.
 
-**Application orchestration does not exist yet, and its absence is enforced.** `internal/app`,
-`cmd/svcdoctor` and `internal/render` hold no Go code, and
-`test/integration/postgres` fails if one of them gains any. Phase 4.8a validated the whole
+**Application orchestration is decided and built for PostgreSQL.** `internal/app` holds the
+composition root; `cmd/svcdoctor` and `internal/render` still hold no Go code, and
+`test/integration/postgres` fails if either gains any. **ADR 0041** defines the run boundary
+it implements: one command is one run; the run owns the root context, one
+`GraphBuilder`, every continuation, the selection of at most one credential-bearing path,
+closure of the rest, the freeze, diagnosis and the `LOCAL_FULL` report — and owns no
+rendering, no output format and no redaction-mode choice.
+
+Its principle is **discover broadly, authenticate narrowly**: every resolved path is measured
+as far as credential-free discovery permits, and exactly one eligible path receives the one
+authentication attempt a run is allowed. The CLI tree is action-first —
+`svcdoctor diagnose <service>` — which partially supersedes ADR 0011's shape while preserving
+its rationale that each service owns its own flags, help and validation.
+
+The composition root is deliberately concrete: one PostgreSQL run, no service registry and no
+generic adapter interface. ADR 0009 declines that abstraction until two services prove a
+shared contract rather than merely existing, and Kafka's bootstrap, topology discovery and
+advertised-endpoint sweeps are not PostgreSQL's single credentialed continuation. Phase 4.8a validated the whole
 PostgreSQL slice end to end — real socket through diagnosis, report and redaction — from a
 **test** composition boundary, which is what ADR 0028 §1 contemplates when it says *"Today the
 only caller is a test."* The decisions a production root needs are collected in ADR 0041.

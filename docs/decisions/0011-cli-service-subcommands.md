@@ -2,7 +2,23 @@
 
 ## Status
 
-Accepted.
+**Accepted, and partially superseded by ADR 0041 — command-tree shape only.**
+
+ADR 0041 moves the tree from service-first to action-first:
+
+```text
+svcdoctor diagnose postgres …      instead of      svcdoctor postgres …
+```
+
+**Everything else in this record stands, and ADR 0041 relies on it.** The service
+remains a subcommand with its own flag set, its own help text and its own
+validation — one level below the action rather than at the top — so the rationale
+below is preserved rather than overturned. The CLI still holds no service switch,
+subcommands still come from explicit registration (ADR 0009), and port-based
+inference is still rejected outright.
+
+The text below is left as written. It records what was decided and why, and the
+"why" did not change.
 
 ## Decision
 

@@ -246,6 +246,23 @@ A deferral is a decision too, and each names the condition that should reopen it
   and the resulting invariant is reusable by any mutual mechanism. ADR 0038 carries the
   correction as amendment D.
 
+- **0041** is the first record about the *application*, and it exists because Phase 4.8a
+  measured `localhost` resolving to two usable paths — with the integration harness silently
+  taking the first, which is the invisible IPv4 preference 0024 had removed from the chain,
+  found alive in the suite meant to validate it. It closes the selection deferral 0028 left
+  open, and its principle is one sentence: **discover broadly, authenticate narrowly.** Every
+  path is measured through credential-free discovery, because PostgreSQL's startup exchange
+  presents no secret and `pg_hba` selects behaviour by source address — so a family-dependent
+  `reject` or a different mechanism is observable without spending a credential attempt on
+  each path. Then exactly one eligible path receives the one attempt a run is allowed, chosen
+  by a deterministic tie-break that is a tie-break and not a preference: it decides where the
+  credential goes among paths already measured, never which path is measured at all. Two
+  symmetric alternatives are rejected — authenticate none when ambiguous, which withholds the
+  tool's main function on every dual-stack endpoint, and authenticate all, which multiplies
+  the one thing that is logged, counted and lockout-relevant. It also fixes the CLI tree as
+  action-first, partially superseding 0011's shape while preserving its reasoning, and it is
+  careful to claim nothing about the paths it did not authenticate.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention
