@@ -156,6 +156,25 @@ const (
 	FailureAuthzDenied
 	// FailureAuthzScopeInsufficient means the granted scope does not cover the operation.
 	FailureAuthzScopeInsufficient
+	// FailureAuthzNotPermitted means the peer refused the connection on the
+	// basis of who is connecting and from where, without evaluating any
+	// authentication material.
+	//
+	// It is deliberately distinct from the two classes either side of it, and
+	// the distinction is what a reader acts on.
+	// FailureAuthCredentialsRejected says the peer refused the material it was
+	// presented — and here none was presented, because the refusal arrived
+	// before any authentication was requested. FailureAuthzDenied says an
+	// identity authenticated and was denied an operation — and here nothing
+	// authenticated.
+	//
+	// "your credential is wrong" sends a reader to a secret store; "you may not
+	// attempt this from here" sends them to a host-based access rule or a
+	// network policy. Collapsing the two would send them to the wrong place.
+	//
+	// It is service-neutral: PostgreSQL refuses this way through pg_hba.conf,
+	// and the same shape of pre-authentication refusal exists elsewhere.
+	FailureAuthzNotPermitted
 
 	// Execution and policy.
 
@@ -219,6 +238,7 @@ var failureClassNames = [...]string{
 
 	FailureAuthzDenied:            "AUTHZ_DENIED",
 	FailureAuthzScopeInsufficient: "AUTHZ_SCOPE_INSUFFICIENT",
+	FailureAuthzNotPermitted:      "AUTHZ_NOT_PERMITTED",
 
 	FailureExecLocalTimeout:              "EXEC_LOCAL_TIMEOUT",
 	FailureExecCancelled:                 "EXEC_CANCELLED",
