@@ -81,7 +81,7 @@ condition that should reopen it.
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
 | **Service attribute-key ownership** | **Settled for the keys that have a second consumer, in Phase 3.6.** A key lives with the code that produces it until something outside that package genuinely reads it; then it moves to a leaf vocabulary package (`internal/service/<service>`) that imports `internal/domain` and nothing else. Three Kafka constants moved on exactly that trigger (ADR 0034 §19); the rest stayed. `internal/domain` still holds no service key | A key acquires a consumer outside the package that produces it |
 | **Contract-package placement** for the adapter contract, the registry, the probe chain contract and CLI orchestration | Concrete structs first; interfaces only at real boundaries. A placement chosen before a real consumer is a guess | Each is forced by the implementation that needs it |
-| **SCRAM's implementation route** | franz-go's SCRAM lives in the main module, alongside `kgo` and three transitive dependencies, which would end this project's one-dependency property. The alternative is hand-rolled crypto. Neither belongs in a phase about SASL generally | SCRAM is its own subphase with its own dependency decision (ADR 0026 §7.4) |
+| **SCRAM's implementation route** | **Closed in Phase 6.0.** ADR 0026 §7.4 framed it as franz-go's main module — `kgo` plus three transitive dependencies — or hand-rolled crypto. Phase 4.4b settled it in practice: `internal/adapter/postgres/wire/scram.go` implements SCRAM-SHA-256 on the standard library alone and is validated against a real server, so Kafka SCRAM needs **no new module**. What remains is extraction and framing | Closed. Extraction is Phase 6.2, under the constraints in `docs/ARCHITECTURE.md` §5.8, and requires its own security review |
 | **A `SKIPPED` protocol node for a transport path that failed** | The adapter receives completed paths only, so it cannot know an address it was never handed exists. Nothing today knows a service step was *requested* for one: the transport chain must not know Kafka, and the layer that would is the orchestration boundary Phase 3.1 did not build. The subject rule does not forbid the node — `ip:port` is known — so this is an open question, not a settled shape (ADR 0025 §9) | Phase 3 orchestration sequences transport and an adapter for one endpoint, or a rule needs to tell "L4 was never reached here" from "no L4 node here" |
 | **Execution mode** in run metadata | No vocabulary is defined, and both plausible meanings already have owners: `vantage` and the summary | A real execution mode exists that neither already expresses |
 | **`affectedResources`, recommendation reference / risk** | Listed as "recommended when relevant"; nothing consumes them and no renderer exists | A renderer or a finding catalog needs them |
@@ -1335,9 +1335,24 @@ report as shareable without transforming it.
       correct transformation, so its behaviour is covered by calling it directly rather than
       through `Redact`. A wiring regression would not be caught; the trade is deliberate
 
-### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
+### Phase 3.2d — SCRAM (not started; the dependency blocker is closed)
 
-- [ ] SCRAM-SHA-256 / SCRAM-SHA-512, with the dependency route decided first (ADR 0026 §7.4)
+**ADR 0026 §7.4's blocker is stale, and the record of why is here rather than in that ADR.**
+It framed the choice as franz-go's `pkg/sasl/scram` — which lives in the **main** franz-go
+module and would add three transitive modules plus the `kgo` client ADR 0008 forbids — or
+"hand-rolled cryptography". Phase 4.4b settled the second option in practice:
+`internal/adapter/postgres/wire/scram.go` implements SCRAM-SHA-256 with the standard library
+only (`crypto/pbkdf2`, `crypto/hmac`, `crypto/sha256`, `crypto/rand`), including strict
+server-nonce extension checking, an iteration bound and server-signature verification, and it
+is validated against a real PostgreSQL server.
+
+So **completing Kafka SCRAM requires no new module**. What remains is extraction and framing,
+scheduled as Phase 6.2 with its own security review (ADR 0054 §3 in spirit; constraints in
+`docs/ARCHITECTURE.md` §5.8).
+
+- [ ] Extract the RFC 5802 core into a shared package, under the §5.8 constraints
+- [ ] Kafka SCRAM-SHA-256, reusing that core behind Kafka's SaslAuthenticate framing
+- [ ] SCRAM-SHA-512 — **P2**, deferred; a hash swap over the same core, not a release blocker
 
 ### Remaining Phase 3 work
 
@@ -1871,9 +1886,12 @@ and for two separate reasons:
 - **PostgreSQL's in-band TLS is closed.** ADR 0044, implemented in Phase 4.9d. What was
   `findings: 0`, `status: OK`, `firstBrokenLayer: L3` now produces a per-endpoint PostgreSQL
   finding and `PROBLEMS_FOUND`.
-- **What keeps the gate open is generic requested-target TLS**, which still has no production
-  producer: PostgreSQL negotiates in band, and Kafka has no composition root. A producer
-  arrives with Kafka bootstrap composition, and the policy needs its own record then.
+- **What kept the gate open was generic requested-target TLS**, which had no production
+  producer: PostgreSQL negotiates in band, and Kafka had no composition root. **The policy now
+  exists — ADR 0053, Accepted in Phase 6.0c** — and is scheduled as Phase 6.1b so the owner
+  lands before Kafka bootstrap composition makes the producer reachable
+  (`docs/ARCHITECTURE.md` §12.1). The gate closes when 6.1b is implemented, not when the record
+  was accepted.
 
 - [x] Decide whether run intent can reach a rule at all, and how — ADR 0042
 - [x] Implement the anchor, including the generic vocabulary leaf ADR 0042 §11 requires
@@ -2514,7 +2532,38 @@ every boundary it wires together is validated by then.
 
 ---
 
-## Phase 6 — Real-world Validation and Hardening: NOT STARTED
+## Phase 6 — Kafka BASIC: DECIDED, NOT STARTED
+
+Phase 6.0 fixed the prerequisites (ADRs 0050-0054, all Accepted, none implemented). The
+sequence below is **normative**, and its ordering is a correctness property rather than a
+convenience: *owner before producer, authority before credential use, security guard before
+composition* (`docs/ARCHITECTURE.md` §12.1).
+
+| Phase | Scope | Why here |
+|---|---|---|
+| **6.1a** | Kafka authentication mechanism guard | `Authenticate` reads `Mechanism()` nowhere and calls `ExchangePLAIN` unconditionally. The guard must precede `SecretFor`, `Reveal` and any credential-bearing wire output |
+| **6.1b** | Generic requested-target TLS diagnosis (ADR 0053) | The owner must exist before 6.1c makes the producer reachable, or `tls.handshake` FAIL lands with `findings: []` and `status: OK` |
+| **6.1c** | `DiagnoseKafka` application composition | Anchor, bootstrap sweep, ApiVersions, handshake, one authenticated path, Metadata, advertised sweep, ADR 0051's predicate. Existing rules wired; no new findings |
+| **6.2** | Shared SCRAM core extraction + Kafka SCRAM-SHA-256 | Requires a dedicated security review before extraction (§5.8) |
+| **6.3** | Kafka protocol diagnosis ownership | ApiVersions, SASL handshake, authentication, Metadata. Closes the reachable outcomes Phase 5.6 enumerated as unowned |
+| **6.4** | Kafka renderer hierarchy + Kafka CLI | `collectPaths` promotes every `tcp.connect` to a top-level path, which conflates bootstrap and advertised sweeps; the tree needs a third level |
+| **6.5** | Kafka BASIC closure | Includes the ADR 0054 §5 closure test |
+| **6.6** | Kafka release validation | |
+
+- [ ] **6.1a** mechanism guard: UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`, zero `SecretFor`,
+      zero `Reveal`, zero bytes written, proven by test
+- [ ] **6.1b** generic requested-target TLS rule and its five codes (24 → 29)
+- [ ] **6.1c** `DiagnoseKafka`, requested-target anchor, ADR 0051 completeness predicate
+- [ ] **6.2** SCRAM extraction security review, then extraction and Kafka SCRAM-SHA-256
+- [ ] **6.3** Kafka protocol diagnosis ownership
+- [ ] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka`
+- [ ] **6.5** Kafka BASIC closure gate, including the per-service ownership closure test
+- [ ] **6.6** Kafka release validation against the real cluster
+
+## Phase 7 — Real-world Validation and Hardening: NOT STARTED
+
+*Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6
+numbering the architecture review assigned it. The content is unchanged.*
 
 - [ ] Run against at least 10 real connection/auth/TLS/topology incidents
 - [ ] Measure first-broken-layer accuracy
