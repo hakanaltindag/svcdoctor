@@ -28,6 +28,20 @@ make integration-postgres   # all three
 | `clearuser` | `password` | observed and declined |
 | `trustuser` | `trust` | no credential, no authentication node |
 
+| `norights` | `scram-sha-256` | authenticates, then `42501` on `closeddb` |
+| `rejectuser` | `reject` | refused by `pg_hba` before authentication: the `28000` producer |
+| `svcdcanaryrole` | `scram-sha-256` | the redaction canary, with `svcdcanarydb` |
+
+**Two listeners.** `svcd-pg` on 55432 has TLS on; `svcd-pg-plaintext` on 55433 has it off and
+exists to answer one `SSLRequest` with `N`. Measuring `POSTGRES_TLS_DECLINED` needs a server
+that really declines, and simulating the byte would prove nothing about the negotiation.
+
+**The host is `127.0.0.1`, not `localhost`.** `localhost` resolves to both `127.0.0.1` and
+`::1`, so the transport chain returns two completed paths and every caller must then choose —
+which ADR 0024 §3 refuses to let any layer do implicitly. This suite removes the choice
+instead of making it, and `requireSingleContinuation` asserts the count rather than assuming
+it. Production selection is deferred to ADR 0041.
+
 `scramuser`'s password contains a space and a tilde — the two ends of the
 printable-ASCII range svcdoctor supports — so the boundary is exercised against a
 real SCRAM verifier rather than only against a unit test.

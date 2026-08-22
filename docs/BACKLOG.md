@@ -1849,7 +1849,60 @@ cannot see, receiving only a `Graph`. See **ADR 0017**, and ADR 0040 §26.1.
       something that can branch on a service name (ADR 0009)
 - [ ] Until then, keep the gap stated in the report rather than papered over by a service rule
 
-### Phase 4.8 — Real PostgreSQL integration validation: NOT STARTED
+### Phase 4.8a — Real end-to-end validation from a test composition boundary: COMPLETE
+
+The vertical slice driven from a real socket to a redacted report, against real servers.
+The first phase in which diagnosis meets a graph it did not receive hand-built.
+`docs/validation/POSTGRES_PHASE48A_ENDTOEND_STUDY.md` records what ran.
+
+- [x] `test/integration/postgres` composes the production stages: `transport.Run` →
+      `Negotiate` → `Startup` → `Authenticate` → `EstablishSession` → diagnosis →
+      `NewReport` → `Redact`. **Test orchestration only**
+- [x] No hand-authored evidence on the end-to-end paths, enforced by an AST guard
+- [x] `requireSingleContinuation` — a fixture precondition that fails on 0 or >1, never a
+      selection. Guarded so no other call site indexes a path
+- [x] 11 scenarios measured against real servers: healthy, wrong password, unknown role,
+      `3D000`, `42501`, TLS declined, `pg_hba` reject, md5, cleartext, trust, plaintext policy
+- [x] Redaction from a real run: role, database and address canaries removed; semantics and
+      prose byte-identical; idempotent
+- [x] 11 mutations applied, compiled, caught and restored
+- [x] Guards: no production composition root, no production path selection, no address-family
+      preference, no service registry, no SQL, diagnosis still pure
+
+**Two findings worth carrying forward.** `localhost` resolves to two addresses, so the
+suite's previous `Continuations()[0]` had been silently selecting IPv4 — the exact invisible
+preference ADR 0024 §3 removed from the chain, sitting in the validation suite. It surfaced
+on the first run against the new precondition. And the `bindDeadline` regression is **not**
+covered: reverting the Phase 4.5b fix passes 40 end-to-end runs, because the race needs the
+caller's context to end at a specific moment and a local server never gets there. No coverage
+is claimed; Phase 4.5b's evidence remains authoritative.
+
+**Not measured here, and not claimed:** pgBouncer (no pgBouncer in this environment — the
+Phase 4.4a/4.5a studies remain the authority), and the `53300` session floor.
+
+**Production composition remains deliberately absent.** `internal/app`, `cmd/svcdoctor` and
+`internal/render` are empty and a test asserts it.
+
+### Decision — ADR 0041: the application run boundary and path selection: NOT STARTED
+
+Blocks any production composition root. ADR 0028 §1 already names this record's job:
+*"when application orchestration exists it selects and records why."*
+
+- [ ] Which continuation may be authenticated, and on what stated basis
+- [ ] Whether more than one continuation may ever be authenticated — an attempt is logged,
+      counted, and in directory-backed deployments a step towards lockout (ADR 0028)
+- [ ] Where the whole-run execution budget lives, and how cancellation propagates
+      (`docs/ARCHITECTURE.md` §3.2 assigns both to this boundary)
+- [ ] The relationship between a run and its output modes — `NewReportSecurity` refuses
+      `SHAREABLE_REDACTED`, so `redaction.Redact` is the only producer, and when a run calls
+      it is undecided
+- [ ] Whether and how service registration belongs at the composition root (ADR 0009)
+
+Phase 4.8a measured enough to inform the first two: `localhost` really does produce two
+paths, so the question is live rather than theoretical, and every scenario below reached a
+conclusion over exactly one path.
+
+### Phase 4.8b — Real PostgreSQL integration validation under a composition root: BLOCKED on ADR 0041
 
 Driving production paths end to end — real resolver, real dialer, real TLS, real protocol,
 real graph, real diagnosis, real report, real redaction. No hand-authored evidence and no

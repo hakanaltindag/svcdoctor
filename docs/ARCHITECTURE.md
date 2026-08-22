@@ -158,6 +158,13 @@ sides of an architecture boundary:
 Anything that chooses a *service*, assembles a *report*, or decides what the *process* does
 is application orchestration and does not belong in a probe.
 
+**Application orchestration does not exist yet, and its absence is enforced.** `internal/app`,
+`cmd/svcdoctor` and `internal/render` hold no Go code, and
+`test/integration/postgres` fails if one of them gains any. Phase 4.8a validated the whole
+PostgreSQL slice end to end — real socket through diagnosis, report and redaction — from a
+**test** composition boundary, which is what ADR 0028 §1 contemplates when it says *"Today the
+only caller is a test."* The decisions a production root needs are collected in ADR 0041.
+
 The same split governs timeouts. A per-probe or per-chain deadline is transport-local. The
 whole-run execution budget, cancellation propagation, and the partial-run exit code in
 section 13 belong to the application boundary.
