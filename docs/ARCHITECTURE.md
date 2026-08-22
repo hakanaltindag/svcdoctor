@@ -113,8 +113,11 @@ observe (the only I/O)  ->  observation (producer-local)  ->  domain.Evidence
 - **Identifiers are derived** as `<step>[/<component>...]`, escaped so that no
   input has to be refused to keep them unambiguous (ADR 0019).
 - **Attributes carry facts, not derivations**, and identity-bearing values are
-  **declared** with `domain.HostAttr` / `domain.HostListAttr`, one identity per
-  value or list entry, never embedded in prose (ADR 0022).
+  **declared**: `domain.HostAttr` / `domain.HostListAttr` for a network peer, one
+  identity per value or list entry (ADR 0022), and `domain.IdentityAttr` for a
+  principal or named resource that is not a peer (ADR 0037). Never embedded in
+  prose. The kind carries privacy semantics; the attribute key carries the
+  semantic role and survives redaction.
 - **Classification is conservative.** A completed measurement is a fact; otherwise
   the caller's context is consulted before the I/O error, so svcdoctor's own
   deadline expiring is `UNKNOWN`, never a remote failure.

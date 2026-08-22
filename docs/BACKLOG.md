@@ -1452,23 +1452,197 @@ ADR 0017 exists to prevent.
 
 ---
 
-## Phase 4 — PostgreSQL Vertical Slice: NOT STARTED
+## Phase 4 — PostgreSQL Vertical Slice
 
-Start only after the Kafka acceptance criteria are complete. PostgreSQL is the second real
-implementation, and its job is as much to validate the shared abstractions Kafka produced as
-to add a service. An abstraction Kafka introduced that PostgreSQL cannot use is a signal to
-narrow it, not to generalize it further.
+PostgreSQL is the second real implementation, and its job is as much to validate the shared
+abstractions Kafka produced as to add a service. An abstraction Kafka introduced that
+PostgreSQL cannot use is a signal to narrow it, not to generalize it further.
 
-- [ ] SSLRequest/TLS
-- [ ] startup/protocol negotiation evidence
-- [ ] auth-type evidence
-- [ ] sslmode/certificate correlation
-- [ ] pg_hba bisection evidence
-- [ ] multi-host DSN verification, with credential material removed from the recorded target
-- [ ] per-IP role discovery
-- [ ] minimal replication/slot signals
-- [ ] Confirm that adding this service required no edit to a generic package beyond the single
-      registration point
+The decomposition below replaces the eight-item sketch this section carried before Phase
+4.0. It is derived from measured protocol behaviour, not from the Kafka sequence: see
+`docs/validation/POSTGRES_PHASE4_PROTOCOL_STUDY.md` for the evidence and ADR 0036 for the
+decisions.
+
+### Phase 4.0 — Discovery and protocol contract: COMPLETE
+
+- [x] Repository reconstructed from source; every baseline gate green before and after
+- [x] PostgreSQL protocol lifecycle verified against PostgreSQL 18.6 and 14.24, pgBouncer
+      1.25.2 and a non-PostgreSQL peer, rather than from documentation alone
+- [x] ADR 0036 — the session evidence model, TLS negotiation, success boundary, `ErrorResponse`
+      handling, layers, subject, failure classes, library choice, exclusions
+- [x] ADR 0037 — `AttrKindIdentity`, closing the redaction gap ADR 0030 predicted
+- [x] Integration matrix and differential-oracle plan designed (ADR 0036 §12, and below)
+- [x] No production Go code written; no dependency added
+
+Three results changed the design and are worth carrying forward:
+
+1. **`AuthenticationOk` is not success.** `3D000` (database does not exist) and `42501`
+   (`CONNECT` revoked) both arrive after it and before `ReadyForQuery`.
+2. **pgBouncer collapses the SQLSTATE vocabulary** to `08P01`, so no rule may assume its
+   SQLSTATE fires, and no finding may say "I reached PostgreSQL".
+3. **`ParameterStatus` already carries `in_hot_standby` and `default_transaction_read_only`**
+   on every supported version, so the first slice executes no SQL and
+   `pg_is_in_recovery()` is unnecessary rather than deferred.
+
+### Phase 4.1 — Identity redaction: COMPLETE
+
+Generic core work. It blocked everything below it: no PostgreSQL evidence node could exist
+until a role name and a database name could be pseudonymized.
+
+- [x] `domain.AttrKindIdentity`, `domain.IdentityAttr`, the `identity` wire tag, appended so
+      no existing kind is renumbered
+- [x] `domain.RedactionCounts.Identity`, and the comment denying its existence removed
+- [x] `internal/security/redaction`: collect, pseudonymize, prose-replace, residual-verify
+- [x] `docs/REPORT_SCHEMA.md` records the new kind and the new count; `schemaVersion` stays
+      `1` because the change is additive under its own section 1
+- [x] `test/security` canaries for a role, a database and a tenant, alongside a password
+      canary proving the secret boundary is untouched
+- [x] Architecture guard: an AST scan proving `internal/domain` and
+      `internal/security/redaction` contain no service-specific policy, plus a behavioural
+      test proving no key-name inference
+- [x] ADR 0037 marked implemented, with the questions it did not reach settled by precedent
+
+Decisions the implementation settled, recorded in ADR 0037's status block: separate pseudonym
+namespaces, global-once-declared propagation, no pseudonym for an empty identity, and no
+special case in the residual scan.
+
+**Does not include** L0 target normalization, which is the other half of the identity
+question and belongs to the phase that parses a connection string.
+
+**Known limit, inherited not introduced.** An identity whose text is a substring of the
+report's own vocabulary — a role named `PASS`, `error` or `host-001` — fails the residual
+scan closed, so such a run cannot produce a shareable report. A *hostname* with the same text
+behaves identically and did before this phase. Settling it needs verification that checks
+identity-bearing surfaces structurally instead of searching decoded strings; see
+`docs/SECURITY.md`.
+
+### Phase 4.2 — Channel authority moves to the TLS probe: NOT STARTED
+
+Small, generic, and a prerequisite for sending any PostgreSQL credential.
+
+- [ ] `probe/tls.Result.Channel()`, derived from the handshake it performed
+- [ ] `transport.channelOf` replaced by a call to it; no behaviour change
+- [ ] `forbidigo` exclusion moves from `internal/probe/transport/` to
+      `internal/probe/tls/` plus the chain, so the authority narrows rather than widens
+- [ ] ADR 0029 amended with the narrowing, not superseded
+
+### Phase 4.3 — Wire package, SSLRequest and startup: NOT STARTED
+
+The first PostgreSQL code. No credential is sent in this phase.
+
+- [ ] `internal/adapter/postgres/wire`: `SSLRequest`, `StartupMessage`, the 5-byte typed
+      header, decoders for `R`, `E`, `N`, `S`, `K`, `Z`, `v`. Zero new dependencies
+- [ ] `postgres.ssl_request` (L3), sent unconditionally, with the CVE-2021-23222
+      surplus-byte check and the CVE-2024-10977 rule that an `E` message is never displayed
+- [ ] TLS upgrade on the same socket through `probe/tls.Handshake`, parented to the
+      `ssl_request` node
+- [ ] `postgres.startup` (L4): protocol version, `NegotiateProtocolVersion`, `0A000`
+- [ ] `AUTHZ_NOT_PERMITTED` and `RESOURCE_NOT_FOUND` added to `domain.FailureClass`
+- [ ] Scripted fake peer at the protocol boundary, over a loopback listener
+- [ ] Ownership tests proving no redial and exactly one owner at every instant
+
+### Phase 4.4 — Authentication: NOT STARTED
+
+- [ ] The demanded method and the advertised SASL mechanism list, recorded as facts
+- [ ] SCRAM-SHA-256 (RFC 5802) computed inside `wire` from `crypto/pbkdf2`,
+      `crypto/hmac`, `crypto/sha256`
+- [ ] The second and only other production `security.Reveal` call site
+- [ ] The channel gate, in ADR 0030's order: channel → policy → endpoint → `SecretFor` → wire
+- [ ] A policy refusal is `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, blocked by the
+      `postgres.ssl_request` node, with zero credential bytes sent
+- [ ] `28000` → `AUTHZ_NOT_PERMITTED`; `28P01` → `AUTH_CREDENTIALS_REJECTED`
+- [ ] Leak matrix: no password, no SCRAM intermediate, no salt, no nonce, no server prose
+- [ ] Decide whether svcdoctor performs MD5 authentication, or observes and declines it
+
+### Phase 4.5 — Session and ReadyForQuery: NOT STARTED
+
+Completes the vertical slice.
+
+- [ ] `postgres.session` (L5): `AuthenticationOk` → `ParameterStatus` → `ReadyForQuery`
+- [ ] `3D000`, `42501`, `53300`, `57P03` classified
+- [ ] `ParameterStatus` recorded from a fixed allowlist; `session_authorization` and
+      `search_path` are excluded as identity
+- [ ] `Terminate` sent before closing a session that reached `ReadyForQuery`
+- [ ] Transaction status byte recorded
+
+### Phase 4.6 — Diagnosis policy ADR: NOT STARTED
+
+The 0034 analogue: written against real graphs, authorizing exact findings.
+
+- [ ] Every field of every authorized finding fixed, as ADR 0034 §5 does
+- [ ] Vantage dependence decided claim by claim, not copied
+- [ ] Credential dependence carried in the discriminator, and the decision not to add a
+      field re-examined against real output
+- [ ] `POSTGRES_CREDENTIALS_REJECTED` proven not to claim a cause it cannot establish
+- [ ] Minimal causal evidence sets fixed per finding
+- [ ] `internal/service/postgres` created, holding only what a rule genuinely reads
+
+### Phase 4.7 — Diagnosis rules: NOT STARTED
+
+- [ ] `internal/diagnosis/postgres` implementing 4.6 exactly and inventing nothing
+- [ ] Duplicate test applied against every other finding
+- [ ] Redaction test: every finding still true with hostnames, roles and databases removed
+
+### Phase 4.8 — Real PostgreSQL integration validation: NOT STARTED
+
+Driving production paths end to end — real resolver, real dialer, real TLS, real protocol,
+real graph, real diagnosis, real report, real redaction. No hand-authored evidence and no
+hand-authored findings.
+
+Scenarios, with the oracle each is compared against:
+
+| Scenario | Oracle | What the oracle proves |
+|---|---|---|
+| healthy TLS + SCRAM → `ReadyForQuery` | `psql` | a session was established, which is the same claim |
+| healthy plaintext + `trust` | `psql` | same |
+| hostname does not resolve | resolver, `dig` | name resolution only |
+| connection refused | `pg_isready` | a listener answered or did not — **not** that a session is possible |
+| server without TLS, TLS required | `openssl s_client` | that the port does not start TLS directly; it does **not** speak `SSLRequest`, so it cannot test PostgreSQL's negotiation |
+| untrusted CA, hostname mismatch, expired certificate | `openssl s_client` + `psql sslmode=verify-full` | certificate facts, and libpq's verdict on them |
+| wrong password | `psql` | refusal, and nothing about which cause |
+| unknown role | `psql` + server log | the log is the only place the two are distinguished, which is the point |
+| `pg_hba` no entry, and explicit `reject` | `psql` + server log | `28000` and which rule matched |
+| SCRAM and MD5 roles | `psql` | which method was demanded |
+| unknown database, `CONNECT` revoked | `psql` | `3D000` and `42501` after `AuthenticationOk` |
+| server terminates before `ReadyForQuery` | injected fault | `PROTOCOL_PEER_CLOSED`, not a remote failure claim |
+| replica endpoint | `psql -c 'SELECT pg_is_in_recovery()'` | agrees with `in_hot_standby` obtained without a query |
+| behind pgBouncer | `psql` | that svcdoctor degrades to a weaker true claim rather than a false precise one |
+| redaction | the shareable report itself | no residual hostname, role, database, password canary, or source address |
+
+`pg_isready` and `psql` prove different things and neither is universal. `pg_isready`
+performs a startup and reads the response; it does not authenticate a session or reach a
+database. `psql` is the strong oracle for session establishment. `openssl s_client` cannot
+speak `SSLRequest` at all and is therefore an oracle for the certificate, never for
+PostgreSQL's negotiation. The server log is the only oracle for a cause PostgreSQL
+deliberately hides from the client.
+
+- [ ] `make integration-postgres`, outside `make check` as the Kafka gate is
+- [ ] `docs/validation/POSTGRES_PHASE4_VALIDATION.md` recording what it found
+- [ ] Confirm that adding this service required no edit to a generic package beyond
+      Phases 4.1 and 4.2, both of which are core changes PostgreSQL *forced* rather than
+      service logic leaking into the core
+
+### Deferred out of Phase 4, with the condition that reopens each
+
+- [ ] **Plaintext credential authentication.** Blocked by the single-valued
+      `CredentialTransportPolicy`. **Reopen when** a layer can carry an explicit, per-run,
+      recorded transport decision (ADR 0029, Phase 5). This is the largest practical
+      limitation of the first slice
+- [ ] **The transport finding for a user-supplied target.** Still unowned; ADR 0034 §14 left
+      it open and ADR 0036 §18 declines to close it. **Reopen when** orchestration knows
+      what was requested
+- [ ] **Multi-host DSN and per-address role discovery.** **Reopen when** L0 normalization
+      exists
+- [ ] **Two negotiation strategies in one run** (TLS and plaintext, both measured, no
+      fallback). The primitive exists — `probe.SweepScope` — and nothing blocks it.
+      **Reopen when** a real report needs both answers
+- [ ] **Protocol 3.2.** Costs a negotiation round trip on older servers and buys nothing
+      svcdoctor reads. **Reopen when** a 3.2 capability is worth having
+- [ ] **Primary/replica, replication, slots, WAL, failover, Patroni, CloudNativePG.**
+      `in_hot_standby` is already recorded as a fact. **Reopen when** an HA phase is scheduled
+- [ ] **A `credentialDependent` field on `Finding`.** **Reopen when** a second service needs
+      the distinction
+- [ ] **Client certificate authentication.** Needs the trust-material loading ADR 0023 defers
 
 ---
 

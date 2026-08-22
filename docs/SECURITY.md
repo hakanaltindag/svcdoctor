@@ -465,12 +465,13 @@ address nor a `host:port` reference, and that appears nowhere else in the report
 That limit used to be wider. Until Phase 2.3 it covered every unrecognizable shape, including
 the bare hostnames on a certificate, because redaction had to infer identity from shape.
 ADR 0022 replaced inference with declaration: a producer records identity through
-`domain.HostAttr` or `domain.HostListAttr`, and a declared value is always replaced. What
-remains is a producer forgetting to declare — a mistake code review and the contract tests
-below are there to catch, rather than a property of the model.
+`domain.HostAttr` or `domain.HostListAttr`, and a declared value is always replaced.
+ADR 0037 extended the same mechanism to `domain.IdentityAttr` for identity that is not a
+network peer. What remains is a producer forgetting to declare — a mistake code review and
+the contract tests below are there to catch, rather than a property of the model.
 
 Treat a shareable report as safe for identity svcdoctor declared, which is all of it today.
-See ADR 0018, ADR 0022 and `docs/BACKLOG.md`.
+See ADR 0018, ADR 0022, ADR 0037 and `docs/BACKLOG.md`.
 
 ### The residual scan, and what it is allowed to call an identity
 
@@ -502,6 +503,12 @@ without transforming it.
 text appears in any string the report contains, so an identity that is a substring of ordinary
 report text — a host named `kafka`, matching the service identifier, or `host`, matching an
 attribute key and the pseudonym `host-001` — is still reported as surviving when it has not.
+**The `identity` namespace inherits this exactly, and inherits nothing worse**: a role named
+`PASS`, `error` or `host-001` fails closed, and so does a hostname with the same text, at
+HEAD and after ADR 0037. `TestPseudonymShapedIdentityFailsClosedExactlyAsAHostnameDoes`
+pins both halves side by side so the property is visibly shared rather than newly introduced.
+No special case was carved out for identity, because an exception in a security verifier for
+a value nobody records is a weakening with no user.
 Such a run cannot produce a shareable report. It fails **closed**, and it is far narrower than
 what it replaced, which broke every endpoint whose port was out of range. No shape-based rule
 can settle it: whether an occurrence of `host` is the hostname or part of `probe.host` is a
@@ -514,14 +521,48 @@ identity-bearing surfaces structurally instead of searching the serialized docum
 A producer that records identity **declares** it, using the value's type:
 
 ```go
-domain.HostAttr("broker.prod.internal")            // one identity
-domain.HostListAttr("broker.internal", "alt.internal")  // one identity per entry
+domain.HostAttr("broker.prod.internal")                 // one network peer
+domain.HostListAttr("broker.internal", "alt.internal")  // one peer per entry
+domain.IdentityAttr("payments_writer")                  // one logical identity
 ```
 
 Every declared value is replaced with a stable pseudonym, whatever its shape and wherever it
 appears. That is what makes a certificate's subject alternative names safe to record: a bare
 hostname cannot be recognized by shape — `broker.internal` and `TLS1.3` are the same shape —
-so declaration, not inference, is the mechanism. See **ADR 0022**.
+so declaration, not inference, is the mechanism. See **ADR 0022** and **ADR 0037**.
+
+### Three categories, and the boundaries between them
+
+| Category | Example | May be in `LOCAL_FULL` | In `SHAREABLE_REDACTED` |
+|---|---|---|---|
+| **Secret** | password, private key, SCRAM proof, session nonce | **no** — it has no path into evidence at all | never, in any form |
+| **Identity** | role, database, tenant, namespace | yes | `identity-NNN` |
+| **Host / IP** | DNS name, address, `host:port` | yes | `host-NNN` / `ip-NNN` |
+| **Ordinary** | SQLSTATE, TLS version, cipher suite, state | yes | unchanged |
+
+**An identity is not a secret, and the distinction is structural rather than a convention.**
+A secret is a `security.Secret`, it is revealed only inside an adapter's wire package, and no
+`AttrValue` constructor accepts one — so a password cannot reach a report even locally. An
+identity is an ordinary string the model is willing to hold, that a reader may see on their
+own machine, and that must not be published. Adding `AttrKindIdentity` therefore changes
+nothing about the credential boundary: it introduced no `security.Reveal` call site, and the
+production count is unchanged at one.
+
+**An identity is not a host.** They carry separate pseudonym namespaces, so a principal is
+never numbered as a machine. One raw value declared under both kinds — a database and a
+hostname that happen to share a name — receives one pseudonym in each namespace, because each
+attribute is rewritten according to what its own producer declared it held.
+
+**Declaring a value once makes that exact token sensitive everywhere in the report.** An
+ordinary string attribute, a list entry or a prose field carrying the same text is rewritten
+too. The reverse does not hold and is not claimed: a value nobody ever declared is preserved.
+That is the known limit above, and it is a producer obligation. **A future adapter that
+records a user or a database as an ordinary `StringAttr` will leak it, and redaction cannot
+detect that mistake** — a bare role name and a version string are the same shape. No key-name
+heuristic is added to compensate; `TestRedactionPerformsNoKeyNameInference` and
+`TestRedactionContainsNoServiceSpecificPolicy` in `test/security` keep it that way, because a
+heuristic would silently miss every service whose key spelling differs while creating the
+appearance of protection.
 
 Two rules go with it:
 

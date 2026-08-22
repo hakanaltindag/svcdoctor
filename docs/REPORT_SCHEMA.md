@@ -248,18 +248,29 @@ Allowed conceptual value categories:
 - timestamp
 - list of simple values
 - host, and list of hosts — a value that identifies a network peer
+- identity — a value that names a principal, a tenant, or a named resource, and that is
+  **not** a network peer
 
-The host categories were added in schema v1 by ADR 0022. They encode exactly like their
-string counterparts and differ only in the `kind` tag:
+The host categories were added in schema v1 by ADR 0022, and `identity` by ADR 0037. All
+three encode exactly like their string counterparts and differ only in the `kind` tag:
 
 ```json
 "tls.server_name":    {"kind": "host",     "value": "broker.internal"},
-"tls.peer_dns_names": {"kind": "hostList", "value": ["alt.internal", "broker.internal"]}
+"tls.peer_dns_names": {"kind": "hostList", "value": ["alt.internal", "broker.internal"]},
+"probe.role":         {"kind": "identity", "value": "payments_writer"}
 ```
 
 The tag is what lets structural redaction replace identity without guessing at shapes: a
 producer declares that a value names somebody, because a bare hostname is indistinguishable
 from any other dotted string. A renderer may treat them as strings; a redactor must not.
+
+`identity` and `host` are separate kinds because they are different claims about what a
+value *is*, and they carry separate pseudonym namespaces. A database recorded as a `host`
+would surface in a shareable report as `host-002` and send a reader looking for a machine.
+The kind carries privacy semantics; the **attribute key** carries the semantic role, and it
+survives redaction, so `"probe.role"` still reads as a role after its value becomes
+`identity-001`. There is deliberately no `identityList`: no producer records a list of
+logical identities, and the list kinds that exist were added for producers that had one.
 
 Avoid arbitrary nested dynamic objects unless Phase 1 demonstrates a real need.
 
@@ -484,7 +495,7 @@ report only — `redactions`.
   "outputMode": "SHAREABLE_REDACTED",
   "tlsVerificationDisabled": false,
   "credentialForwardingEnabled": false,
-  "redactions": {"hostname": 3, "ipAddress": 1, "evidenceId": 3, "prose": 4}
+  "redactions": {"hostname": 3, "ipAddress": 1, "evidenceId": 3, "prose": 4, "identity": 2}
 }
 ```
 
@@ -498,6 +509,16 @@ read as "nothing sensitive was present" rather than "nothing was removed".
 
 The counts come from the transformation, never from a caller: the ordinary constructor still
 refuses to produce `SHAREABLE_REDACTED`, so only a real redaction can label a report that
-way. There is no separate identity or username category — schema v1 has no structural
-carrier for a username, so one can only reach a report through an attribute value or prose
-and is counted there. See ADR 0018 and `docs/SECURITY.md`.
+way.
+
+`identity` counts declared logical identities — roles, databases, tenants — replaced in the
+`identity` pseudonym namespace. It was added by ADR 0037, which supersedes this section's
+earlier statement that schema v1 had no structural carrier for one. It is a separate figure
+from `hostname` because the two name different kinds of thing and do not share a namespace,
+and it does not distinguish a role from a database: the attribute key that carried the value
+already says which, and the key survives.
+
+The addition is **additive** under the versioning policy of section 1 — no field was removed
+and no existing field changed meaning — so `schemaVersion` stays `1`. A local report is
+unaffected, because it carries no `redactions` object at all. See ADR 0018, ADR 0022,
+ADR 0037 and `docs/SECURITY.md`.
