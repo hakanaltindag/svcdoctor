@@ -369,10 +369,12 @@ func TestAttrKindString(t *testing.T) {
 
 // TestAttrKindNamesCoverAllKinds fails if a kind is added without a name.
 func TestAttrKindNamesCoverAllKinds(t *testing.T) {
-	// AttrKindInvalid plus eight value kinds. Phase 2.3 added host and hostList
-	// so that a producer can declare a value as identity-bearing rather than
-	// leaving redaction to guess; see ADR 0022.
-	const wantCount = 9
+	// AttrKindInvalid plus nine value kinds. Phase 2.3 added host and hostList so
+	// that a producer can declare a value as identity-bearing rather than leaving
+	// redaction to guess (ADR 0022); Phase 4.1 added identity for the second
+	// category of identity — a principal or named resource that is not a network
+	// peer (ADR 0037).
+	const wantCount = 10
 
 	if len(attrKindNames) != wantCount {
 		t.Fatalf("attrKindNames has %d entries, want %d", len(attrKindNames), wantCount)

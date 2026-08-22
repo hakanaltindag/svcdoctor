@@ -38,6 +38,9 @@ const (
 	AttrKindHost
 	// AttrKindHostList holds an ordered list of such values.
 	AttrKindHostList
+	// AttrKindIdentity holds one value that names a principal, a tenant, or a
+	// named resource, and that is not a network peer.
+	AttrKindIdentity
 )
 
 // attrKindNames is indexed by AttrKind. Keep it aligned with the const block
@@ -52,6 +55,7 @@ var attrKindNames = [...]string{
 	AttrKindStringList: "stringList",
 	AttrKindHost:       "host",
 	AttrKindHostList:   "hostList",
+	AttrKindIdentity:   "identity",
 }
 
 // Valid reports whether k is a defined kind. AttrKindInvalid is not.
@@ -166,6 +170,49 @@ func HostListAttr(v ...string) AttrValue {
 	return AttrValue{kind: AttrKindHostList, list: list}
 }
 
+// IdentityAttr holds one logical identity: a value that names somebody or
+// something in the inspected environment, and that is not a network peer.
+//
+// A role, a user, a database, a schema, a namespace, a service account, a
+// tenant. The redactor replaces every such value with a stable pseudonym, so
+// correlation survives and identity does not. See ADR 0037.
+//
+// # It is not a secret, and it is not a host
+//
+// An identity may appear in a LOCAL_FULL report, unlike a credential, which has
+// no path into evidence at all: there is no constructor here that accepts a
+// security.Secret, and this kind does not create one. An identity is a value a
+// reader is allowed to see locally and must not publish.
+//
+// It is separate from HostAttr because the two are different claims about what a
+// value *is*. Recording a database through HostAttr would say it names a network
+// peer, which is false, and it would surface in a shareable report as
+// "host-002", sending a reader to look for a machine that does not exist. The
+// two kinds also carry separate pseudonym namespaces for that reason.
+//
+// # There is deliberately no IdentityListAttr
+//
+// No producer records a list of logical identities. Adding one now would be a
+// guess about a caller that does not exist, and the list kinds that do exist
+// were added because a real producer had a list to record. A future producer
+// that genuinely has one adds it then, with the same one-identity-per-entry rule
+// HostListAttr documents.
+//
+// # An empty identity is not an identity
+//
+// IdentityAttr("") is a valid AttrValue holding no identity, exactly as
+// HostAttr("") is. Redaction collects nothing from it and manufactures no
+// pseudonym: inventing "identity-001" for an absent value would tell a reader
+// that something was removed when nothing was there.
+//
+// The value is not normalized. No trimming, no case folding, no Unicode
+// normalization: two identities are the same identity when their text is the
+// same, and a redactor that folded them would merge two principals a server
+// treats as distinct.
+func IdentityAttr(v string) AttrValue {
+	return AttrValue{kind: AttrKindIdentity, str: v}
+}
+
 // Kind reports which category of value v holds.
 func (v AttrValue) Kind() AttrKind { return v.kind }
 
@@ -202,6 +249,11 @@ func (v AttrValue) Host() (string, bool) {
 	return v.str, v.kind == AttrKindHost
 }
 
+// Identity returns the logical identity and whether v holds one.
+func (v AttrValue) Identity() (string, bool) {
+	return v.str, v.kind == AttrKindIdentity
+}
+
 // HostList returns a copy of the peer identities and whether v holds them.
 func (v AttrValue) HostList() ([]string, bool) {
 	if v.kind != AttrKindHostList {
@@ -230,7 +282,7 @@ func (v AttrValue) StringList() ([]string, bool) {
 // This is for logs and debugging. The canonical form is MarshalJSON.
 func (v AttrValue) String() string {
 	switch v.kind {
-	case AttrKindString, AttrKindHost:
+	case AttrKindString, AttrKindHost, AttrKindIdentity:
 		return v.str
 	case AttrKindInt:
 		return strconv.FormatInt(v.num, 10)
@@ -270,7 +322,7 @@ func (v AttrValue) MarshalJSON() ([]byte, error) {
 	out := attrJSON{Kind: v.kind.String()}
 
 	switch v.kind {
-	case AttrKindString, AttrKindHost:
+	case AttrKindString, AttrKindHost, AttrKindIdentity:
 		out.Value = v.str
 	case AttrKindInt:
 		out.Value = v.num

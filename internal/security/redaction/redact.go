@@ -87,7 +87,7 @@ func Redact(report domain.Report) (domain.Report, error) {
 //
 // Collection is separate from assignment so that pseudonym numbering depends on
 // the set of values, not on the order they were found.
-func collect(report domain.Report) (hosts, ips []string, ids []domain.EvidenceID) {
+func collect(report domain.Report) (hosts, ips, identities []string, ids []domain.EvidenceID) {
 	classify(report.Target().Requested(), &hosts, &ips)
 	for _, n := range report.Target().Normalized() {
 		classify(n, &hosts, &ips)
@@ -100,7 +100,7 @@ func collect(report domain.Report) (hosts, ips []string, ids []domain.EvidenceID
 		ids = append(ids, e.ID())
 		classify(e.Subject().Ref(), &hosts, &ips)
 		for _, v := range e.Attributes() {
-			collectAttr(v, &hosts, &ips)
+			collectAttr(v, &hosts, &ips, &identities)
 		}
 	}
 
@@ -110,7 +110,7 @@ func collect(report domain.Report) (hosts, ips []string, ids []domain.EvidenceID
 		}
 	}
 
-	return hosts, ips, ids
+	return hosts, ips, identities, ids
 }
 
 // collectAttr gathers identifying values from an attribute.
@@ -130,7 +130,7 @@ func collect(report domain.Report) (hosts, ips []string, ids []domain.EvidenceID
 //     a producer that forgot to declare. A bare name in a plain string cannot be
 //     recognized — "broker.internal" and "TLS1.3" are the same shape — which is
 //     exactly why the declared kinds exist.
-func collectAttr(v domain.AttrValue, hosts, ips *[]string) {
+func collectAttr(v domain.AttrValue, hosts, ips, identities *[]string) {
 	switch v.Kind() {
 	case domain.AttrKindHost:
 		host, _ := v.Host()
@@ -139,6 +139,16 @@ func collectAttr(v domain.AttrValue, hosts, ips *[]string) {
 		list, _ := v.HostList()
 		for _, host := range list {
 			classify(host, hosts, ips)
+		}
+	case domain.AttrKindIdentity:
+		// A declared identity is never classified: it is not a peer, so it is
+		// never split at a colon and never read as an address. An empty one is
+		// dropped rather than numbered, because manufacturing a pseudonym for an
+		// absent value would report a removal that did not happen. This mirrors
+		// classify, which returns early on an empty host for the same reason.
+		id, _ := v.Identity()
+		if id != "" {
+			*identities = append(*identities, id)
 		}
 	case domain.AttrKindString:
 		s, _ := v.Str()
@@ -323,6 +333,12 @@ func redactAttr(t *table, v domain.AttrValue) domain.AttrValue {
 			list[i] = t.attrValue(host)
 		}
 		return domain.HostListAttr(list...)
+	case domain.AttrKindIdentity:
+		// The declared kind decides the namespace. This never falls through to
+		// attrValue, so a value that is also a hostname somewhere else in the
+		// report is still rewritten as the identity its producer declared here.
+		id, _ := v.Identity()
+		return domain.IdentityAttr(t.identity(id))
 	case domain.AttrKindString:
 		s, _ := v.Str()
 		return domain.StringAttr(t.attrValue(s))
@@ -363,6 +379,16 @@ func (t *table) attrValue(s string) string {
 		if _, known := t.hosts[host]; known {
 			return joinHostPort(t.host(host), port)
 		}
+	}
+	// Identity is the last resort, and only for undeclared text. Declaring a
+	// value identity-bearing anywhere in the report makes that exact token
+	// sensitive everywhere in it, which is the contract the host categories
+	// already have: a plain string equal to a collected hostname is rewritten
+	// too. Checking it after the peer categories is what keeps every existing
+	// rewrite byte-identical, so a value that is both is reported as the peer it
+	// also is rather than changing category because a new kind exists.
+	if _, ok := t.identities[s]; ok {
+		return t.identity(s)
 	}
 	return s
 }
@@ -471,6 +497,11 @@ func verifyNoResidual(t *table, out domain.Report) error {
 	for _, original := range sortedKeys(t.ips) {
 		if containsAny(text, original) {
 			return fmt.Errorf("%w: an IP address survived redaction", ErrRedaction)
+		}
+	}
+	for _, original := range sortedKeys(t.identities) {
+		if containsAny(text, original) {
+			return fmt.Errorf("%w: a logical identity survived redaction", ErrRedaction)
 		}
 	}
 	for _, original := range sortedIDs(t.ids) {

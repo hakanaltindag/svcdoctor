@@ -26,6 +26,16 @@ type table struct {
 	ips   map[string]string
 	ids   map[domain.EvidenceID]domain.EvidenceID
 
+	// identities holds values a producer declared to be logical identities.
+	//
+	// It is a separate namespace from hosts and ips, not a shared counter, and
+	// that is a decision rather than an accident of implementation. A role and a
+	// hostname are different kinds of thing, and numbering them together would
+	// tell a reader that "identity-004" and "host-004" are related when nothing
+	// says they are. It also keeps the categories independent when one raw value
+	// happens to be both; see identity.
+	identities map[string]string
+
 	// prose holds the replacements applied to free text, longest source value
 	// first so that a longer value is never partly rewritten by a shorter one
 	// it contains.
@@ -34,9 +44,10 @@ type table struct {
 	// usedHosts, usedIPs and usedIDs record which values were actually
 	// replaced, so the reported counts describe the transformation that
 	// happened rather than the values that were collected.
-	usedHosts map[string]struct{}
-	usedIPs   map[string]struct{}
-	usedIDs   map[domain.EvidenceID]struct{}
+	usedHosts      map[string]struct{}
+	usedIPs        map[string]struct{}
+	usedIDs        map[domain.EvidenceID]struct{}
+	usedIdentities map[string]struct{}
 
 	proseFields int
 }
@@ -48,16 +59,19 @@ type replacement struct {
 
 // newTable assigns pseudonyms to the collected values.
 //
-// hosts and ips are the distinct identifying values found structurally; ids are
-// every evidence identifier in the graph.
-func newTable(hosts, ips []string, ids []domain.EvidenceID) *table {
+// hosts and ips are the distinct identifying values found structurally,
+// identities are the values a producer declared through domain.IdentityAttr, and
+// ids are every evidence identifier in the graph.
+func newTable(hosts, ips, identities []string, ids []domain.EvidenceID) *table {
 	t := &table{
-		hosts:     make(map[string]string, len(hosts)),
-		ips:       make(map[string]string, len(ips)),
-		ids:       make(map[domain.EvidenceID]domain.EvidenceID, len(ids)),
-		usedHosts: make(map[string]struct{}),
-		usedIPs:   make(map[string]struct{}),
-		usedIDs:   make(map[domain.EvidenceID]struct{}),
+		hosts:          make(map[string]string, len(hosts)),
+		ips:            make(map[string]string, len(ips)),
+		identities:     make(map[string]string, len(identities)),
+		ids:            make(map[domain.EvidenceID]domain.EvidenceID, len(ids)),
+		usedHosts:      make(map[string]struct{}),
+		usedIPs:        make(map[string]struct{}),
+		usedIDs:        make(map[domain.EvidenceID]struct{}),
+		usedIdentities: make(map[string]struct{}),
 	}
 
 	slices.Sort(hosts)
@@ -72,6 +86,12 @@ func newTable(hosts, ips []string, ids []domain.EvidenceID) *table {
 		t.ips[ip] = fmt.Sprintf("ip-%03d", i+1)
 	}
 
+	slices.Sort(identities)
+	identities = slices.Compact(identities)
+	for i, v := range identities {
+		t.identities[v] = fmt.Sprintf("identity-%03d", i+1)
+	}
+
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	for i, id := range ids {
@@ -82,6 +102,9 @@ func newTable(hosts, ips []string, ids []domain.EvidenceID) *table {
 		t.prose = append(t.prose, replacement{from: from, to: to})
 	}
 	for from, to := range t.ips {
+		t.prose = append(t.prose, replacement{from: from, to: to})
+	}
+	for from, to := range t.identities {
 		t.prose = append(t.prose, replacement{from: from, to: to})
 	}
 	for from, to := range t.ids {
@@ -118,6 +141,24 @@ func (t *table) ip(addr string) string {
 	return p
 }
 
+// identity returns the pseudonym for a declared logical identity, recording that
+// it was replaced.
+//
+// It consults only the identity namespace. A value that is also a collected
+// hostname keeps two independent pseudonyms — "host-001" where a producer
+// declared a peer and "identity-001" where a producer declared a principal —
+// because each attribute is rewritten according to what its own producer said it
+// held. Letting one namespace win would make the transformation depend on which
+// unrelated node happened to record the same text.
+func (t *table) identity(v string) string {
+	p, ok := t.identities[v]
+	if !ok {
+		return v
+	}
+	t.usedIdentities[v] = struct{}{}
+	return p
+}
+
 // id returns the pseudonym for an evidence identifier.
 //
 // The error names the identifier because reaching this branch means the graph
@@ -146,6 +187,7 @@ func (t *table) counts() domain.RedactionCounts {
 		IPAddress:  len(t.usedIPs),
 		EvidenceID: len(t.usedIDs),
 		Prose:      t.proseFields,
+		Identity:   len(t.usedIdentities),
 	}
 }
 

@@ -73,10 +73,15 @@ func (m OutputMode) MarshalJSON() ([]byte, error) {
 // reader can tell that redaction happened and roughly what kind of thing it
 // touched, which is what docs/REPORT_SCHEMA.md section 9 asks for.
 //
-// There is no separate identity or username category. Schema v1 has no
-// structural carrier for a username: the report holds no credential, and a
-// username can only reach it inside an attribute value or a prose field, where
-// it is counted under those categories.
+// Identity is a separate category from Hostname because the two name different
+// kinds of thing: a network peer, and a principal or named resource such as a
+// role or a database. Merging them would make one figure that a reader cannot
+// act on, and it would imply the two share a pseudonym namespace, which they do
+// not. It does not distinguish a role from a database — the attribute key that
+// carried the value already says which, and it survives redaction. See ADR 0037.
+//
+// Every category counts distinct values, never occurrences, so the figures say
+// what kind of thing was removed and not how often it appeared.
 type RedactionCounts struct {
 	// Hostname counts DNS names replaced, wherever they appeared.
 	Hostname int `json:"hostname"`
@@ -87,11 +92,13 @@ type RedactionCounts struct {
 	// Prose counts human-readable fields in which at least one value was
 	// replaced.
 	Prose int `json:"prose"`
+	// Identity counts declared logical identities replaced.
+	Identity int `json:"identity"`
 }
 
 // Total returns how many replacements were counted.
 func (c RedactionCounts) Total() int {
-	return c.Hostname + c.IPAddress + c.EvidenceID + c.Prose
+	return c.Hostname + c.IPAddress + c.EvidenceID + c.Prose + c.Identity
 }
 
 // ReportSecurity carries the facts a reader needs to interpret a report
@@ -160,7 +167,7 @@ func NewShareableReportSecurity(from ReportSecurity, redactions RedactionCounts)
 			ErrInvalidValue, OutputModeLocalFull, from.outputMode)
 	}
 	if redactions.Hostname < 0 || redactions.IPAddress < 0 ||
-		redactions.EvidenceID < 0 || redactions.Prose < 0 {
+		redactions.EvidenceID < 0 || redactions.Prose < 0 || redactions.Identity < 0 {
 		return ReportSecurity{}, fmt.Errorf(
 			"%w: redaction counts must not be negative", ErrInvalidValue)
 	}

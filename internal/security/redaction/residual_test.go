@@ -20,10 +20,11 @@ import (
 // test would prove nothing about the net.
 
 const (
-	residualHost = "leaked.example.internal"
-	residualIPv4 = "203.0.113.7"
-	residualIPv6 = "2001:db8:dead::7"
-	residualID   = "probe.step/leaked.example.internal/203.0.113.7"
+	residualHost  = "leaked.example.internal"
+	residualIPv4  = "203.0.113.7"
+	residualIPv6  = "2001:db8:dead::7"
+	residualID    = "probe.step/leaked.example.internal/203.0.113.7"
+	residualIdent = "payments_writer"
 )
 
 // residualTable is the table a real run would have built for these values.
@@ -31,6 +32,7 @@ func residualTable() *table {
 	return newTable(
 		[]string{residualHost},
 		[]string{residualIPv4, residualIPv6},
+		[]string{residualIdent},
 		[]domain.EvidenceID{domain.EvidenceID(residualID)},
 	)
 }
