@@ -24,7 +24,7 @@ Service findings use the service name as the namespace:
 ```text
 KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE
 KAFKA_SECURITY_PROTOCOL_MISMATCH
-POSTGRES_TLS_POLICY_MISMATCH
+POSTGRES_TLS_DECLINED
 ```
 
 ### Generic transport findings
@@ -323,3 +323,65 @@ subject reference at all — a control character, invalid UTF-8, leading whitesp
 **no evidence node**, and survives only as `kafka.metadata.unrepresentable_entry_count` on the
 exchange. A finding with nothing to reference is not expressible under ADR 0014. See ADR 0035
 section 1.
+
+---
+
+### Authorized by ADR 0040, not yet implemented
+
+Phase 4.6a fixed the twelve PostgreSQL finding codes exactly, as ADR 0034 did for Kafka.
+**None of them is produced yet** — `internal/diagnosis/postgres` is empty — so the codes
+svcdoctor emits today are still the two Kafka ones above.
+
+| Code | Anchor step | Severity | `vantageDependent` |
+|---|---|---|---|
+| `POSTGRES_TLS_DECLINED` | `postgres.ssl_request` | ERROR | false |
+| `POSTGRES_STARTUP_FAILED` | `postgres.startup` | ERROR | true |
+| `POSTGRES_CONNECTION_NOT_PERMITTED` | `postgres.startup` / `postgres.authentication` | ERROR | true |
+| `POSTGRES_CREDENTIALS_REJECTED` | `postgres.authentication` | ERROR | false |
+| `POSTGRES_PEER_VERIFICATION_FAILED` | `postgres.authentication` | ERROR | true |
+| `POSTGRES_AUTHENTICATION_MECHANISM_UNAVAILABLE` | `postgres.authentication` | WARN on FAIL, INFO on UNKNOWN | true |
+| `POSTGRES_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR` | `postgres.authentication` | INFO | true |
+| `POSTGRES_CREDENTIAL_WITHHELD` | `postgres.authentication` | WARN | false |
+| `POSTGRES_AUTHENTICATION_FAILED` | `postgres.authentication` | ERROR | true |
+| `POSTGRES_DATABASE_NOT_FOUND` | `postgres.session` | ERROR | false |
+| `POSTGRES_DATABASE_CONNECT_DENIED` | `postgres.session` | ERROR | false |
+| `POSTGRES_SESSION_ESTABLISHMENT_FAILED` | `postgres.session` | ERROR | true |
+
+Every one is `CONFIRMED` / `HIGH`, and none is a `HYPOTHESIS`: each states a deliberately
+narrow claim that is directly evidenced, and not knowing a root cause is grounds for making
+the claim narrower rather than for hedging the kind or the confidence. See ADR 0040 §6.2.
+
+Five properties of the set are worth reading before the record itself:
+
+- **At most one primary Phase 4.6 diagnosis per node.** Each non-passing `postgres.*` node
+  yields at most one of the twelve, and a failed one yields exactly one, so section 5's noise
+  is prevented structurally rather than by suppression. **This is a scope, not a permanent
+  invariant** — a future complementary claim on the same node (security posture, certificate
+  posture) is explicitly not foreclosed, per ADR 0034 section 3's duplicate-versus-
+  complementary test. There is no engine deduplication and none is wanted.
+- **Each step has a floor**, and the floors name only the boundary: *the exchange did not
+  complete*. A pooler's `08P01` lands there. It never becomes a credential, database or
+  capacity claim. The floors' codes say `FAILED` rather than `REJECTED` because their triggers
+  include peer closes and malformed frames, where nothing rejected anything.
+- **Severity varies within one code, once.** `POSTGRES_AUTHENTICATION_MECHANISM_UNAVAILABLE`
+  is WARN when the endpoint offers nothing svcdoctor performs and INFO when svcdoctor lacks
+  what the endpoint demands. The claim is identical; the impact is not.
+- **Seven of the twelve are vantage-dependent**, on two distinct grounds: proved, where
+  `pg_hba` matches the source address to select both the refusal and the demanded
+  authentication method, and where an element on the path can answer in the endpoint's place;
+  and unassertable, where a floor deliberately does not attribute a cause and so cannot
+  exclude a source-keyed one. `false` is a positive claim of position-independence, not a
+  default.
+- **Authentication has a direction, and the two directions never share a `FailureClass`.**
+  *The peer refused what svcdoctor presented* and *the peer could not prove itself to
+  svcdoctor* are different observations leading to opposite actions, so
+  `POSTGRES_CREDENTIALS_REJECTED` and `POSTGRES_PEER_VERIFICATION_FAILED` rest on different
+  classes rather than on a predicate that inspects a SQLSTATE. This is a generic
+  authentication invariant, not a PostgreSQL one — see ADR 0040 section 5.1.
+- **No PostgreSQL finding fires on `dns.lookup`, `tcp.connect` or `tls.handshake`.** Those are
+  generic transport nodes and remain unowned, so a PostgreSQL run that fails there produces no
+  finding. That is ADR 0017's still-open blocker, restated rather than worked around, and it
+  is tracked as a product release gate in `docs/BACKLOG.md`.
+
+See ADR 0040 for the trigger, claim, must-not-claim list, evidence set and recommendation
+boundary of each, and `docs/validation/POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` for the evidence.

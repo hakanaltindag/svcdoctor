@@ -212,6 +212,34 @@ A deferral is a decision too, and each names the condition that should reopen it
   they are identity; `BackendKeyData` is read for its length and discarded whole, secret and
   process ID alike.
 
+- **0040** is the 0034 analogue for PostgreSQL, and it spends its length deciding what
+  svcdoctor may *not* say. Its primary invariant is that diagnosis names a root cause only
+  when the evidence contract uniquely supports it, and otherwise names the observed failure
+  boundary — the triple *(step, state, failure class)* a producer committed to. The fact
+  that forces it is a pooler: pgBouncer emits `08P01` for at least six unrelated conditions
+  and moves three of them to an earlier protocol step, so a missing database is a
+  `postgres.session` fact directly and a `postgres.startup` fact behind a proxy. Twelve
+  finding codes are authorized, each with a must-not-claim list; none is a `HYPOTHESIS`,
+  because every claim is about something observed. Its own falsifying result is that
+  `AUTH_CREDENTIALS_REJECTED` points two ways — one producer is svcdoctor refusing the
+  *peer's* server signature — and the graph cannot separate the directions, so the finding
+  over that case is worded to be true whichever party refused. Six candidate findings are
+  refused by name, and a PostgreSQL run that fails at DNS, TCP or TLS produces no finding at
+  all, which the record states rather than hides. It was then **revised by an adversarial
+  review before a single rule existed**, which is the cheapest such revision will ever be: the
+  two mechanism codes had been split on whose gap it is, a boundary that moves with
+  svcdoctor's own capability rather than with the target; the L4 floor's code claimed the peer
+  *rejected* something its own trigger disproves; and six `vantageDependent` values asserted a
+  position-independence that `pg_hba` source matching disproves. The code count survived; the
+  code set did not. A follow-on pass, **0040 §5.1**, then removed the one code that pass had
+  marked provisional — by correcting the producer under it rather than shipping around it. The
+  adapter had normalized *the peer refused what I presented* and *the peer could not prove
+  itself to me* onto one class, and the second is only reachable once the peer has **accepted**
+  the material, so the class stated the opposite of what happened. One generic
+  `FailureClass` — `AUTH_PEER_VERIFICATION_FAILED`, the 39th — and a two-branch split fixed it,
+  and the resulting invariant is reusable by any mutual mechanism. ADR 0038 carries the
+  correction as amendment D.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention

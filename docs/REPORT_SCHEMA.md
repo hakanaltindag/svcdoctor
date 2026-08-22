@@ -312,7 +312,7 @@ Finding codes are service-namespaced strings, for example:
 
 ```text
 KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE
-POSTGRES_TLS_POLICY_MISMATCH
+POSTGRES_TLS_DECLINED
 ```
 
 There is no centralized enumeration listing every service's codes. See `docs/FINDINGS.md`

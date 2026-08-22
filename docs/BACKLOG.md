@@ -1705,23 +1705,136 @@ that owns that package.
 **No report schema change, no `AttrKind`, no redaction change, no new dependency, no new
 `security.Reveal` site.**
 
-### Phase 4.6 — Diagnosis policy ADR: NOT STARTED
+### Phase 4.6a — Diagnosis policy ADR: COMPLETE
 
-The 0034 analogue: written against real graphs, authorizing exact findings.
+The 0034 analogue, written against the producers and the Phase 4.4a/4.5a wire measurements.
+**ADR 0040**, with `docs/validation/POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` as its evidence.
+No production Go code was written or changed.
 
-- [ ] Every field of every authorized finding fixed, as ADR 0034 §5 does
-- [ ] Vantage dependence decided claim by claim, not copied
-- [ ] Credential dependence carried in the discriminator, and the decision not to add a
-      field re-examined against real output
-- [ ] `POSTGRES_CREDENTIALS_REJECTED` proven not to claim a cause it cannot establish
-- [ ] Minimal causal evidence sets fixed per finding
-- [ ] `internal/service/postgres` created, holding only what a rule genuinely reads
+- [x] Every field of every authorized finding fixed, as ADR 0034 §5 does — **twelve codes**,
+      each with trigger, claim, must-not-claim list, severity, evidence set and
+      recommendation boundary
+- [x] Vantage dependence decided claim by claim, not copied — **six of twelve are
+      vantage-dependent**, on two distinct grounds (ADR 0040 §6.1): proved, where `pg_hba`
+      matches the source address to select both the refusal *and the demanded authentication
+      method*; and unassertable, where a floor deliberately does not attribute a cause and so
+      cannot exclude a source-keyed one. `false` is a positive claim of position-independence
+- [x] Credential dependence carried in the discriminator, and the decision not to add a
+      field re-examined — **no finding in ADR 0040 is a `HYPOTHESIS`**, so no discriminator
+      arises: every claim is about an observed boundary, which is §1 working as intended.
+      No new field
+- [x] `POSTGRES_CREDENTIALS_REJECTED` proven not to claim a cause it cannot establish — it
+      requires `sqlstate=28P01`, so it fires only where the peer itself asserted the refusal
+- [x] Minimal causal evidence sets fixed per finding
+- [x] `internal/service/postgres` specified: **eight** constants, each because a rule reads it,
+      each moved rather than copied (ADR 0040 §22). Created in 4.6b
 
-### Phase 4.7 — Diagnosis rules: NOT STARTED
+**The falsifying result of this pass.** `AUTH_CREDENTIALS_REJECTED` on the authentication node
+has three producers and one of them points the other way: `ErrServerSignatureMismatch` is
+**svcdoctor refusing the peer's server signature**, not the peer refusing svcdoctor's material.
+The graph cannot separate it from `ErrSCRAMRejected`, because neither decodes an
+`ErrorResponse` and so neither records a SQLSTATE. ADR 0040 §11 answers with a claim true in
+both directions and records the producer-side repair as a reopen condition rather than
+guessing.
 
-- [ ] `internal/diagnosis/postgres` implementing 4.6 exactly and inventing nothing
-- [ ] Duplicate test applied against every other finding
-- [ ] Redaction test: every finding still true with hostnames, roles and databases removed
+**The `08P01` policy, stated once:** a pooler emits it for at least six unrelated conditions
+at two different protocol steps. It is never a credential finding, never a database finding,
+and never classified by protocol position. It lands on a step floor —
+`POSTGRES_STARTUP_FAILED` or `POSTGRES_AUTHENTICATION_FAILED` — which names where the
+connection died and points at the endpoint's own log, the one place the distinction survives.
+
+**Corrected by an adversarial pre-implementation review, before any rule existed.** Nine
+defects, all fixed in ADR 0040; the code *count* is unchanged at twelve and the code *set* is
+not. The substantive corrections: the two mechanism findings were split on *whose gap it is*,
+which moves with svcdoctor's own capability rather than with the target, and are now one code
+with a varying severity; `POSTGRES_STARTUP_REJECTED` became `POSTGRES_STARTUP_FAILED` because
+its trigger includes peer closes and malformed frames; the floors' "no attributable cause"
+sentence became class-gated because it is false where a class already names a stronger fact;
+six `vantageDependent` values flipped to `true`; and "one node, one finding" was rescoped from
+a permanent invariant to the Phase 4.6 primary set.
+
+### Phase 4.6a.5 — SCRAM producer evidence correction: COMPLETE
+
+The only production Go change ADR 0040 has caused, and the reason no Phase 4.6 finding code
+ships provisional.
+
+- [x] `AUTH_PEER_VERIFICATION_FAILED` added to `internal/domain` — the 39th class, generic,
+      naming no mechanism and no protocol. Count guard updated 39 → 40 entries deliberately
+- [x] `ErrServerSignatureMismatch` → `AUTH_PEER_VERIFICATION_FAILED`; `ErrSCRAMRejected`
+      stays `AUTH_CREDENTIALS_REJECTED`. The two directions no longer share a class
+- [x] `e=invalid-username-encoding` → `ErrUnexpectedResponse`: an encoding fault, not a
+      rejection. Unreachable in practice — svcdoctor sends an empty username
+- [x] Every production producer of `AUTH_CREDENTIALS_REJECTED` audited, PostgreSQL and Kafka
+      alike; all are direction A, so the class is trustworthy on its own
+- [x] Producer direction contract test, asserting both directions positively and negatively
+- [x] Attribute-set test: no signature, proof, nonce, salt or auth message can reach evidence
+- [x] Six mutations applied for real, each compiled and confirmed caught, then restored
+- [x] ADR 0038 amendment D records the unsound normalization without rewriting history
+
+**Why it was worth the 39th class.** The old mapping was not merely imprecise. A SCRAM server
+sends a server-final only after accepting the client proof, so `ErrServerSignatureMismatch` is
+reachable only where the peer **accepted** svcdoctor's material and then failed to prove
+itself — and `AUTH_CREDENTIALS_REJECTED` says the peer refused it. The class asserted the
+opposite of what happened, and no diagnosis-layer predicate can repair a class that lies.
+
+**No** `security.Reveal` change (still 2), no new attribute, no `AttrKind`, no redaction
+change, no report-schema change, no dependency change, no Kafka production change.
+
+### Phase 4.6b — Diagnosis rules: AUTHORIZED, NOT STARTED
+
+Implements ADR 0040 exactly. All seventeen authorization-gate questions are answered in it.
+
+- [ ] `internal/service/postgres`: eight constants moved from the adapter, no behaviour change
+- [ ] `internal/diagnosis/postgres`: four rules, one per anchor step, the twelve codes of
+      ADR 0040 §6 — no thirteenth
+- [ ] At most one **primary Phase 4.6 diagnosis** per node — mutual exclusivity structural,
+      not asserted (ADR 0040 §3). Scoped to the primary set: the guards must **not** be
+      written as "no node ever carries two findings"
+- [ ] Totality: every `postgres.*` FAIL node in a producible graph yields exactly one primary
+      finding (ADR 0040 §4), subject to the §16 parent precondition
+- [ ] The acceptance matrix (ADR 0040 §24) — 42 rows after correction, every `—` row asserted
+      as a decision, and every row additionally asserting `vantageDependent`
+- [ ] The 25 mutation guards (ADR 0040 §25, A–U and O–O5), each verified to compile before
+      it is trusted; O–O5 are already applied and confirmed by Phase 4.6a.5
+- [ ] Guards G1–G9 (ADR 0040 §23), including the redaction bar (G6: every finding still true
+      with hostnames, roles and databases replaced), the `error_is_native` non-branching guard
+      (G8) and the standalone credential-predicate guard (G9)
+- [ ] `POSTGRES_CREDENTIALS_REJECTED` keys on the **class alone** — no SQLSTATE clause. The
+      guard for it lives at the producer (Phase 4.6a.5), not in the predicate
+- [ ] Floor detail is class-gated: the attribution sentence renders only for
+      `PROTOCOL_UNEXPECTED_RESPONSE`, never for `PROTOCOL_UNSUPPORTED_VERSION`,
+      `PROTOCOL_MALFORMED_RESPONSE` or `PROTOCOL_PEER_CLOSED` (ADR 0040 §8.1)
+- [ ] `POSTGRES_PEER_VERIFICATION_FAILED` (ADR 0040 §11) — stable, not provisional, and
+      worded so it never reads as a rejected credential or as a named cause
+- [ ] Determinism: the same graph encoded twice, byte-identical
+
+**Not owned, and recorded rather than deferred silently:** generic DNS/TCP/TLS findings
+(ADR 0017's open blocker), TLS verification quality, replica and read-only facts, capacity
+claims, and peer-implementation identification. A PostgreSQL run that fails at DNS, TCP or TLS
+produces zero findings, and ADR 0040 §2 says so in as many words. **Phase 4.6b must not fix
+that** — see the release gate below.
+
+### Product/CLI release gate — generic transport diagnosis ownership: OPEN
+
+**Not Phase 4.6b scope, and not a PostgreSQL question.** Recorded here because it is the one
+place the PostgreSQL slice is architecturally correct and incomplete as a product.
+
+> **Before the first usable CLI/product release, the repository must decide the owner of
+> generic transport diagnosis for user-requested endpoints.**
+
+Today a run whose endpoint fails at DNS, TCP or TLS produces complete evidence, a correct
+`summary.firstBrokenLayer`, and **zero actionable findings** — for Kafka and PostgreSQL alike.
+Those are the *common* failure modes: a name that does not resolve, a refused port, an
+untrusted certificate. A first-time user meets a report that reads as broken.
+
+It is a gate rather than a task because the blocker is a fact, not effort: a rule needs run
+intent — *is this a service diagnosis or a bare endpoint check?* — which `diagnosis.Rule`
+cannot see, receiving only a `Graph`. See **ADR 0017**, and ADR 0040 §26.1.
+
+- [ ] Decide whether generic transport findings exist at all, and who owns them
+- [ ] If they do: decide how run intent reaches a rule without widening `diagnosis.Rule` into
+      something that can branch on a service name (ADR 0009)
+- [ ] Until then, keep the gap stated in the report rather than papered over by a service rule
 
 ### Phase 4.8 — Real PostgreSQL integration validation: NOT STARTED
 

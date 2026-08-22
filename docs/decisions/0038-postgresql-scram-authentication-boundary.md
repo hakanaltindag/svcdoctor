@@ -1190,6 +1190,51 @@ text, so it exempted wire packages from the channel-authority rules ADR 0029 res
 was a path prefix that also covered `wire/`. Neither was exploited. Both now match by
 message text and by a path that stops at the directory, and ten directions are verified.
 
+### D. Section 15's normalization of a server-signature mismatch was unsound (Phase 4.6a.5)
+
+**A correction, not a rewrite.** Everything this record decided about the *wire*
+stands: success is still the conjunction of a verified signature and
+`AuthenticationOk`, the reveal boundary is unchanged, and no measurement is
+revised. What was wrong is one line of **normalization** downstream of it.
+
+`internal/adapter/postgres` mapped both SCRAM failure sentinels onto one class:
+
+```text
+wire.ErrSCRAMRejected            -> AUTH_CREDENTIALS_REJECTED
+wire.ErrServerSignatureMismatch  -> AUTH_CREDENTIALS_REJECTED
+```
+
+justified in the code comment as *"it is a mutual mechanism, so the refusal is
+mutual"*. That reasoning does not survive contact with the class contract.
+`FailureAuthCredentialsRejected` states *"the peer refused the authentication
+material it was presented"* — and on the second path the peer did no such thing.
+A SCRAM server sends a server-final **only after accepting the client proof**; a
+peer that rejects the proof answers with an error in its place and never sends a
+signature at all. So `ErrServerSignatureMismatch` is reachable only where the
+peer **accepted** the material and then failed to prove itself, and the class
+asserted the opposite of what happened.
+
+Two directions, and they are not the same observation:
+
+```text
+peer -> svcdoctor    the peer refused what it was presented       AUTH_CREDENTIALS_REJECTED
+svcdoctor -> peer    the peer could not prove itself to svcdoctor AUTH_PEER_VERIFICATION_FAILED
+```
+
+Corrected in Phase 4.6a.5 by adding the second class to `internal/domain` —
+generic, naming no mechanism — and splitting the branch. ADR 0040 §5.1 carries
+the reasoning and states the reusable invariant. **This record's §15 mapping
+table should be read with that split applied.**
+
+A second, smaller correction rode along. §15 grouped three RFC 5802 server-error
+tokens as rejections; `e=invalid-username-encoding` is an **encoding fault in the
+username field**, not a decision about the material, and now yields
+`ErrUnexpectedResponse`. It stays unreachable for the reason §15 already gave —
+this client sends an empty username — so nothing observable changes.
+
+Neither correction touches a byte on the wire, the `security.Reveal` boundary,
+the evidence attribute set, redaction, or the report schema.
+
 ## Reopen conditions
 
 - **A differential SASLprep harness against `pg_saslprep`, or a real deployment blocked by
