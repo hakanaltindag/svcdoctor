@@ -1256,13 +1256,92 @@ func TestAuthenticateRejectsUnusableInput(t *testing.T) {
 	if _, err := Authenticate(context.Background(), builder, nil, canaryCredential(t), AuthParams{}); !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("nil result: err = %v", err)
 	}
-	if _, err := Authenticate(context.Background(), builder, result, security.Credential{}, AuthParams{}); !errors.Is(err, ErrInvalidInput) {
-		t.Errorf("zero credential: err = %v", err)
-	}
+	// A zero credential was in this list until Phase 4.11b. It is no longer a
+	// caller defect: an endpoint that demands authentication and a run that holds
+	// nothing is a diagnostic outcome, and it is recorded rather than refused.
+	// See TestAZeroCredentialIsRecordedRatherThanRefused.
 	if _, err := Authenticate(context.Background(), builder, result, canaryCredential(t), AuthParams{
 		ExchangeTimeout: -time.Second,
 	}); !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("negative timeout: err = %v", err)
+	}
+}
+
+// TestAZeroCredentialIsRecordedRatherThanRefused pins ADR 0046's producer.
+//
+// The run reaches authentication, has nothing to present, and says so. Every
+// assertion here is one half of the reason the class exists: the node must be
+// distinguishable from a cancelled run at the same point, and from every other
+// way this step declines to continue.
+func TestAZeroCredentialIsRecordedRatherThanRefused(t *testing.T) {
+	result, builder, _ := verifiedTLS(t, scramScript{})
+
+	session, err := Authenticate(
+		context.Background(), builder, result, security.Credential{}, AuthParams{})
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if session != nil {
+		t.Fatal("a session was returned; nothing was authenticated")
+	}
+
+	node := requireNode(t, builder, domain.StateSkipped, domain.FailureExecRequiredInputMissing)
+
+	// No mechanism was selected, so none is claimed.
+	if _, ok := node.Attributes()[AttrSASLMechanism]; ok {
+		t.Error("a mechanism attribute was written; svcdoctor selected none")
+	}
+	// Nothing describes the absent credential. There is no value to describe.
+	if got := node.AttributeCount(); got != 0 {
+		t.Errorf("node carries %d attributes, want 0", got)
+	}
+	if got := node.Duration(); got != 0 {
+		t.Errorf("duration = %s, want 0: no exchange ran", got)
+	}
+}
+
+// TestAnUnsupportedMechanismOutranksAMissingCredential pins the ordering.
+//
+// Both conditions hold: the endpoint demands something svcdoctor cannot perform,
+// and the run has nothing to perform it with. The capability gap is the truthful
+// report, because it would be true whatever the run held — and telling an
+// operator to configure a credential for a mechanism svcdoctor cannot do would
+// send them to fix the wrong thing.
+func TestAnUnsupportedMechanismOutranksAMissingCredential(t *testing.T) {
+	peer := newPGPeer(t, script{
+		sslReply: []byte("S"), upgradeTLS: true,
+		afterStartup: append(authCode(5), 1, 2, 3, 4), // md5
+	})
+	path, builder := pathTo(t, peer)
+
+	session, err := Negotiate(context.Background(), builder, path, Params{
+		TLS:        TLSRequired,
+		TLSOptions: TLSOptions{ServerName: "localhost", RootCAs: peer.ca},
+	})
+	if err != nil {
+		t.Fatalf("Negotiate: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	result, err := Startup(context.Background(), builder, session,
+		StartupParams{User: "payments_writer"})
+	if err != nil || result == nil {
+		t.Fatalf("Startup: %v", err)
+	}
+	t.Cleanup(func() { _ = result.Close() })
+
+	if _, err := Authenticate(
+		context.Background(), builder, result, security.Credential{}, AuthParams{}); err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+
+	node := authNode(t, builder)
+	if got := node.FailureClass(); got == domain.FailureExecRequiredInputMissing {
+		t.Error("the missing credential was reported; the capability gap outranks it, " +
+			"because it would be true whatever the run held")
+	}
+	if got := node.FailureClass(); got != domain.FailureAuthMechanismUnsupported {
+		t.Errorf("class = %s, want the mechanism gap", got)
 	}
 }
 

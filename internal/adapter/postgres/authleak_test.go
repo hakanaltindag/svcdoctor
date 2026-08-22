@@ -7,6 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"strings"
 	"testing"
@@ -356,4 +359,77 @@ func encodeJSON(t *testing.T, v any) string {
 		t.Fatalf("Marshal: %v", err)
 	}
 	return string(b)
+}
+
+// TestTheMissingInputCheckPrecedesEveryCryptographicStep pins ADR 0046's
+// security ordering, structurally rather than by behaviour.
+//
+// A run with nothing to present must return before anything derives, reveals or
+// writes. Behaviour tests prove it for the paths they exercise; this proves it
+// for every path, by reading the order the source actually has.
+//
+// The check sits after the mechanism refusal deliberately — a capability gap
+// outranks a missing input — and before the transport policy, the endpoint
+// binding, SecretFor and the wire package.
+func TestTheMissingInputCheckPrecedesEveryCryptographicStep(t *testing.T) {
+	file, err := parser.ParseFile(
+		token.NewFileSet(), "authenticate.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parsing authenticate.go: %v", err)
+	}
+
+	var fn *ast.FuncDecl
+	for _, decl := range file.Decls {
+		if d, ok := decl.(*ast.FuncDecl); ok && d.Name.Name == "Authenticate" {
+			fn = d
+		}
+	}
+	if fn == nil {
+		t.Fatal("Authenticate not found")
+	}
+
+	// Positions of the landmarks, in source order.
+	positions := map[string]token.Pos{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+				if _, seen := positions[sel.Sel.Name]; !seen {
+					positions[sel.Sel.Name] = node.Pos()
+				}
+			}
+			if ident, ok := node.Fun.(*ast.Ident); ok {
+				if _, seen := positions[ident.Name]; !seen {
+					positions[ident.Name] = node.Pos()
+				}
+			}
+		}
+		return true
+	})
+
+	missing, ok := positions["recordMissingInput"]
+	if !ok {
+		t.Fatal("recordMissingInput is not called in Authenticate; ADR 0046's producer is gone")
+	}
+
+	// Everything that could derive from, reveal or transmit a secret.
+	for _, later := range []string{
+		"SecretFor", "AuthenticateSCRAM", "Reveal", "logicalEndpoint", "PermitsCredentials",
+	} {
+		at, ok := positions[later]
+		if !ok {
+			continue // not called directly; the behaviour tests cover it
+		}
+		if at < missing {
+			t.Errorf("%s is called before the missing-input check; a run with nothing to "+
+				"present must return first", later)
+		}
+	}
+
+	// And the capability gap is checked before it, so an endpoint demanding a
+	// mechanism svcdoctor cannot perform reports that rather than the credential.
+	if at, ok := positions["admissibleMechanism"]; ok && at > missing {
+		t.Error("the mechanism check runs after the missing-input check; a capability gap " +
+			"is true whatever the run holds and must be reported instead")
+	}
 }

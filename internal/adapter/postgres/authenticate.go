@@ -163,10 +163,6 @@ func Authenticate(
 		return newAuthenticatedSession(conn, result, result.Evidence()), nil
 	}
 
-	if credential.IsZero() {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidInput, security.ErrUnboundCredential)
-	}
-
 	conn, ok := result.TakeConn()
 	if !ok {
 		return nil, fmt.Errorf(
@@ -188,19 +184,37 @@ func Authenticate(
 		return nil, recordMechanismRefusal(builder, result, state, failure)
 	}
 
-	// 2. May a credential cross this channel?
+	// 2. Was this run given anything to present?
+	//
+	// **Second, not first.** A mechanism svcdoctor cannot perform is refused
+	// above whatever the run holds, because that refusal is true regardless — so
+	// an endpoint demanding `md5` reports the capability gap rather than a
+	// missing credential. Everything below is refused *after* this, because with
+	// nothing to present the channel policy has no question to answer and there
+	// is no endpoint binding to check: the same reasoning the trust branch uses.
+	//
+	// It was an invocation error until Phase 4.11b, which made the caller
+	// responsible for not asking. That put a real diagnostic outcome outside the
+	// report: a run against an endpoint demanding SCRAM with no credential
+	// configured produced a graph indistinguishable from one cancelled at this
+	// exact point, and reported itself healthy. See ADR 0046.
+	if credential.IsZero() {
+		return nil, recordMissingInput(builder, result)
+	}
+
+	// 3. May a credential cross this channel?
 	if !params.TransportPolicy.PermitsCredentials(result.Channel()) {
 		return nil, recordPolicyRefusal(builder, result)
 	}
 
-	// 3. Which endpoint authorizes this credential? The logical name the
+	// 4. Which endpoint authorizes this credential? The logical name the
 	//    operator asked about, never the address it resolved to.
 	endpoint, err := logicalEndpoint(result.Endpoint())
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. Is this credential authorized here? A mismatch returns before the wire
+	// 5. Is this credential authorized here? A mismatch returns before the wire
 	//    package exists in the call stack, so nothing can be revealed.
 	secret, err := credential.SecretFor(endpoint)
 	if err != nil {
@@ -614,6 +628,46 @@ func recordPolicyRefusal(
 		return fmt.Errorf("recording blocked-by for %s: %w", evidence.ID(), err)
 	}
 	return nil
+}
+
+// recordMissingInput records that authentication could not be attempted because
+// the run held no material to attempt it with.
+//
+// # Why SKIPPED rather than FAIL or UNKNOWN
+//
+// SKIPPED is *"the step was intentionally not executed"*, which is exactly what
+// happened: svcdoctor decided not to proceed, deliberately and for a reason it
+// can state. FAIL would be a positively evidenced failure, and nothing failed —
+// no byte was sent and the peer was never asked. UNKNOWN would say the result
+// could not be determined, and it was determined precisely: there was nothing to
+// determine it with.
+//
+// It is the same shape recordPolicyRefusal produces, with a different class,
+// because the two are the same *kind* of event — svcdoctor declining to continue
+// — for different reasons a reader acts on differently.
+//
+// # No mechanism attribute
+//
+// Written with withMechanism false, on recordMechanismRefusal's reasoning:
+// svcdoctor selected nothing, so naming SCRAM-SHA-256 would claim a choice it
+// never made. What the endpoint *asked for* is on the startup node as
+// postgres.auth_method, which is where a rule reads it.
+//
+// # Nothing about the credential is recorded, because there is nothing
+//
+// No attribute says a credential was absent, empty or malformed. The class says
+// the step lacked a required input and the step says which step it was; anything
+// further would be describing a value that does not exist.
+func recordMissingInput(builder *domain.GraphBuilder, result *StartupResult) error {
+	evidence, err := refusalEvidence(
+		result, domain.StateSkipped, domain.FailureExecRequiredInputMissing, false)
+	if err != nil {
+		return err
+	}
+	// No blocked-by edge. A policy refusal points at the channel that failed the
+	// policy, because a node proves that claim. Nothing in the graph proves an
+	// absence, and pointing at the startup node would suggest it caused this.
+	return record(builder, evidence, result.Evidence())
 }
 
 // recordMechanismRefusal records that no credential was presented because
