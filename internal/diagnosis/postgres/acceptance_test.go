@@ -33,9 +33,40 @@ func TestAcceptanceMatrix(t *testing.T) {
 			want: CodeTLSDeclined, severity: domain.SeverityError, vantage: false,
 		},
 		{
-			row: "2 an E-shaped answer to SSLRequest",
+			// Was `none` until Phase 4.11b. The class covers an E-shaped answer, a
+			// byte the protocol does not define and an unclassifiable I/O
+			// failure, and ADR 0045 gives all three one floor.
+			row: "2 an answer to SSLRequest that the protocol does not define",
 			graph: func(b *builder) {
 				b.sslNode(domain.StateFail, domain.FailureProtocolUnexpectedResponse, nil)
+			},
+			want: CodeSSLNegotiationFailed, severity: domain.SeverityError, vantage: true,
+		},
+		{
+			row: "2c the peer closed during the negotiation",
+			graph: func(b *builder) {
+				b.sslNode(domain.StateFail, domain.FailureProtocolPeerClosed, nil)
+			},
+			want: CodeSSLNegotiationFailed, severity: domain.SeverityError, vantage: true,
+		},
+		{
+			row: "2d the negotiation reply could not be decoded",
+			graph: func(b *builder) {
+				b.sslNode(domain.StateFail, domain.FailureProtocolMalformedResponse, nil)
+			},
+			want: CodeSSLNegotiationFailed, severity: domain.SeverityError, vantage: true,
+		},
+		{
+			row: "2e the negotiation was cancelled",
+			graph: func(b *builder) {
+				b.sslNode(domain.StateUnknown, domain.FailureExecCancelled, nil)
+			},
+			want: none,
+		},
+		{
+			row: "2f svcdoctor's budget expired during the negotiation",
+			graph: func(b *builder) {
+				b.sslNode(domain.StateUnknown, domain.FailureExecLocalTimeout, nil)
 			},
 			want: none,
 		},
@@ -128,6 +159,11 @@ func TestAcceptanceMatrix(t *testing.T) {
 			want: CodeStartupFailed, severity: domain.SeverityError, vantage: true,
 		},
 		{
+			// The assertion is that the **startup** rule contributes nothing: a
+			// blocked step is never a cause, and its blocker owns the failure.
+			// Since Phase 4.11b that blocker has an owner, so the row expects
+			// exactly one finding and it is the blocker's — which proves the
+			// skipped startup added none.
 			row: "13 startup skipped by a failed prerequisite",
 			graph: func(b *builder) {
 				b.sslNode(domain.StateFail, domain.FailureProtocolUnexpectedResponse, nil)
@@ -137,7 +173,7 @@ func TestAcceptanceMatrix(t *testing.T) {
 					class: domain.FailureExecSkippedPrerequisiteFailed, parent: idSSL, blocker: idSSL,
 				})
 			},
-			want: none,
+			want: CodeSSLNegotiationFailed, severity: domain.SeverityError, vantage: true,
 		},
 		// --- postgres.authentication --------------------------------------
 		{

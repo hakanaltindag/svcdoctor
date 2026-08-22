@@ -190,7 +190,7 @@ func TestTheRulesSatisfyTheEngineContract(t *testing.T) {
 
 // TestEveryAuthorizedCodeIsWellFormedAndNamespaced pins the public surface.
 //
-// Seventeen codes, no eighteenth. The count is asserted so that adding one is a
+// Nineteen codes, no twentieth. The count is asserted so that adding one is a
 // deliberate act rather than a drift, exactly as the FailureClass count guard
 // works in internal/domain.
 //
@@ -217,9 +217,11 @@ func TestEveryAuthorizedCodeIsWellFormedAndNamespaced(t *testing.T) {
 		CodeTLSChainNotTrusted,
 		CodeTLSCertificateNotValidNow,
 		CodeTLSHandshakeFailed,
+		CodeCredentialNotConfigured,
+		CodeSSLNegotiationFailed,
 	}
 
-	const want = 17
+	const want = 19
 	if len(codes) != want {
 		t.Fatalf("this package declares %d codes, want %d", len(codes), want)
 	}
@@ -462,6 +464,8 @@ func TestNoCodeIsDeclaredOutsideTheAuthorizedSet(t *testing.T) {
 		"POSTGRES_TLS_CHAIN_NOT_TRUSTED":                   true,
 		"POSTGRES_TLS_CERTIFICATE_NOT_VALID_NOW":           true,
 		"POSTGRES_TLS_HANDSHAKE_FAILED":                    true,
+		"POSTGRES_CREDENTIAL_NOT_CONFIGURED":               true,
+		"POSTGRES_SSL_NEGOTIATION_FAILED":                  true,
 	}
 
 	found := 0
@@ -522,11 +526,53 @@ func TestNoCodeMirrorsAFailureClass(t *testing.T) {
 		CodeTLSChainNotTrusted, CodeTLSCertificateNotValidNow, CodeTLSHandshakeFailed,
 		CodeStartupFailed, CodeCredentialsRejected, CodePeerVerificationFailed,
 		CodeDatabaseNotFound, CodeSessionEstablishmentFailed,
+		CodeCredentialNotConfigured, CodeSSLNegotiationFailed,
 	} {
 		suffix := strings.TrimPrefix(string(code), "POSTGRES_")
 		if classes[suffix] {
 			t.Errorf("%s mirrors the FailureClass %s; a claim must not be spelled like "+
 				"an observation", code, suffix)
 		}
+	}
+}
+
+// TestNoRuleInfersAMissingCredentialFromAbsence pins the reason ADR 0046 put the
+// fact in the producer.
+//
+// A rule that asked "is there no authentication child?" would claim a missing
+// credential about a run cancelled at the same point, because those graphs are
+// identical. The mechanical form of that mistake is a rule reading Children from
+// a startup node, or counting nodes by step to find one that is not there.
+//
+// The rules read the node in front of them and its parent. Nothing walks down.
+func TestNoRuleInfersAMissingCredentialFromAbsence(t *testing.T) {
+	for _, name := range productionFiles(t) {
+		names := namesUsedIn(t, name)
+		if names["Children"] {
+			t.Errorf("%s calls Children; a PostgreSQL rule anchors at a node and reads "+
+				"upward, and absence is never evidence", name)
+		}
+	}
+}
+
+// TestTheMissingInputClassIsReadExactlyOnce pins that the new class has one
+// consumer and no fallback.
+//
+// A second reader, or a default branch that folded unrecognized skip classes
+// into this claim, would let a future producer's skip become "no credential was
+// configured" with nobody deciding that.
+func TestTheMissingInputClassIsReadExactlyOnce(t *testing.T) {
+	count := 0
+	for _, name := range productionFiles(t) {
+		ast.Inspect(parse(t, name), func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if ok && sel.Sel.Name == "FailureExecRequiredInputMissing" {
+				count++
+			}
+			return true
+		})
+	}
+	if count != 1 {
+		t.Errorf("the missing-input class is named %d times, want exactly 1", count)
 	}
 }

@@ -56,6 +56,27 @@ const (
 	// CodeCredentialsRejected.
 	CodeCredentialWithheld domain.FindingCode = "POSTGRES_CREDENTIAL_WITHHELD"
 
+	// CodeCredentialNotConfigured: the endpoint demanded authentication and the
+	// run held nothing to present.
+	//
+	// # Why "not configured" and not "missing" or "required"
+	//
+	// `REQUIRED` would name the endpoint's demand, which the startup node already
+	// records as postgres.auth_method and which is not the news. `MISSING`
+	// suggests something was lost. The condition is that this run was not given a
+	// credential for this endpoint — a statement about the run's configuration,
+	// which is the thing an operator changes.
+	//
+	// It is the sibling of CodeCredentialWithheld and never its synonym.
+	// Withheld means a credential exists and svcdoctor refused to send it over
+	// this channel; this means there was none to send. Same step, same state,
+	// different classes, and different next actions: one sends a reader to the
+	// channel, the other to the run's configuration.
+	//nolint:gosec // G101: a public finding code, not a credential. The rule
+	// fires on the identifier containing "Credential"; this constant is the
+	// reverse of a secret — it names the absence of one.
+	CodeCredentialNotConfigured domain.FindingCode = "POSTGRES_CREDENTIAL_NOT_CONFIGURED"
+
 	// CodeAuthenticationFailed is the L5 floor.
 	CodeAuthenticationFailed domain.FindingCode = "POSTGRES_AUTHENTICATION_FAILED"
 )
@@ -298,7 +319,15 @@ func unknownAuthentication(node domain.Evidence, refs []domain.EvidenceID) (doma
 func skippedAuthentication(
 	g domain.Graph, node domain.Evidence, refs []domain.EvidenceID,
 ) (domain.Finding, bool) {
-	if node.FailureClass() != domain.FailureExecSkippedByPolicy {
+	switch node.FailureClass() {
+	case domain.FailureExecSkippedByPolicy:
+		// Falls through to the withheld finding below.
+	case domain.FailureExecRequiredInputMissing:
+		// The run held nothing to present. The refs already carry the startup
+		// node, which is what records that the endpoint asked — so the claim's
+		// two halves are both cited without adding anything.
+		return credentialNotConfigured(node, refs)
+	default:
 		// A skip for any other reason was caused by something earlier, and that
 		// node owns the failure.
 		return domain.Finding{}, false
@@ -330,6 +359,68 @@ func skippedAuthentication(
 		VantageDependent: false,
 		EvidenceRefs:     refs,
 		Recommendations:  recommend(recommendCredentialWithheld),
+	})
+}
+
+// The prose for CodeCredentialNotConfigured.
+//
+// "for this attempt" is load-bearing: the claim is scoped to this run against
+// this endpoint, and says nothing about whether a credential exists elsewhere,
+// is stored somewhere svcdoctor was not told about, or would have worked.
+const (
+	summaryCredentialNotConfigured = "The PostgreSQL endpoint required authentication and " +
+		"this run had no credential to present"
+
+	detailCredentialNotConfigured = "svcdoctor reached the authentication step, and the " +
+		"endpoint had asked for authentication material this run was not given. Nothing was " +
+		"sent: no authentication was attempted, so the endpoint neither accepted nor refused " +
+		"anything, and nothing here says whether a credential would have worked.\n" +
+		"The authentication this endpoint asked for is recorded on the referenced startup " +
+		"node. Which methods it asks for can depend on where the connection came from, so an " +
+		"endpoint that demands authentication here may not from elsewhere."
+
+	recommendCredentialNotConfigured = "Supply a credential for this endpoint and the role " +
+		"this run used, or check whether this endpoint was expected to accept the connection " +
+		"without one"
+)
+
+// credentialNotConfigured builds the finding for a run that had nothing to
+// present.
+//
+// # Why WARN and not ERROR
+//
+// Severity is the impact of the claim about its own subject, and this claim's
+// subject is an endpoint that did nothing wrong. It answered, it asked for
+// authentication, and it is not proven unhealthy by anything here. What did not
+// happen is that *this run* could not continue — a real limitation, and one that
+// no change to the endpoint would fix.
+//
+// It is the same reading CodeCredentialWithheld already carries at this step: a
+// real problem that is not currently breaking anything, because svcdoctor's own
+// state prevented the attempt. ERROR is deliberately not used to force a
+// non-zero exit; severity and process status are different contracts.
+func credentialNotConfigured(node domain.Evidence, refs []domain.EvidenceID) (domain.Finding, bool) {
+	return build(domain.FindingInput{
+		Code: CodeCredentialNotConfigured,
+		// Nothing is left open. The node records that the step did not run for a
+		// stated reason, and the startup node records that the endpoint asked.
+		Kind:       domain.FindingKindConfirmed,
+		Severity:   domain.SeverityWarn,
+		Confidence: domain.ConfidenceHigh,
+		Layer:      domain.LayerAuth,
+		Subject:    node.Subject(),
+		Summary:    summaryCredentialNotConfigured,
+		Detail:     detailCredentialNotConfigured,
+		// The compound claim is what makes this true rather than the credential
+		// half alone. That the run held nothing is not a property of network
+		// position; that *this endpoint demanded authentication* is, because
+		// pg_hba selects the method by source address. A claim that names both
+		// inherits the weaker of the two — the same ground
+		// CodeUnsupportedBySvcdoctor rests on, where a gap in svcdoctor is
+		// vantage-dependent because the claim names what the endpoint required.
+		VantageDependent: true,
+		EvidenceRefs:     refs,
+		Recommendations:  recommend(recommendCredentialNotConfigured),
 	})
 }
 

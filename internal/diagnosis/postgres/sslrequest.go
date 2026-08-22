@@ -17,6 +17,24 @@ import (
 // did not complete.
 const CodeTLSDeclined domain.FindingCode = "POSTGRES_TLS_DECLINED"
 
+// CodeSSLNegotiationFailed is the L3 floor: the negotiation did not complete,
+// and svcdoctor cannot say why.
+//
+// # Why a floor rather than three codes
+//
+// The three classes it covers — an answer that was not one of the two the
+// protocol defines, a peer that closed, a reply that could not be decoded — pose
+// one question, *is this the service I meant?*, and start one investigation. The
+// class on the cited node distinguishes them for a machine.
+//
+// # Why it does not say "this is not PostgreSQL"
+//
+// Because the same bytes arrive from a PostgreSQL server behind something that
+// rewrites them, and a peer that closes proves nothing about what it was. The
+// most common real cause is a wrong port, which is why the recommendation asks
+// about the endpoint rather than asserting it.
+const CodeSSLNegotiationFailed domain.FindingCode = "POSTGRES_SSL_NEGOTIATION_FAILED"
+
 const (
 	summaryTLSDeclined = "The PostgreSQL endpoint declined the requested TLS upgrade"
 
@@ -29,8 +47,44 @@ const (
 		"answers the SSLRequest on its behalf"
 )
 
+const (
+	summarySSLNegotiationFailed = "The PostgreSQL SSL negotiation did not complete at this " +
+		"endpoint"
+
+	detailSSLNegotiationFailed = "svcdoctor sent an SSLRequest because this run required an " +
+		"encrypted channel, and the exchange did not complete. What arrived instead — an " +
+		"answer the protocol does not define, a peer that closed, or a reply that could not " +
+		"be decoded — is recorded on the referenced evidence.\n" +
+		"This does not establish what is at this endpoint. A PostgreSQL server behind " +
+		"something that rewrites its answers and a service that speaks another protocol " +
+		"entirely can produce the same observation, and svcdoctor observed neither.\n" +
+		"The exchange stopped here: nothing was encrypted, and nothing was presented to " +
+		"this endpoint afterwards."
+
+	recommendSSLNegotiationFailed = "Check that this endpoint is the PostgreSQL service this " +
+		"run was meant to reach, and read the referenced evidence for what the exchange " +
+		"observed"
+)
+
+// negotiationFloorClasses is the closed set the floor covers.
+//
+// PROTOCOL_UNSUPPORTED_CAPABILITY is deliberately absent: it is produced only on
+// the branch that also records postgres.ssl.offered, so it always satisfies
+// CodeTLSDeclined's predicate and the two rules are disjoint on class alone —
+// with no ordering, no suppression and no attribute check here.
+//
+// Closed on purpose. A class added to the domain later produces no finding until
+// somebody decides what it means, which is safer than a default branch handing it
+// the floor's own "could not say why" wording.
+var negotiationFloorClasses = map[domain.FailureClass]bool{
+	domain.FailureProtocolUnexpectedResponse: true,
+	domain.FailureProtocolPeerClosed:         true,
+	domain.FailureProtocolMalformedResponse:  true,
+}
+
 // SSLRequest reports PostgreSQL endpoints that refused to encrypt a connection
-// this run required to be encrypted.
+// this run required to be encrypted, and endpoints whose negotiation did not
+// complete at all.
 //
 // It is a diagnosis.Rule. The signature is not stated as one here because
 // internal/diagnosis imports nothing from its own subpackages and this package
@@ -46,17 +100,25 @@ const (
 // above, because this claim is about what the endpoint answered rather than
 // about how it was reached.
 //
-// # What it does not fire on
+// # Two claims, disjoint on FailureClass
 //
-// An `E`-shaped answer, a malformed reply and a peer close all leave this node
-// FAIL with a different class, and none produces a finding in Phase 4.6. They
-// are recorded as a gap in ADR 0040 section 26 rather than covered by widening
-// this predicate: an `E` answer is a peer refusing to negotiate and deserves a
-// claim, but no measurement of one exists and this package does not authorize
-// findings for shapes nobody has seen.
+// An endpoint that answered `N` declined, and says so. An endpoint whose answer
+// the protocol does not define, that closed, or whose reply could not be decoded
+// produces the floor: something went wrong and svcdoctor cannot say what. ADR
+// 0040 left the second set unowned because it had measured none of those shapes;
+// ADR 0045 closes it, because an HTTP server on the port produces one and
+// reported `status: OK`.
 //
-// A SKIPPED node — the run asked for no TLS — is likewise not a finding. Nothing
-// failed, and `postgres.tls.plan` on that node states why.
+// # What it still does not fire on
+//
+// An `E`-shaped answer gets no claim of its own. It lands in the floor with the
+// rest, and the reason is ADR 0040's unchanged: a peer refusing to negotiate
+// deserves a distinct claim and that exact shape has still not been measured.
+// The class on the cited node distinguishes it for a machine meanwhile.
+//
+// UNKNOWN — cancellation, an exhausted budget — is not a failure and produces
+// nothing. A SKIPPED node, where the run asked for no TLS, is likewise not a
+// finding: nothing failed, and `postgres.tls.plan` on that node states why.
 func SSLRequest(g domain.Graph) []domain.Finding {
 	var out []domain.Finding
 	// Graph.Nodes returns canonical order, so findings are produced in a
@@ -80,6 +142,33 @@ func evaluateSSLRequest(node domain.Evidence) (domain.Finding, bool) {
 	if node.State() != domain.StateFail {
 		return domain.Finding{}, false
 	}
+	if negotiationFloorClasses[node.FailureClass()] {
+		return build(domain.FindingInput{
+			Code: CodeSSLNegotiationFailed,
+			Kind: domain.FindingKindConfirmed,
+			// The run required an encrypted channel and this endpoint did not
+			// deliver the exchange that precedes one, so nothing further could be
+			// attempted on this connection. The same reading as the declined
+			// finding beside it.
+			Severity:   domain.SeverityError,
+			Confidence: domain.ConfidenceHigh,
+			Layer:      domain.LayerTLS,
+			Subject:    node.Subject(),
+			Summary:    summarySSLNegotiationFailed,
+			Detail:     detailSSLNegotiationFailed,
+			// **True, where the declined finding beside it is false**, and that
+			// is derived rather than inconsistent. Whether an endpoint will
+			// encrypt is a server-wide setting answered identically to every
+			// source; a floor attributes nothing, so it cannot exclude a cause
+			// keyed on where the connection came from.
+			VantageDependent: true,
+			// The node alone. Its SKIPPED handshake child is not cited: a
+			// blocked step is never a cause, and this node is its blocker.
+			EvidenceRefs:    []domain.EvidenceID{node.ID()},
+			Recommendations: recommend(recommendSSLNegotiationFailed),
+		})
+	}
+
 	if node.FailureClass() != domain.FailureProtocolUnsupportedCapability {
 		return domain.Finding{}, false
 	}
