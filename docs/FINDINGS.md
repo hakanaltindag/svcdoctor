@@ -37,15 +37,25 @@ TCP_CONNECTION_REFUSED
 TLS_CERTIFICATE_EXPIRED
 ```
 
-> **These remain naming examples. No generic transport rule is authorized, and none exists.**
-> The finding codes svcdoctor produces today are the two `KAFKA_ADVERTISED_ENDPOINT_*` codes
-> and the twelve `POSTGRES_*` codes listed in section 6.
-> ADR 0034 gives advertised-endpoint transport failures to the Kafka rule outright, so a
-> generic rule firing on the same evidence would duplicate it. Whether generic transport
-> findings should exist *at all* is still open, and it is blocked on a fact rather than on
-> effort: it needs run intent — "is this a Kafka diagnosis or a bare endpoint check?" — which
-> `diagnosis.Rule` cannot see, because it receives only a `Graph`. The bootstrap path, the
-> other place such a rule would fire, has no owner until application orchestration exists.
+> **Three generic codes are authorized and none is implemented yet.** ADR 0043 fixes
+> `DNS_NAME_NOT_RESOLVED`, `DNS_RESOLUTION_FAILED` and `TCP_CONNECTION_NOT_ESTABLISHED` for the
+> operator-requested target; section 7 carries them. The codes svcdoctor *produces* today are
+> still the two `KAFKA_ADVERTISED_ENDPOINT_*` codes and the twelve `POSTGRES_*` codes in
+> section 6.
+>
+> The blocker was run intent — "is this a Kafka diagnosis or a bare endpoint check?" — which
+> `diagnosis.Rule` cannot see, receiving only a `Graph`. ADR 0042 put it in the graph as an L0
+> requested-target anchor, so a rule now identifies the operator's sweep by walking down from
+> it rather than by asking where an endpoint came from.
+>
+> **`TLS_CERTIFICATE_EXPIRED` above remains a naming example only.** Generic TLS is deferred:
+> no production run produces a `tls.handshake` node whose direct parent is a requested
+> `tcp.connect`, because PostgreSQL negotiates in band and Kafka has no composition root. See
+> ADR 0043 section 14.
+>
+> ADR 0034 still gives advertised-endpoint transport failures to the Kafka rule outright, and
+> the generic walk cannot reach them: an advertised sweep parents to its advertisement, never
+> to a target anchor.
 
 This is the chosen convention: **the namespace names the owner of the rule.** A rule owned by
 `internal/diagnosis/transport/` is namespaced by its transport layer; a rule owned by
@@ -378,9 +388,71 @@ Five properties of the set are worth reading before the record itself:
   classes rather than on a predicate that inspects a SQLSTATE. This is a generic
   authentication invariant, not a PostgreSQL one — see ADR 0040 section 5.1.
 - **No PostgreSQL finding fires on `dns.lookup`, `tcp.connect` or `tls.handshake`.** Those are
-  generic transport nodes and remain unowned, so a PostgreSQL run that fails there produces no
-  finding. That is ADR 0017's still-open blocker, restated rather than worked around, and it
-  is tracked as a product release gate in `docs/BACKLOG.md`.
+  generic transport nodes. ADR 0043 gives the first two an owner — see section 7 — so a
+  PostgreSQL run failing at L1 or L2 will produce a generic finding once those rules exist.
+  **`tls.handshake` under `postgres.ssl_request` remains unowned**: it is not generic, because
+  its parent is a service node, and no PostgreSQL rule anchors there. That gap is measured in
+  ADR 0043 section 15 and is still a release-gate item in `docs/BACKLOG.md`.
 
 See ADR 0040 for the trigger, claim, must-not-claim list, evidence set and recommendation
 boundary of each, and `docs/validation/POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` for the evidence.
+
+
+## 7. The three generic transport findings
+
+Fixed by **ADR 0043** and **not yet implemented**. They are the first findings owned by
+`internal/diagnosis/transport/`, and the first that speak about the operator's target rather
+than about a service.
+
+They are possible because ADR 0042 records the requested target as an L0 evidence node and
+parents the sweep it caused to it. A rule enumerates those anchors and descends by typed step
+— direct `dns.lookup` children, then their direct `tcp.connect` children. **Direct, never
+transitive**: a Kafka advertised sweep sits transitively below a bootstrap target, and a
+descendant walk would diagnose a discovered broker and duplicate the Kafka finding that owns
+it.
+
+| Code | Anchor | Trigger | Severity | `vantageDependent` |
+|---|---|---|---|---|
+| `DNS_NAME_NOT_RESOLVED` | `dns.lookup` | FAIL with `DNS_NO_ADDRESS` | ERROR | true |
+| `DNS_RESOLUTION_FAILED` | `dns.lookup` | FAIL with `DNS_TIMEOUT` or `DNS_RESOLVER_FAILURE` | ERROR | true |
+| `TCP_CONNECTION_NOT_ESTABLISHED` | `tcp.connect` | every node FAIL, none PASS, none UNKNOWN or SKIPPED | ERROR | true |
+
+All three are `CONFIRMED` / `HIGH`, and all three take the **anchor's subject** — the logical
+`db.example.com:5432`, never a resolved address. That subject is the point of ADR 0042: before
+it, a run that failed at DNS carried the requested `host:port` in no subject at all.
+
+**What they refuse to say is the substance of the policy.**
+
+- `DNS_NAME_NOT_RESOLVED` says the hostname did not resolve to a usable address from this
+  vantage. It never says the name does not exist — the DNS probe deliberately emits
+  `DNS_NO_ADDRESS` rather than `DNS_NXDOMAIN`, because Go's resolver folds "no such name" and
+  "no address record" together, and the finding inherits that restraint rather than undoing it.
+- `TCP_CONNECTION_NOT_ESTABLISHED` says no measured connection completed. It never says
+  *unreachable*: a refused connection proves a host answered. It names no firewall, route,
+  security group or listener, because the evidence distinguishes none of them.
+
+**One TCP code covers six failure classes, deliberately.** Refused and timed-out do suggest
+different remediation, but the split is not stable across one endpoint — an IPv4 address with
+nothing listening and a filtered IPv6 address produce both in one run, and every tiebreak
+would make the public code depend on address family. The distribution stays in `FailureClass`
+on the cited evidence, which is the vocabulary that exists to carry it; a consumer that needs
+refused-versus-timeout reads there, never the finding code.
+
+**Withheld, and the evidence stays in the report either way:**
+
+- **any path succeeded** — a client that selects it succeeds, so "could not connect" would be
+  false. One usable address out of twenty still withholds.
+- **some paths failed and others were never measured** — the run did not establish that every
+  path fails. `Result.Incomplete()` and exit code 4 already report incompleteness, and a
+  HYPOTHESIS here would add a weaker second copy of that fact.
+- **cancellation and budget exhaustion** — the probes already record these as `UNKNOWN` with an
+  `EXEC_*` class, so a rule that fires only on FAIL cannot turn them into a target failure.
+
+**A consequence worth knowing before reading a report.** In a dual-stack run where one family
+fails and the other works, `summary.firstBrokenLayer` is `L2` and there is no TCP finding.
+That is not a contradiction: the field reports the earliest positively evidenced failure, and
+the finding reports a conclusion about the target — which was reached.
+
+**Generic TLS is deferred, not forgotten.** No production run produces a `tls.handshake` node
+whose direct parent is a requested `tcp.connect`, so a TLS policy today would govern evidence
+that cannot occur. See ADR 0043 sections 14 and 15.

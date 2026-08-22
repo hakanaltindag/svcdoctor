@@ -616,11 +616,21 @@ a hypothetical. And against a real PostgreSQL run, both renderings of the reques
 endpoint pseudonymize to the same value, with the raw hostname proven present locally and
 absent from the shareable document.
 
-**What this does not do.** It authorizes no finding. Whether a generic transport finding
-exists, what it may claim, and its severity, confidence and vantage semantics are
-undecided; ADR 0017's deferral stands for all of them, and a test in
-`internal/diagnosis/transport` fails the moment a rule appears there. And `Origin` remains
-deferred: nothing here lets any layer ask how an arbitrary subject entered a run.
+**What the anchor authorized, and what it did not.** ADR 0043 then decided the policy for
+**DNS and TCP**: three findings, subjected to the anchor's logical endpoint, withheld when
+any path succeeded and when measurement was incomplete. That closes ADR 0017's deferral for
+those two layers.
+
+**It stays open for TLS, for a reason rather than an opinion.** No production run yields a
+`tls.handshake` node whose direct parent is a requested `tcp.connect` — PostgreSQL negotiates
+in band, and Kafka has no composition root — so a TLS policy would govern evidence that
+cannot occur. A related gap sits beside it: PostgreSQL's in-band handshake is owned by
+neither layer, because its parent is a service node and no PostgreSQL rule anchors there.
+Both are recorded in `docs/BACKLOG.md` as release-gate items rather than closed by widening
+the walk, which would reintroduce the Kafka hazard above.
+
+And `Origin` remains deferred: nothing here lets any layer ask how an arbitrary subject
+entered a run.
 
 ## 6. Diagnosis
 

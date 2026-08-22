@@ -28,7 +28,7 @@ does not overturn it, and both remain authoritative.
 | 0014 | Findings reference evidence by identifier | Accepted | |
 | 0015 | The report derives its summary | Accepted | |
 | 0016 | The report owns canonical serialization | Accepted | Refines 0004 |
-| 0017 | The diagnosis rule contract | Accepted | Defers transport severity policy and finding identity. Half of that deferral is closed by 0042, which supplies the requested-versus-discovered context an anchored generic rule needs; the severity policy itself is still unwritten |
+| 0017 | The diagnosis rule contract | Accepted | Defers transport severity policy and finding identity. 0042 supplied the requested-versus-discovered context an anchored generic rule needs; **0043 closes the deferral for DNS and TCP**. It stands for generic TLS, which has no producer |
 | 0018 | Structural redaction produces the shareable report | Accepted | |
 | 0019 | Evidence identifiers are derived from the step and a scope path | Accepted | Implements the scheme 0013 left to producers. Amended in Phase 2.2, which settled encoding and scoping |
 | 0020 | Generic transport probes normalize at their own boundary | Accepted | Implements 0002 and 0010 for the first real producer. Widened the `DNS_NO_ADDRESS` contract. Confirmed unchanged by the second producer |
@@ -54,6 +54,7 @@ does not overturn it, and both remain authoritative.
 | 0040 | A PostgreSQL rule anchors only at a `postgres.*` step | Accepted (policy), implemented in Phase 4.6b | The 0034 analogue for PostgreSQL. Authorizes the service vocabulary leaf 0042 §11 reuses generically |
 | 0041 | A run discovers broadly and authenticates narrowly | **Accepted, implemented in Phase 4.8b** | First record about the application. Closes the selection deferral 0028 left open; partially supersedes 0011 on command-tree shape. Narrowed by 0042 §3, which opens one hole in its evidence-authority ban |
 | 0042 | A run records the target it was asked about, and a sweep declares its cause | **Accepted, implemented in Phase 4.9a-pre** | Closes the ownership and subject gaps Phase 4.9a stopped on. Narrows 0041, half-closes 0017's deferral, amends 0032 at the sweep root, and leaves 0034's advertised ownership structurally unreachable. Authorizes no finding |
+| 0043 | svcdoctor says what it could not reach, and no more than that | Accepted (policy) | Closes 0017's generic transport deferral **for DNS and TCP only**. Consumes 0042 as its ownership prerequisite; leaves 0034, 0040 and 0041 unchanged. Defers generic TLS for want of a producer, and records PostgreSQL's in-band TLS gap without fixing it |
 
 ## Decisions that govern work not yet written
 
@@ -286,6 +287,23 @@ A deferral is a decision too, and each names the condition that should reopen it
   now measured rather than argued — against a real advertised sweep, the naive descendant walk
   is shown to capture it and the authorized walk is shown not to. It authorizes no finding, and
   says so.
+
+- **0043** is the first record that lets svcdoctor say something about a target it never
+  reached. It exists because the flagship failures produced nothing: a run that could not
+  resolve a name, or could not open a socket, reported `status: OK` beside a broken layer —
+  measured, not supposed. 0042 made the fix possible by giving the operator's sweep a
+  structural owner; this record decides what may be said about it. Three codes, and the shape
+  of the argument is the same each time: the claim is what was observed *from this vantage*,
+  never what it implies. `DNS_NAME_NOT_RESOLVED` refuses to say a name does not exist, because
+  the probe above it already refused to; `TCP_CONNECTION_NOT_ESTABLISHED` refuses the word
+  *unreachable*, because a refused connection proves a host answered. Its hardest call was
+  whether to split TCP by errno, and the answer is no — not because the distinction is
+  uninteresting but because it is not stable across one endpoint, which routinely refuses on
+  one family and times out on the other; the reason distribution lives in the evidence, where
+  it does not become an unstable public contract. It withholds on partial success and on
+  incomplete measurement, and it authorizes nothing for TLS: no production run produces a
+  generic requested-target handshake, and policy for evidence that cannot occur is policy that
+  will be wrong by the time it can.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

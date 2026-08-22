@@ -1831,7 +1831,7 @@ compares a real graph against the ADR 0040 acceptance matrix. Any row a real gra
 describe reopens ADR 0040.
 
 
-### Product/CLI release gate — generic transport diagnosis ownership: OPEN (structure now built)
+### Product/CLI release gate — generic transport diagnosis ownership: OPEN (DNS/TCP decided)
 
 **Not Phase 4.6b scope, and not a PostgreSQL question.** Recorded here because it is the one
 place the PostgreSQL slice is architecturally correct and incomplete as a product.
@@ -1854,21 +1854,34 @@ generic finding had nothing truthful to be *about*. **Phase 4.9a-pre answered bo
 (**ADR 0042**) with an L0 requested-target anchor and direct-parent sweep ownership, without
 `Origin`, without identifier parsing and without touching `diagnosis.Rule`.
 
-**The gate is still open.** The structure exists and is measured; what remains is policy, and
-it is deliberately not inferable from the anchor. **Phase 4.9a is next**, and it starts from a
-graph that can already answer "is this the operator's sweep?" without `Origin`, without an
-identifier parse and without a service switch.
+**Phase 4.9a decided DNS and TCP** (**ADR 0043**): three codes, one aggregation unit, withheld
+on partial success and on incomplete measurement. Implementing them closes **two of the gate's
+three named failures** — a name that does not resolve and a refused port.
+
+**The gate stays open on the third.** An untrusted certificate is still diagnosed by nobody,
+and for two separate reasons:
+
+- **Generic TLS has no producer.** No production run yields a `tls.handshake` node whose direct
+  parent is a requested `tcp.connect`: PostgreSQL negotiates in band, and Kafka has no
+  composition root. Policy for evidence that cannot occur would be wrong by the time it could.
+- **PostgreSQL's in-band TLS is unowned.** Measured: `postgres.ssl_request` PASS, `tls.handshake`
+  FAIL, `findings: 0`, `status: OK`, `firstBrokenLayer: L3`. ADR 0040 anchors PostgreSQL rules
+  only at `postgres.*`; ADR 0042 gives generic diagnosis only handshakes parented to a requested
+  `tcp.connect`. Both are right and the node falls between them.
 
 - [x] Decide whether run intent can reach a rule at all, and how — ADR 0042
 - [x] Implement the anchor, including the generic vocabulary leaf ADR 0042 §11 requires
-- [ ] Resume Phase 4.9a: decide whether generic transport findings exist, their codes, and
-      their kind/severity/confidence/vantage semantics
-- [ ] Decide the partial-success and incomplete-measurement rules — a sweep where one path
-      reaches the terminal layer and another fails must not produce an unreachability claim
-- [ ] Decide whether one TLS finding is enough. Ten `TLS_*` classes mix reachability,
-      time-relative and client-capability facts, so one fixed `vantageDependent` flag is
-      probably wrong (ADR 0034 §14 fenced this off; ADR 0034 §17 does not generalize)
-- [ ] Until then, keep the gap stated in the report rather than papered over by a service rule
+- [x] Decide generic DNS and TCP findings, their codes and their semantics — ADR 0043
+- [x] Decide the partial-success and incomplete-measurement rules — withhold on both,
+      ADR 0043 §6
+- [ ] **Implement the three ADR 0043 rules** in `internal/diagnosis/transport/`, and narrow
+      `internal/vocabulary`'s `TestNoGenericTransportFindingCodeExists` from a blanket ban to
+      an allow-list of exactly those three — still rejecting every `TLS_` code, so §14's
+      deferral keeps a mechanical guard
+- [ ] **PostgreSQL in-band TLS diagnosis** — its own decision phase; ADR 0043 §15 records the
+      measured gap and deliberately does not widen generic ownership to reach it
+- [ ] **Generic TLS policy** — blocked on a producer; ADR 0043 §14
+- [ ] Until then, keep each gap stated in the report rather than papered over by a service rule
 
 ### Phase 4.8a — Real end-to-end validation from a test composition boundary: COMPLETE
 
@@ -2036,6 +2049,29 @@ the identifier encoding ADR 0019 owns. The encoding only — no probe, no dial, 
 
 **No schema change, no `Origin`, no `Rule` signature change, no new dependency.**
 `security.Reveal` stays 2, `FailureClass` 39, `FindingCode` 14, `schemaVersion` 1.
+
+### Phase 4.9a — Generic requested-target DNS/TCP policy: DECIDED, NOT IMPLEMENTED
+
+**ADR 0043.** Three codes — `DNS_NAME_NOT_RESOLVED`, `DNS_RESOLUTION_FAILED`,
+`TCP_CONNECTION_NOT_ESTABLISHED` — all `CONFIRMED` / `ERROR` / `HIGH` / `vantageDependent`,
+all subjected to the ADR 0042 anchor rather than to a resolved address.
+
+Three decisions worth remembering when the rules are written:
+
+- **One TCP code, not two.** Refused and timed-out suggest different remediation, but the split
+  is not stable across one endpoint: an IPv4 address with nothing listening and a filtered IPv6
+  address produce both in one run, and any tiebreak makes the public contract depend on address
+  family. The distribution stays in `FailureClass` on the cited evidence.
+- **Names avoid two traps.** `TCP_ENDPOINT_UNREACHABLE` was rejected because a refused
+  connection proves a host answered; `TCP_CONNECTION_FAILED` was rejected because it collides
+  exactly with a `FailureClass` name, which would make a claim indistinguishable from an
+  observation. `TARGET_*` was rejected because `docs/FINDINGS.md` §1 already fixes the
+  convention — generic transport findings use the layer as the namespace.
+- **`DNS_NXDOMAIN` has no producer** and no policy was written for it. The probe deliberately
+  emits the weaker `DNS_NO_ADDRESS`, and the finding inherits that restraint: it never claims a
+  name does not exist.
+
+Implementation is authorized. TLS is not — see the release gate above.
 
 ### Phase 5 — CLI, renderers and productization: NOT STARTED
 
