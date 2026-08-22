@@ -1547,20 +1547,36 @@ authority in advance, because the package does not exist. A protocol observing
 narrow grant the transport chain has; that is one exclusion rule added beside the
 existing one. Recorded as a reopen condition on ADR 0029 rather than pre-opened.
 
-### Phase 4.3 — Wire package, SSLRequest and startup: NOT STARTED
+### Phase 4.3 — Wire package, SSLRequest and startup: COMPLETE
 
 The first PostgreSQL code. No credential is sent in this phase.
 
-- [ ] `internal/adapter/postgres/wire`: `SSLRequest`, `StartupMessage`, the 5-byte typed
-      header, decoders for `R`, `E`, `N`, `S`, `K`, `Z`, `v`. Zero new dependencies
-- [ ] `postgres.ssl_request` (L3), sent unconditionally, with the CVE-2021-23222
-      surplus-byte check and the CVE-2024-10977 rule that an `E` message is never displayed
-- [ ] TLS upgrade on the same socket through `probe/tls.Handshake`, parented to the
+- [x] `internal/adapter/postgres/wire`: `SSLRequest`, `StartupMessage`, the 5-byte typed
+      header, `ErrorResponse` and `Authentication` decoders. **Zero new dependencies**
+- [x] `postgres.ssl_request` (L3), with the CVE-2021-23222 surplus-byte check and the
+      CVE-2024-10977 rule that an `E` message is never read
+- [x] TLS upgrade on the same socket through `probe/tls.Handshake`, parented to the
       `ssl_request` node
-- [ ] `postgres.startup` (L4): protocol version, `NegotiateProtocolVersion`, `0A000`
-- [ ] `AUTHZ_NOT_PERMITTED` and `RESOURCE_NOT_FOUND` added to `domain.FailureClass`
-- [ ] Scripted fake peer at the protocol boundary, over a loopback listener
-- [ ] Ownership tests proving no redial and exactly one owner at every instant
+- [x] `postgres.startup` (L4): protocol version 3.0, the demanded authentication method,
+      the SASL mechanism list, and SQLSTATE on a rejection
+- [x] `AUTHZ_NOT_PERMITTED` added to `domain.FailureClass`
+- [x] `internal/adapter/postgres` granted plaintext-only channel authority, closing the
+      reopen condition ADR 0029's amendment recorded
+- [x] Scripted peer at the protocol boundary, over a loopback listener, with a real
+      server-side TLS handshake
+- [x] Ownership tests proving no redial and exactly one owner at every instant
+- [x] The Phase 4.1 producer obligation made real: role and database are recorded as
+      `IdentityAttr`, and `test/security` proves a `StringAttr` would leak
+
+**`RESOURCE_NOT_FOUND` was deliberately not added.** ADR 0036 section 16 authorizes it, but
+`3D000` arrives after `AuthenticationOk`, which this phase's state machine cannot reach. A
+class with no reachable producer would be untested speculation; it arrives with Phase 4.5.
+
+**ADR 0036 section 4 was corrected by measurement.** The `disable` plan no longer sends an
+`SSLRequest`: a server that answers `S` has already given the socket to its TLS layer, so a
+plaintext `StartupMessage` afterwards is read as a TLS record and the connection dies —
+observed against PostgreSQL 18.6. The node is still recorded, as `SKIPPED` by policy, which
+preserves the plaintext blocker carrier the section wanted.
 
 ### Phase 4.4 — Authentication: NOT STARTED
 

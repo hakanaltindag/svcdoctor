@@ -318,6 +318,18 @@ them generalizes past Kafka (**ADR 0026**, **ADR 0030**):
   through `transport.Continuation`, `kafka.Session` and `kafka.HandshakeSession`,
   and `security.CredentialTransportPolicy` reads it. Both zero values fail closed,
   and an adapter has no way to strengthen the claim.
+- **PostgreSQL negotiates TLS from inside its own protocol flow, and the adapter
+  sequences it without reimplementing it.** `internal/adapter/postgres` writes an
+  `SSLRequest`, reads exactly one byte, and — when the server accepts — hands the
+  *same* socket to `internal/probe/tls`. It has no dialer, no resolver, and
+  `depguard` denies it `crypto/tls`, so it cannot open a connection or inspect
+  one. The graph records the causation:
+  `tcp.connect → postgres.ssl_request → tls.handshake → postgres.startup`,
+  and the TLS node's parent is the negotiation rather than the TCP node because
+  that is why the handshake happened. **No generic STARTTLS abstraction was
+  created**: one protocol needs this, and a service-neutral hook shaped like
+  PostgreSQL's negotiation would be a guess about a second caller that does not
+  exist (ADR 0036).
 - **Channel authority follows the observation boundary, not the call path.**
   Phase 4.2 narrowed ADR 0029's wording after Phase 4.0 established that a
   protocol can negotiate TLS from inside its own flow rather than inside the

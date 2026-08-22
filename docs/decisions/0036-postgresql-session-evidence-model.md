@@ -2,7 +2,16 @@
 
 ## Status
 
-Accepted (policy). Implemented by Phase 4.2 onwards; Phase 4.0 writes no Go code.
+Accepted (policy). Implemented from Phase 4.3; Phase 4.0 wrote no Go code.
+
+**Amended in Phase 4.3 — the `disable` plan does not send an SSLRequest.** Section 4's
+table said it would, and that a plaintext session would then "continue in plaintext
+regardless". Implementation measured that this is impossible, and the row is corrected
+below. Everything else in this record stands.
+
+Phase 4.3 implements sections 1, 2, 3, 4, 6, 8 (the L3 and L4 nodes), 9 (the attributes
+those nodes carry), 13, 14 and 16 (one of the two classes). Authentication, the session
+window, `ParameterStatus` and every finding remain unimplemented.
 
 Depends on ADR 0037, which must land first: this record produces evidence carrying a role
 name and a database name, and the report cannot pseudonymize either today.
@@ -61,9 +70,15 @@ system it is diagnosing.
 spoke over socket B.** The graph asserts causation along its parent edges, and a redial
 would make every one of those edges a lie.
 
-### 2. `SSLRequest` is always sent, and it is the identity-free capability probe
+### 2. `SSLRequest` is the identity-free capability probe
 
-Whatever TLS plan the caller chose, the adapter sends `SSLRequest` first.
+> **Amended in Phase 4.3.** This section originally opened "whatever TLS plan the caller
+> chose, the adapter sends `SSLRequest` first", and that is true under `require` and false
+> under `disable`. See the section 4 amendment for the measurement that forced it. Nothing
+> else here changed: under `disable` the node is still recorded, as `SKIPPED`, and still
+> serves as the plaintext channel's blocker carrier.
+
+Under `require`, the adapter sends `SSLRequest` first.
 
 It costs 8 bytes, discloses nothing — no role, no database, no version — and answers three
 questions at once (study §7):
@@ -128,7 +143,28 @@ svcdoctor takes an explicit TLS plan, exactly as the transport chain does. Two v
 | Plan | Behaviour |
 |---|---|
 | `require` | `SSLRequest`; `S` → handshake and continue; `N` → the run stops at L3 with a recorded failure |
-| `disable` | `SSLRequest` is still sent and its answer recorded; the session then continues in plaintext regardless |
+| `disable` | **no `SSLRequest` is sent**; the negotiation node records that svcdoctor did not ask, and the session continues in plaintext |
+
+**The `disable` row is a Phase 4.3 correction, forced by measurement.** It previously said
+the request would still be sent and the session would continue "in plaintext regardless".
+A real PostgreSQL 18.6 server proves it cannot: a server that answers `S` has already
+handed the socket to its TLS layer and is waiting for a `ClientHello`, so a plaintext
+`StartupMessage` sent afterwards is read as a TLS record. Observed as an immediate EOF,
+with `could not accept SSL connection: wrong version number` in the server's log; a
+control connection that sent no `SSLRequest` at all completed startup normally. libpq
+does not ask under `disable` either.
+
+**The fact section 2 wanted is preserved, and so is the property that motivated it.** The
+`postgres.ssl_request` node is still recorded under `disable`, as `SKIPPED` with
+`EXEC_SKIPPED_BY_POLICY`, which states positively that no TLS was attempted on this
+connection and why. That node is what a plaintext channel points at, so ADR 0030's
+missing blocker carrier is supplied exactly as intended — the node's *state* changed, not
+its purpose.
+
+What is genuinely lost is the ability to report "you are connecting in plaintext, but this
+server does offer TLS" from the session connection, because learning it would destroy that
+connection. Measuring it on a separate connection is possible and is **not** done here;
+recorded as a reopen condition rather than smuggled in.
 
 Certificate verification and trust source are the TLS probe's existing parameters, so
 `verify-ca` and `verify-full` are already expressible and are not separate modes here.
@@ -265,10 +301,11 @@ dns.lookup            PASS
 ```
 
 Healthy plaintext, `trust` authentication — note that `postgres.authentication` is a real
-PASS with no credential involved:
+PASS with no credential involved, and that the negotiation node is `SKIPPED` because
+svcdoctor chose not to ask (see the section 4 amendment):
 
 ```text
-        postgres.ssl_request  PASS   offered=false
+        postgres.ssl_request  SKIPPED  EXEC_SKIPPED_BY_POLICY  tls.plan=disabled
         └── postgres.startup          PASS  auth_method=ok
             └── postgres.authentication PASS  (server demanded nothing)
                 └── postgres.session    PASS
@@ -330,7 +367,7 @@ Credential-transport policy refusal — the node the refusal points at is the on
 to produce:
 
 ```text
-        postgres.ssl_request  PASS   offered=false
+        postgres.ssl_request  SKIPPED  EXEC_SKIPPED_BY_POLICY  tls.plan=disabled
         └── postgres.startup          PASS  auth_method=sasl
             └── postgres.authentication SKIPPED  EXEC_SKIPPED_BY_POLICY  blockedBy ssl_request
                 └── postgres.session    SKIPPED  EXEC_SKIPPED_PREREQUISITE_FAILED
@@ -702,3 +739,12 @@ second consumer is a guess about what that consumer needs.
   `in_hot_standby` is already recorded and `probe.SweepScope` already exists.
 - **A pooler that omits `V` while a genuine backend also does**, or the reverse, would
   invalidate the one structural native-backend signal in §10.
+
+- **Measuring TLS availability on a plaintext run.** The section 4 amendment means a
+  `disable` run cannot learn whether the server would have accepted TLS, because asking
+  destroys the connection it is about to use. A separate connection could measure it, at
+  the cost of a second socket and a second set of transport nodes. Reopen when a user
+  wants "you are in plaintext and this server offers TLS" as a finding.
+- **A frame-size bound that a later phase outgrows.** `wire.MaxMessageSize` is one
+  mebibyte, which is generous for every startup-phase message and arbitrary for row data.
+  Reopen when a phase reads query results.

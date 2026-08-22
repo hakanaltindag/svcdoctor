@@ -232,6 +232,55 @@ Four properties make this worth relying on:
   Evidence is the recorded proof a report and a diagnosis rule read afterwards,
   and the two share a source of truth rather than querying one another.
 
+### PostgreSQL negotiates encryption in band, and that changes two things
+
+The PostgreSQL adapter reaches the TLS probe directly rather than through the transport
+chain: TCP, then an 8-byte `SSLRequest`, then a handshake on the same socket. Two security
+properties follow, both mechanical rather than conventional.
+
+**The adapter authors `plaintext`, and only `plaintext`.** When the run chose no
+encryption, this adapter is the component that decided not to ask and knows the socket was
+left in the clear, so ADR 0029's amended rule makes it authoritative for that one fact. It
+still cannot name a TLS constant — those come only from the probe that handshakes — and it
+still cannot call `security.Reveal`. Verified against deliberate violations in every
+direction.
+
+**A plaintext channel can finally name the node that proves it.** The negotiation is
+recorded whether or not TLS was attempted: `PASS`/`FAIL` when svcdoctor asked, `SKIPPED`
+with `EXEC_SKIPPED_BY_POLICY` when the run chose plaintext and did not. Either way there is
+a node stating what happened, so a credential refusal in a later phase points at a fact
+rather than at nothing. That is the gap ADR 0030 recorded and ADR 0036 promised to close.
+
+### An unauthenticated peer's prose never enters svcdoctor
+
+Two rules, both structural rather than remembered.
+
+**The `SSLRequest` error response is not read.** A server may answer the negotiation with
+`E`. At that moment no certificate has been verified and anything able to answer the socket
+can produce those bytes, so svcdoctor records that an error-shaped answer arrived and
+closes the connection without reading the message (CVE-2024-10977).
+
+**A decoded `ErrorResponse` has no field for prose.** `wire.ErrorFields` holds a SQLSTATE,
+a non-localized severity, and whether that severity was present. There is no field for the
+message, detail, hint, context, schema, table, column, constraint, or the server's source
+file and routine — so a caller cannot leak what it is never handed, and adding one is a
+visible change to a struct whose shape is pinned by test. The Phase 4.0 study measured a
+real `ErrorResponse` message carrying, in one string, the role, the database and
+svcdoctor's own NAT-translated source address as the server saw it; that last value appears
+nowhere else in a report, so structural redaction could never have pseudonymized it.
+
+Classification therefore reads **SQLSTATE and protocol position, never text**. A source
+scan fails the build if a file that interprets a peer's reply calls `strings.Contains` or
+imports `regexp`.
+
+### Nothing is buffered before a TLS handshake
+
+The negotiation byte is read straight from the connection into a local array. No
+`bufio.Reader` exists anywhere on that path, so no byte can be read out of the socket and
+stranded in a buffer the handshake never sees — which is the CVE-2021-23222 class, and it
+is absent structurally rather than detected. A surplus byte that has already arrived is
+refused outright, because a server willing to encrypt sends one byte and then waits.
+
 **Encryption is not identity.** A completed handshake with verification disabled
 is `tls-unverified`, and it is refused. Encryption to an unidentified peer is
 encryption to whoever answered.
