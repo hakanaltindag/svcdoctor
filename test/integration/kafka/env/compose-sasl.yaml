@@ -1,0 +1,80 @@
+# The primary Phase 3 validation environment: 3 real Apache Kafka brokers in
+# KRaft mode, with a SASL_SSL listener for clients.
+#
+# SASL_SSL is not an optional extra here. svcdoctor's Metadata step takes an
+# authenticated session, and its default credential-transport policy requires
+# verified TLS, so this is the only listener shape that reaches topology
+# discovery at all. See internal/adapter/kafka/metadata.go and ADR 0031.
+#
+#   EXTERNAL    localhost:N9092  SASL_SSL/PLAIN, what svcdoctor connects to
+#   INTERNAL    broker-N:9094    PLAINTEXT, inter-broker only
+#   CONTROLLER  broker-N:9093    PLAINTEXT, KRaft quorum
+#
+# The EXTERNAL advertised address is a per-broker variable so the
+# advertised-listener failure scenarios can corrupt one broker without touching
+# the cluster's own traffic.
+name: svcdoctor-kafka-sasl
+
+x-broker: &broker
+  image: apache/kafka:4.0.0
+  volumes:
+    - ./certs:/certs:ro
+    - ./jaas.conf:/etc/kafka/jaas.conf:ro
+  environment: &broker-env
+    CLUSTER_ID: kQ8xY2ZwQ0eF3hJ5nL7pAw
+    KAFKA_PROCESS_ROLES: broker,controller
+    KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker-1:9093,2@broker-2:9093,3@broker-3:9093
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:SASL_SSL,CONTROLLER:PLAINTEXT
+    KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+    KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+    KAFKA_LISTENER_NAME_EXTERNAL_SASL_ENABLED_MECHANISMS: PLAIN
+    KAFKA_SSL_KEYSTORE_TYPE: PKCS12
+    KAFKA_SSL_TRUSTSTORE_TYPE: PKCS12
+    KAFKA_SSL_KEYSTORE_LOCATION: /certs/broker.p12
+    KAFKA_SSL_KEYSTORE_PASSWORD: svcdoctor-test
+    KAFKA_SSL_KEY_PASSWORD: svcdoctor-test
+    KAFKA_SSL_TRUSTSTORE_LOCATION: /certs/truststore.p12
+    KAFKA_SSL_TRUSTSTORE_PASSWORD: svcdoctor-test
+    KAFKA_SSL_CLIENT_AUTH: none
+    KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ""
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    KAFKA_OPTS: -Djava.security.auth.login.config=/etc/kafka/jaas.conf
+
+services:
+  broker-1:
+    <<: *broker
+    hostname: broker-1
+    container_name: svcd-sasl-1
+    ports: ["19192:9092"]
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: INTERNAL://:9094,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker-1:9094,EXTERNAL://${ADV_1:-localhost:19192}
+      KAFKA_SSL_KEYSTORE_LOCATION: ${KS_1:-/certs/broker.p12}
+  broker-2:
+    <<: *broker
+    hostname: broker-2
+    container_name: svcd-sasl-2
+    ports: ["${PORTS_2:-29192:9092}"]
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: INTERNAL://:9094,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker-2:9094,EXTERNAL://${ADV_2:-localhost:29192}
+      KAFKA_SSL_KEYSTORE_LOCATION: ${KS_2:-/certs/broker.p12}
+  broker-3:
+    <<: *broker
+    hostname: broker-3
+    container_name: svcd-sasl-3
+    ports: ["39192:9092"]
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: INTERNAL://:9094,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker-3:9094,EXTERNAL://${ADV_3:-localhost:39192}
+      KAFKA_SSL_KEYSTORE_LOCATION: ${KS_3:-/certs/broker.p12}

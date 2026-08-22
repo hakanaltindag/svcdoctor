@@ -72,3 +72,32 @@ check: fmt-check test vet lint build ## Run the full local quality gate
 clean: ## Remove build output
 	$(GO) clean
 	rm -rf bin dist
+
+# --- Kafka integration validation (Phase 3 gate) ----------------------------
+#
+# Deliberately not part of `check`: it needs Docker and takes minutes, while the
+# ordinary gate must stay fast and hermetic. See test/integration/kafka/README.md.
+
+KAFKA_ENV := test/integration/kafka/env
+KAFKA_COMPOSE := docker compose -f $(KAFKA_ENV)/compose-sasl.yaml
+
+.PHONY: kafka-up kafka-down kafka-test integration-kafka
+
+kafka-up: ## Start the 3-broker Kafka validation cluster
+	@$(KAFKA_ENV)/gen-certs.sh
+	@$(KAFKA_COMPOSE) up -d
+	@printf 'waiting for three registered brokers'
+	@for i in $$(seq 1 60); do \
+		n=$$(docker exec svcd-sasl-1 /opt/kafka/bin/kafka-broker-api-versions.sh \
+			--bootstrap-server broker-1:9094 2>/dev/null | grep -c 'id: ' || true); \
+		if [ "$$n" = "3" ]; then printf ' ready\n'; exit 0; fi; \
+		printf '.'; sleep 1; \
+	done; printf '\ncluster did not become ready\n'; exit 1
+
+kafka-down: ## Stop the validation cluster and delete its volumes
+	@$(KAFKA_COMPOSE) down -v --remove-orphans
+
+kafka-test: ## Run the Kafka integration suite against a running cluster
+	$(GO) test -tags integration -count=1 -timeout 30m ./test/integration/kafka/...
+
+integration-kafka: kafka-up kafka-test kafka-down ## Full Kafka validation gate
