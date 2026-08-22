@@ -1516,15 +1516,36 @@ behaves identically and did before this phase. Settling it needs verification th
 identity-bearing surfaces structurally instead of searching decoded strings; see
 `docs/SECURITY.md`.
 
-### Phase 4.2 — Channel authority moves to the TLS probe: NOT STARTED
+### Phase 4.2 — Channel authority moves to the TLS probe: COMPLETE
 
 Small, generic, and a prerequisite for sending any PostgreSQL credential.
 
-- [ ] `probe/tls.Result.Channel()`, derived from the handshake it performed
-- [ ] `transport.channelOf` replaced by a call to it; no behaviour change
-- [ ] `forbidigo` exclusion moves from `internal/probe/transport/` to
-      `internal/probe/tls/` plus the chain, so the authority narrows rather than widens
-- [ ] ADR 0029 amended with the narrowing, not superseded
+- [x] `probe/tls.Result.Channel()`, derived from the handshake it performed;
+      `Verified()` now derives from it, so the package has one place that turns an
+      observation into a claim
+- [x] `transport.channelOf` deleted; the chain copies `session.Channel()` and
+      cannot reinterpret it
+- [x] `forbidigo` split into two rules with distinguishable messages, and the
+      exclusions matched on that text, so each package receives one authority
+      without the other. The chain **lost** TLS-constant authority: this is a
+      narrowing
+- [x] `depguard` denies `crypto/tls` to adapter production code, which removes the
+      capability to re-derive a channel by type assertion
+- [x] Guard verified in both directions against nine deliberate violations
+- [x] ADR 0029 amended, not superseded; ADR 0036's `SSLRequest` finding recorded
+      as the trigger
+- [x] Zero Kafka production changes; zero dependency, schema, domain and redaction
+      changes
+
+Narrowing the exclusions had a second effect worth recording: the transport chain
+previously held a blanket `forbidigo` exemption, which also exempted it from the
+`security.Reveal` ban. It no longer does.
+
+**Deliberately not done.** `internal/adapter/postgres` was not granted plaintext
+authority in advance, because the package does not exist. A protocol observing
+`SSLRequest → 'N'` genuinely establishes known plaintext and will need the same
+narrow grant the transport chain has; that is one exclusion rule added beside the
+existing one. Recorded as a reopen condition on ADR 0029 rather than pre-opened.
 
 ### Phase 4.3 — Wire package, SSLRequest and startup: NOT STARTED
 

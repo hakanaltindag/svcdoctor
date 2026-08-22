@@ -40,7 +40,7 @@ does not overturn it, and both remain authoritative.
 | 0026 | Kafka SASL enters as mechanism discovery, and authentication waits for an owner | Accepted | Extends 0025 to L5. Defers authentication with four named blockers |
 | 0027 | `security.Reveal` is confined to adapter wire packages, mechanically | Accepted | Closes the Phase 1 deferral its own backlog entry named. Adds no call sites |
 | 0028 | Credentialed authentication is singular, policy-gated and channel-aware | Accepted | Answers 0026 §7.1 and §7.3, narrows §7.2. Decides work not yet written |
-| 0029 | A connection carries what it proved, and a fail-closed policy reads it | Accepted | Implements 0028 §6. Sends no credential; changes no report schema |
+| 0029 | A connection carries what it proved, and a fail-closed policy reads it | Accepted, **amended in Phase 4.2** | Implements 0028 §6. Sends no credential; changes no report schema |
 | 0030 | PLAIN authentication, and the ordering that governs every credential byte | Accepted | Implements 0028 over 0029's mechanisms, inside 0027's boundary. **The first phase that transmits a credential.** Supplies the blocker carrier 0028 §3 assumed |
 | 0031 | Metadata discovers a topology, records it, and probes none of it | Accepted | First topology discovery. Answers the `Origin` reopen condition of 0013 and the topology-uniqueness case of 0019 |
 | 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4 |

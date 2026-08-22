@@ -6,6 +6,11 @@ Accepted, and implemented. Phase 3.2b builds the two mechanisms ADR 0028
 section 6 required before any credential byte. **No credential is transmitted,
 and no authentication code exists.**
 
+**Amended in Phase 4.2 — authority follows the observation boundary.** The
+decision below is unchanged in substance; one sentence of it was over-specific
+and is corrected here rather than by a superseding record. See the amendment at
+the end.
+
 ## Problem
 
 ADR 0028 decided that svcdoctor sends a password only over a channel whose peer
@@ -90,12 +95,16 @@ subject.
 | Channel | Established by | Because |
 |---|---|---|
 | `ChannelPlaintext` | the transport chain's no-TLS branch | the caller asked for no TLS; the branch itself is the evidence |
-| `ChannelTLSVerified` / `ChannelTLSUnverified` | `tls.Result.Verified()` | the handshake observation for *this* wrapped connection |
+| `ChannelTLSVerified` / `ChannelTLSUnverified` | `tls.Result.Channel()` | the handshake observation for *this* wrapped connection |
 
-`tls.Result.Verified()` is computed from the same `observation.verified()` that
+`tls.Result.Channel()` is computed from the same `observation.verified()` that
 produces the evidence's `tls.verified` attribute, so the runtime fact and the
 recorded fact cannot disagree about one handshake. A test asserts they agree in
-both directions.
+both directions. `tls.Result.Verified()` is derived from `Channel()` rather than
+computed separately, so the package has one place that turns an observation into
+a claim. (Phase 4.2 moved the naming of the two TLS constants into that package;
+before it, the chain named them from `Verified()`. The observation authority in
+this table was always the probe's.)
 
 **Plaintext is never inferred from a missing TLS node.** It is recorded in the
 branch that runs because `params.TLS == nil`. A handshake that failed produces no
@@ -243,6 +252,83 @@ of protection the risk warrants, and no more.
   `internal/probe/transport` now imports it, which is a leaf dependency in the
   allowed direction.
 
+## Amendment (Phase 4.2): authority follows the observation boundary
+
+### What was wrong
+
+Nothing in the decision above. One sentence of its *enforcement* was:
+
+> a security.Channel constant states what a connection proved, and only the
+> transport chain that established the connection may state it.
+
+That was true when written and stopped being true in Phase 4.0. The reason it read
+correctly is that every handshake in the repository happened inside the transport
+chain, so "the layer that established the channel" and "the transport chain" named
+the same package. Section 4 above already credited the *observation* to
+`tls.Result`; only the naming rule, and the lint that enforced it, were phrased
+around the caller instead of the observer.
+
+### What reopened it
+
+ADR 0036, from real protocol traces: PostgreSQL does not begin TLS after TCP. It
+sends an 8-byte `SSLRequest`, reads one byte, and — on `S` — hands the *same*
+socket to a TLS handshake, from inside its own protocol flow. A PostgreSQL adapter
+will therefore call `internal/probe/tls` directly, without the transport chain,
+and must obtain an authoritative channel fact from doing so.
+
+Under the old phrasing that was impossible without either routing PostgreSQL
+through a chain that cannot express its lifecycle, or letting an adapter name
+`ChannelTLSVerified` — which is exactly the forgery this record exists to prevent.
+
+### The correction
+
+> **The component that directly performed and observed the fact is authoritative
+> for it.** Every other layer propagates the value it was given and may not
+> restate it.
+
+Applied:
+
+| Fact | Authority | Because |
+|---|---|---|
+| `ChannelTLSVerified`, `ChannelTLSUnverified` | `internal/probe/tls` | it performs the handshake and observes the outcome |
+| `ChannelPlaintext` | `internal/probe/transport` | it decides not to establish TLS and knows the connection was left in the clear |
+| `ChannelUnknown` | anyone | it is the absence of a claim, it is the zero value, and every policy refuses it |
+
+This is a **narrowing**, not a widening. The transport chain lost the ability to
+name a TLS constant: it now copies `tls.Result.Channel()` and cannot reinterpret
+it. Verified against a deliberate violation — transport naming
+`ChannelTLSVerified` fails the build, and so does the TLS probe naming
+`ChannelPlaintext`.
+
+The lint is two rules rather than one, because two facts with two authorities
+cannot be expressed by a single grant. Each `forbid` pattern carries a
+distinguishable message and each exclusion matches on that text, so a package
+receives one authority without receiving the other.
+
+Narrowing the exclusions had a second effect worth recording: the transport chain
+previously held a blanket `forbidigo` exemption, which also exempted it from the
+`security.Reveal` ban. It no longer does, and a `Reveal` call there now fails the
+build.
+
+### What did not change
+
+The runtime fact still travels **with the connection**, never beside it, and is
+still not read back out of the evidence graph — section 3 and section 5 stand
+unaltered. `PermitsCredentials` still takes a `Channel` and nothing else, so there
+is no parameter through which a graph could arrive. The policy is still
+fail-closed with one value. No report schema change, no `domain` change, no
+redaction change, no new dependency, no `security.Reveal` call site. Kafka
+production code was not touched, and propagates exactly as before.
+
+### Deliberately not done
+
+`internal/adapter/postgres` was **not** granted plaintext authority in advance,
+because the package does not exist. A protocol that observes `SSLRequest → 'N'`
+genuinely establishes known plaintext on that socket and will need the same narrow
+grant this amendment gives the transport chain; that is one exclusion rule added
+beside the existing one, not a change to the model. Recorded as a reopen condition
+rather than pre-opened, so the grant arrives with the code that earns it.
+
 ## Reopen conditions
 
 - **A transport mode that is neither plaintext nor TLS** — `Channel` gains a
@@ -253,3 +339,12 @@ of protection the risk warrants, and no more.
 - **A verification outcome TLS cannot express today**, such as a channel verified
   by a mechanism other than the peer certificate chain — `IdentityVerified` is the
   single predicate that would need revisiting.
+
+- **A protocol that negotiates encryption in band** — PostgreSQL's `SSLRequest`,
+  or MySQL's equivalent — needs authority to state `ChannelPlaintext` for the
+  connection it left in the clear. The amendment above deliberately does not grant
+  it ahead of the code. Reopen when `internal/adapter/postgres` records its first
+  `SSLRequest` observation.
+- **A second component observing TLS** would test whether "the observer is the
+  authority" needs to become something more structural than a lint rule. Today
+  exactly one package performs a handshake, and one rule expresses that.

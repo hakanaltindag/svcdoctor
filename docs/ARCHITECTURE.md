@@ -311,13 +311,23 @@ them generalizes past Kafka (**ADR 0026**, **ADR 0030**):
   `EXEC_SKIPPED_BY_POLICY`. Obeying a declared policy is not owning one, and a
   recorded refusal is neither silence nor a finding.
 - **A layer cannot enforce a policy about a fact it cannot see.** The fact must
-  be **declared by the transport that established it**, not inferred by
+  be **declared by the component that observed it**, not inferred by
   type-asserting a connection — the same declaration-over-inference rule ADR 0022
   fixed for identity-bearing attributes. Phase 3.2b built it (**ADR 0029**):
-  `security.Channel` travels with the connection from `tls.Result.Verified()`
+  `security.Channel` travels with the connection from `tls.Result.Channel()`
   through `transport.Continuation`, `kafka.Session` and `kafka.HandshakeSession`,
   and `security.CredentialTransportPolicy` reads it. Both zero values fail closed,
   and an adapter has no way to strengthen the claim.
+- **Channel authority follows the observation boundary, not the call path.**
+  Phase 4.2 narrowed ADR 0029's wording after Phase 4.0 established that a
+  protocol can negotiate TLS from inside its own flow rather than inside the
+  transport chain. The probe that performs a handshake owns the two TLS facts;
+  the component that decides to leave a connection in the clear owns plaintext;
+  everything else propagates. The transport chain consequently lost the ability to
+  name a TLS constant, which is a narrowing rather than a widening, and `depguard`
+  denies adapters `crypto/tls` so no layer can interrogate a socket to re-derive
+  one. A failed handshake reports `unknown`: `Channel` governs writes to a live
+  connection, and a rejected certificate produced none.
 - **A refusal names the fact that caused it, or names nothing.** The identifier of
   the node that classified a channel travels the same way the channel does
   (`ChannelEvidence`), so an unverified-TLS refusal points at the L3 node carrying

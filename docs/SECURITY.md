@@ -166,11 +166,33 @@ the transport chain and both Kafka steps, to the session a future authentication
 step would consume:
 
 ```text
-tls.Result.Verified() -> transport.Continuation.Channel()
-                      -> kafka.Session.Channel()
-                      -> kafka.HandshakeSession.Channel()
-                      -> kafka.AuthenticatedSession.Channel()
+tls.Result.Channel() -> transport.Continuation.Channel()
+                     -> kafka.Session.Channel()
+                     -> kafka.HandshakeSession.Channel()
+                     -> kafka.AuthenticatedSession.Channel()
 ```
+
+**Authority follows the observation boundary** (Phase 4.2, amending ADR 0029).
+The component that directly performed and observed a fact is the one entitled to
+state it; every other layer propagates the value it was given:
+
+| Fact | Authority | Because |
+|---|---|---|
+| `tls-verified`, `tls-unverified` | `internal/probe/tls` | it performs the handshake |
+| `plaintext` | `internal/probe/transport` | it decides to leave the connection in the clear |
+| `unknown` | anyone | it is the absence of a claim, and every policy refuses it |
+
+That is narrower than the rule it replaces. The transport chain used to be the
+sole authority, and now cannot name a TLS constant at all — it copies
+`tls.Result.Channel()` after taking the connection, and has nothing to add. The
+correction was forced by PostgreSQL, which negotiates TLS from inside its own
+protocol flow (`SSLRequest`, then a handshake on the same socket) and so reaches
+the TLS probe without the chain. A protocol reaching the probe directly still gets
+an authoritative answer, because authority never depended on the call path.
+
+A failed handshake reports `unknown`, not `tls-unverified`. `Channel` governs what
+may be written to a **live** connection, and a rejected certificate produced none;
+the diagnostic fact is recorded in the evidence instead.
 
 The policy reads it and nothing else:
 
@@ -199,9 +221,16 @@ Four properties make this worth relying on:
   `unknown`, which is refused. Inside a defining package the type system cannot
   help — a package owns its own fields — so the adapter's constructors copy the
   fact from the object being continued instead of accepting it as a parameter,
-  `forbidigo` forbids naming a `security.Channel` constant outside the transport
-  chain, and mutation-checked tests fail when a channel is forged or downgraded.
-  See ADR 0029 for what each level does and does not guarantee.
+  `forbidigo` forbids naming each `security.Channel` constant outside the one
+  package authoritative for it, `depguard` denies adapters `crypto/tls` so a
+  connection cannot be interrogated to re-derive one, and mutation-checked tests
+  fail when a channel is forged or downgraded. See ADR 0029 for what each level
+  does and does not guarantee.
+- **The graph is never consulted to decide credential safety.** The runtime fact
+  travels with the connection; `PermitsCredentials` takes a `Channel` and nothing
+  else, so there is no parameter through which a `domain.Graph` could arrive.
+  Evidence is the recorded proof a report and a diagnosis rule read afterwards,
+  and the two share a source of truth rather than querying one another.
 
 **Encryption is not identity.** A completed handshake with verification disabled
 is `tls-unverified`, and it is refused. Encryption to an unidentified peer is
