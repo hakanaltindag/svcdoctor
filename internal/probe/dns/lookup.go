@@ -13,6 +13,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
+	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
 
 // StepLookup names the operation this probe performs.
@@ -20,7 +21,14 @@ import (
 // It is exported because it is part of the report contract: the same string
 // appears in every report and will be matched by automation, so a second copy of
 // it as a literal elsewhere is a bug waiting to happen.
-const StepLookup domain.Step = "dns.lookup"
+//
+// **The canonical spelling moved to internal/vocabulary and this is an alias for
+// it.** A future generic transport rule has to name this step and cannot import
+// this package — depguard denies diagnosis the probe import — so the one string
+// lives where both sides can reach it (ADR 0042 section 11). The move is
+// ownership only: the value is unchanged, byte for byte, and every caller here
+// still reads StepLookup.
+const StepLookup = vocabulary.StepDNSLookup
 
 // AttrAnswers holds the canonical addresses a lookup returned, one address per
 // entry.

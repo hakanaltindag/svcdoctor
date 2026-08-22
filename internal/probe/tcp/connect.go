@@ -14,6 +14,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
+	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
 
 // StepConnect names the operation this probe performs.
@@ -21,7 +22,10 @@ import (
 // It is exported because it is part of the report contract: the same string
 // appears in every report and will be matched by automation, so a second copy of
 // it as a literal elsewhere is a bug waiting to happen.
-const StepConnect domain.Step = "tcp.connect"
+//
+// **The canonical spelling moved to internal/vocabulary and this is an alias for
+// it**, on the same terms as dns.StepLookup. See ADR 0042 section 11.
+const StepConnect = vocabulary.StepTCPConnect
 
 // ErrInvalidInput reports that the probe was called with something it cannot
 // use, such as an unspecified address or a nil dialer.

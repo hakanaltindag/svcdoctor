@@ -14,6 +14,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
+	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
 
 // StepHandshake names the operation this probe performs.
@@ -21,7 +22,14 @@ import (
 // It is exported because it is part of the report contract: the same string
 // appears in every report and will be matched by automation, so a second copy of
 // it as a literal elsewhere is a bug waiting to happen.
-const StepHandshake domain.Step = "tls.handshake"
+//
+// **The canonical spelling moved to internal/vocabulary and this is an alias for
+// it**, on the same terms as dns.StepLookup. See ADR 0042 section 11.
+//
+// A node carrying this step is not automatically generic transport evidence:
+// internal/adapter/postgres records one for its in-band upgrade too. Ownership
+// comes from the parent edge, not from the name.
+const StepHandshake = vocabulary.StepTLSHandshake
 
 // The attributes this probe records. Each is a fact the handshake directly
 // observed and that nothing else in the evidence already carries; see the
