@@ -53,16 +53,17 @@ func parse(t *testing.T, name string) *ast.File {
 //     adapter. Orchestration sequences steps; it does not speak the protocol.
 func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 	allowed := map[string]bool{
-		"github.com/hakanaltindag/svcdoctor/internal/domain":             true,
-		"github.com/hakanaltindag/svcdoctor/internal/probe":              true,
-		"github.com/hakanaltindag/svcdoctor/internal/probe/dns":          true,
-		"github.com/hakanaltindag/svcdoctor/internal/probe/tcp":          true,
-		"github.com/hakanaltindag/svcdoctor/internal/probe/transport":    true,
-		"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres":   true,
-		"github.com/hakanaltindag/svcdoctor/internal/diagnosis":          true,
-		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/postgres": true,
-		"github.com/hakanaltindag/svcdoctor/internal/security":           true,
-		"github.com/hakanaltindag/svcdoctor/internal/vocabulary":         true,
+		"github.com/hakanaltindag/svcdoctor/internal/domain":              true,
+		"github.com/hakanaltindag/svcdoctor/internal/probe":               true,
+		"github.com/hakanaltindag/svcdoctor/internal/probe/dns":           true,
+		"github.com/hakanaltindag/svcdoctor/internal/probe/tcp":           true,
+		"github.com/hakanaltindag/svcdoctor/internal/probe/transport":     true,
+		"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres":    true,
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis":           true,
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/postgres":  true,
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/transport": true,
+		"github.com/hakanaltindag/svcdoctor/internal/security":            true,
+		"github.com/hakanaltindag/svcdoctor/internal/vocabulary":          true,
 	}
 
 	for _, name := range productionFiles(t) {

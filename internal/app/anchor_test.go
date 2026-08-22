@@ -378,32 +378,173 @@ func countSeparators(id string) int {
 	return n
 }
 
-// TestNoGenericTransportFindingExists pins the boundary of this phase.
+// TestTheRunReportsWhatItCouldNotReach is the ADR 0043 report integration.
 //
-// ADR 0042 authorizes a node and no claim. A run that fails at DNS, TCP or TLS
-// still produces no transport finding, and that gap stays visible rather than
-// being closed by an unauthorized rule.
-func TestNoGenericTransportFindingExists(t *testing.T) {
-	for _, c := range []struct {
+// This is the failure the CLI release gate was opened for. Before these rules the
+// same runs produced complete evidence, a correct firstBrokenLayer and an empty
+// findings array beside `status: OK` — a report that reads as healthy while
+// naming a broken layer.
+//
+// It runs the production composition, so what is under test is the wiring as much
+// as the rules.
+func TestTheRunReportsWhatItCouldNotReach(t *testing.T) {
+	cases := []struct {
 		name     string
 		resolver stubResolver
+		dialer   interface {
+			DialTCP(context.Context, netip.AddrPort) (net.Conn, error)
+		}
+		wantCode  domain.FindingCode
+		wantLayer domain.Layer
 	}{
-		{"dns failure", stubResolver{err: &net.DNSError{Err: "no such host", IsNotFound: true}}},
-		{"tcp failure", stubResolver{addrs: addrs(t, "10.0.0.1")}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			result := runWith(t, "db.example.com", 5432, c.resolver, refusingDialer{})
+		{
+			name:      "the name does not resolve",
+			resolver:  stubResolver{err: &net.DNSError{Err: "no such host", IsNotFound: true}},
+			dialer:    refusingDialer{},
+			wantCode:  "DNS_NAME_NOT_RESOLVED",
+			wantLayer: domain.LayerDNS,
+		},
+		{
+			name:      "every address refuses",
+			resolver:  stubResolver{addrs: addrs(t, "10.0.0.1", "2001:db8::1")},
+			dialer:    refusingDialer{},
+			wantCode:  "TCP_CONNECTION_NOT_ESTABLISHED",
+			wantLayer: domain.LayerTCP,
+		},
+	}
 
-			for _, f := range result.Report().Findings() {
-				code := string(f.Code())
-				for _, prefix := range []string{"DNS_", "TCP_", "TLS_", "TARGET_"} {
-					if len(code) >= len(prefix) && code[:len(prefix)] == prefix {
-						t.Errorf("finding %s exists; generic transport diagnosis is "+
-							"Phase 4.9a and is not authorized here", code)
-					}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result := runWith(t, "db.example.com", 5432, c.resolver, c.dialer)
+			report := result.Report()
+
+			findings := report.Findings()
+			if len(findings) != 1 {
+				t.Fatalf("got %d findings, want exactly 1: %v", len(findings), findings)
+			}
+			finding := findings[0]
+
+			if got := finding.Code(); got != c.wantCode {
+				t.Errorf("code = %s, want %s", got, c.wantCode)
+			}
+			if got := finding.Severity(); got != domain.SeverityError {
+				t.Errorf("severity = %s, want ERROR", got)
+			}
+			if got := finding.Layer(); got != c.wantLayer {
+				t.Errorf("layer = %s, want %s", got, c.wantLayer)
+			}
+
+			// The subject is the operator's endpoint, and it agrees with the
+			// anchor and the report envelope. This is what ADR 0042 bought.
+			anchor := requireOneAnchor(t, report.Graph())
+			if got := finding.Subject().Ref(); got != anchor.Subject().Ref() {
+				t.Errorf("finding subject %q and anchor subject %q disagree",
+					got, anchor.Subject().Ref())
+			}
+			if got := finding.Subject().Ref(); got != report.Target().Requested() {
+				t.Errorf("finding subject %q and report target %q disagree",
+					got, report.Target().Requested())
+			}
+
+			// The report no longer reads as healthy.
+			if got := report.Summary().Status(); got != domain.SummaryStatusProblemsFound {
+				t.Errorf("status = %s, want PROBLEMS_FOUND", got)
+			}
+			// And firstBrokenLayer is unchanged: it is derived from evidence,
+			// never from findings.
+			if got := report.Summary().FirstBrokenLayer(); got != c.wantLayer {
+				t.Errorf("firstBrokenLayer = %s, want %s", got, c.wantLayer)
+			}
+
+			// Every reference resolves in the report's own graph.
+			for _, ref := range finding.EvidenceRefs() {
+				if _, ok := report.Graph().Node(ref); !ok {
+					t.Errorf("evidence ref %s is not in the graph", ref)
 				}
 			}
 		})
+	}
+}
+
+// TestPartialSuccessProducesNoGenericTCPFinding is the withholding rule on a real
+// run, and the case where the report's two views legitimately differ.
+//
+// One family fails and the other connects. No TCP finding fires, because a client
+// selecting the working path succeeds — but firstBrokenLayer still reports L2,
+// because a path did positively fail. Both are correct and a renderer must be
+// ready for the combination.
+func TestPartialSuccessProducesNoGenericTCPFinding(t *testing.T) {
+	result := runWith(t, "db.example.com", 5432,
+		stubResolver{addrs: addrs(t, "10.0.0.1", "2001:db8::1")}, &oneWorkingDialer{})
+	report := result.Report()
+
+	for _, f := range report.Findings() {
+		if f.Code() == "TCP_CONNECTION_NOT_ESTABLISHED" {
+			t.Error("a TCP finding fired while one address connected")
+		}
+	}
+
+	// The failed path is still in the graph. Withholding a finding is not
+	// withholding information.
+	failures := 0
+	for _, n := range nodesWithStep(report.Graph(), vocabulary.StepTCPConnect) {
+		if n.State() == domain.StateFail {
+			failures++
+		}
+	}
+	if failures != 1 {
+		t.Errorf("got %d failed connections in the graph, want 1", failures)
+	}
+	if got := report.Summary().FirstBrokenLayer(); got != domain.LayerTCP {
+		t.Errorf("firstBrokenLayer = %s, want L2 — evidence-derived and unchanged", got)
+	}
+}
+
+// TestCancellationProducesNoTargetFinding pins that an incomplete run makes no
+// claim about the target.
+func TestCancellationProducesNoTargetFinding(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := runCtxWith(t, ctx, "db.example.com", 5432,
+		stubResolver{addrs: addrs(t, "10.0.0.1")}, refusingDialer{})
+	report := result.Report()
+
+	if got := len(report.Findings()); got != 0 {
+		t.Errorf("a cancelled run produced %d findings, want none", got)
+	}
+	if !result.Incomplete() {
+		t.Error("Incomplete() = false; that is where an unfinished run is reported")
+	}
+	if got := report.Summary().Status(); got != domain.SummaryStatusOK {
+		t.Errorf("status = %s; a cancelled run found no target problem", got)
+	}
+}
+
+// TestNoTLSFindingIsProduced pins the deferral on a real run.
+//
+// A PostgreSQL run whose in-band handshake fails still produces nothing. That gap
+// is deliberate and recorded — ADR 0043 section 15 — and it is the reason the
+// transport release gate is not yet closed.
+func TestNoTLSFindingIsProduced(t *testing.T) {
+	result := runWith(t, "db.example.com", 5432,
+		stubResolver{addrs: addrs(t, "10.0.0.1")}, sslThenGarbageDialer{})
+	report := result.Report()
+
+	for _, f := range report.Findings() {
+		code := string(f.Code())
+		if len(code) >= 4 && code[:4] == "TLS_" {
+			t.Errorf("finding %s exists; generic TLS is deferred", code)
+		}
+	}
+
+	// The handshake did fail, so this is not vacuous.
+	handshakes := nodesWithStep(report.Graph(), vocabulary.StepTLSHandshake)
+	if len(handshakes) != 1 || handshakes[0].State() != domain.StateFail {
+		t.Fatalf("expected one failed handshake, got %v", handshakes)
+	}
+	if got := report.Summary().FirstBrokenLayer(); got != domain.LayerTLS {
+		t.Errorf("firstBrokenLayer = %s, want L3", got)
 	}
 }
 
@@ -573,4 +714,42 @@ func TestTheAnchorIsRecordedBeforeMeasurement(t *testing.T) {
 	if parents := graph.Parents(lookups[0].ID()); len(parents) != 1 || parents[0] != anchor.ID() {
 		t.Errorf("a failed sweep still declares its cause: parents = %v", parents)
 	}
+}
+
+// oneWorkingDialer accepts the first address it is given and refuses the rest,
+// which is what a dual-stack endpoint with one usable family looks like.
+type oneWorkingDialer struct{ used bool }
+
+func (d *oneWorkingDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, error) {
+	if d.used {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	}
+	d.used = true
+	client, server := net.Pipe()
+	_ = server.Close()
+	return client, nil
+}
+
+// sslThenGarbageDialer answers the SSLRequest with 'S' and then speaks something
+// that is not a TLS record, which fails the in-band handshake.
+type sslThenGarbageDialer struct{}
+
+func (sslThenGarbageDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, error) {
+	client, server := net.Pipe()
+	go func() {
+		defer func() { _ = server.Close() }()
+		request := make([]byte, 8)
+		if _, err := server.Read(request); err != nil {
+			return
+		}
+		if _, err := server.Write([]byte{'S'}); err != nil {
+			return
+		}
+		hello := make([]byte, 4096)
+		if _, err := server.Read(hello); err != nil {
+			return
+		}
+		_, _ = server.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+	}()
+	return client, nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	diagnosispostgres "github.com/hakanaltindag/svcdoctor/internal/diagnosis/postgres"
+	diagnosistransport "github.com/hakanaltindag/svcdoctor/internal/diagnosis/transport"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
@@ -190,7 +191,18 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 		return Result{}, fmt.Errorf("freezing the evidence graph: %w", err)
 	}
 
+	// Generic transport rules first, then the service's, which is the order the
+	// layers were measured in. **Wiring order does not reach the output** — the
+	// engine returns findings in canonical order regardless (ADR 0017) — so this
+	// is for a reader of the composition, not for the report.
+	//
+	// The generic rules are wired exactly like the service's: no wrapper, no
+	// precedence, no pre-diagnosis special case. They are inert on a graph with no
+	// requested-target anchor and cannot reach service-owned evidence, so nothing
+	// arbitrates between the two sets (ADR 0043 sections 1 and 9).
 	findings := diagnosis.NewEngine(
+		diagnosistransport.DNS,
+		diagnosistransport.TCP,
 		diagnosispostgres.SSLRequest,
 		diagnosispostgres.Startup,
 		diagnosispostgres.Authentication,
