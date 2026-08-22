@@ -357,13 +357,23 @@ func earliestFailure(failures []domain.Evidence) string {
 // the subject and the evidence references carry it, structurally, where
 // redaction can transform it.
 func brokerPhrase(advertisement domain.Evidence) string {
-	value, ok := advertisement.Attribute(servicekafka.AttrBrokerNodeID)
-	if !ok {
-		return ""
-	}
-	id, ok := value.Int()
+	id, ok := brokerNodeID(advertisement)
 	if !ok {
 		return ""
 	}
 	return " for broker node " + strconv.FormatInt(id, 10)
+}
+
+// brokerNodeID returns the node identifier an advertisement recorded, if it did.
+//
+// It is shared by the rules in this package rather than read twice. An
+// advertisement without the attribute is not an error: the identifier decorates
+// prose and is never a precondition of any claim, so a rule that cannot find one
+// simply says less.
+func brokerNodeID(advertisement domain.Evidence) (int64, bool) {
+	value, ok := advertisement.Attribute(servicekafka.AttrBrokerNodeID)
+	if !ok {
+		return 0, false
+	}
+	return value.Int()
 }

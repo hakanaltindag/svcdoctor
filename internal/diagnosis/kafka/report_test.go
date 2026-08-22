@@ -175,3 +175,73 @@ func TestTheRuleWiresIntoTheEngineUnchanged(t *testing.T) {
 	}
 	confirmed(t, findings[0])
 }
+
+// TestAnUnusableAdvertisementAssemblesAndReportsProblems covers the Phase 3.7
+// finding through report assembly.
+//
+// It is also the case that exercises docs/REPORT_SCHEMA.md section 7.5 from the
+// opposite direction to the reachability finding: here the claim layer and the
+// first broken layer **coincide**, because the only FAIL node in the run is the
+// advertisement itself and it is an L6 node. The reachability finding has them
+// differ. Both are correct, and a reader who has internalized only one of the
+// two shapes will misread the other.
+func TestAnUnusableAdvertisementAssemblesAndReportsProblems(t *testing.T) {
+	b := newBuilder(t)
+	exchange := b.metadata(domain.StatePass)
+	b.unusable(exchange, 2, ":9093", "", 9093)
+	graph := b.freeze()
+
+	findings := UnusableAdvertisement(graph)
+	report := assemble(t, graph, findings)
+	summary := report.Summary()
+
+	if summary.Status() != domain.SummaryStatusProblemsFound {
+		t.Errorf("status = %s, want PROBLEMS_FOUND", summary.Status())
+	}
+	if got := summary.FindingCountsBySeverity().Error; got != 1 {
+		t.Errorf("error findings = %d, want 1", got)
+	}
+	if got := summary.FirstBrokenLayer(); got != domain.LayerTopology {
+		t.Errorf("firstBrokenLayer = %s, want L6: the advertisement node is the only FAIL, "+
+			"and no transport was attempted", got)
+	}
+	if got := report.Findings()[0].Layer(); got != summary.FirstBrokenLayer() {
+		t.Errorf("claim layer %s and first broken layer %s: for this finding they coincide",
+			got, summary.FirstBrokenLayer())
+	}
+	if _, err := json.Marshal(report); err != nil {
+		t.Errorf("report does not marshal: %v", err)
+	}
+}
+
+// TestBothKafkaFindingsAssembleTogether runs the composed engine into a report
+// and checks ADR 0014 validation over the union of their references.
+func TestBothKafkaFindingsAssembleTogether(t *testing.T) {
+	b := newBuilder(t)
+	exchange := b.metadata(domain.StatePass)
+	unreachable(b, exchange, 2, "broker-2.internal:9092", "broker-2.internal", "10.20.0.2")
+	b.unusable(exchange, 3, "broker-3.internal:0", "broker-3.internal", 0)
+	graph := b.freeze()
+
+	report := assemble(t, graph, bothRules().Diagnose(graph))
+	if len(report.Findings()) != 2 {
+		t.Fatalf("findings = %d, want 2", len(report.Findings()))
+	}
+
+	counts := report.Summary().FindingCountsBySeverity()
+	if counts.Error != 2 {
+		t.Errorf("error findings = %d, want 2", counts.Error)
+	}
+	// The lowest FAIL layer across the graph, which is the transport failure of
+	// the *other* broker rather than either finding's claim layer.
+	if got := report.Summary().FirstBrokenLayer(); got != domain.LayerTCP {
+		t.Errorf("firstBrokenLayer = %s, want L2", got)
+	}
+	for _, f := range report.Findings() {
+		for _, ref := range f.EvidenceRefs() {
+			if _, ok := graph.Node(ref); !ok {
+				t.Errorf("%s references %s, which is not in the graph", f.Code(), ref)
+			}
+		}
+	}
+}
