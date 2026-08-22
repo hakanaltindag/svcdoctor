@@ -331,10 +331,24 @@ linters:
         text: 'TLS channel constant'
 
       # The transport chain decides when to leave a connection in the clear, so
-      # it owns that fact and no other. A protocol that negotiates encryption in
-      # band will need the same narrow grant when it exists; that is a one-line
-      # addition here rather than a change to this model (ADR 0029, ADR 0036).
+      # it owns that fact and no other.
       - path: internal/probe/transport/
+        linters:
+          - forbidigo
+        text: 'plaintext channel constant'
+
+      # The PostgreSQL adapter is the second component to earn that grant, and
+      # it is the one ADR 0029's amendment predicted: PostgreSQL negotiates
+      # encryption in band, so when the run chooses plaintext this adapter is the
+      # component that decided not to ask and knows the socket was left in the
+      # clear. It records that as a node, which is what finally gives a plaintext
+      # channel something truthful to point at (ADR 0030's missing blocker).
+      #
+      # The grant is exactly one fact. Naming a TLS constant here still fails —
+      # those come only from the probe that handshakes — and the security.Reveal
+      # ban is untouched, which matters because this phase sends no credential.
+      # Verified in every direction against deliberate violations.
+      - path: internal/adapter/postgres/
         linters:
           - forbidigo
         text: 'plaintext channel constant'
