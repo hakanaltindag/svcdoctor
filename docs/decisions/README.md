@@ -56,7 +56,8 @@ does not overturn it, and both remain authoritative.
 | 0042 | A run records the target it was asked about, and a sweep declares its cause | **Accepted, implemented in Phase 4.9a-pre** | Closes the ownership and subject gaps Phase 4.9a stopped on. Narrows 0041, half-closes 0017's deferral, amends 0032 at the sweep root, and leaves 0034's advertised ownership structurally unreachable. Authorizes no finding |
 | 0043 | svcdoctor says what it could not reach, and no more than that | **Accepted, implemented in Phase 4.9b** | Closes 0017's generic transport deferral **for DNS and TCP only**. Consumes 0042 as its ownership prerequisite; leaves 0034, 0040 and 0041 unchanged. Defers generic TLS for want of a producer, and records PostgreSQL's in-band TLS gap without fixing it |
 | 0044 | A handshake belongs to whoever asked for it | **Accepted, implemented in Phase 4.9d** | Gives PostgreSQL the in-band `tls.handshake` node, read from the parent edge the negotiation already recorded. **Supersedes one bullet of 0040** — the refusal of `POSTGRES_TLS_*` findings — and argues the reversal. 0041, 0042 and 0043 unchanged; generic TLS still deferred |
-| 0045 | The negotiation gets a floor, so a wrong port stops reading as healthy | Accepted (policy) | Closes two of the three shapes 0040 recorded as an SSLRequest gap, and gives that step the floor the other three PostgreSQL steps already had. Disjoint from `POSTGRES_TLS_DECLINED` by class and from 0044 by state. The no-credential blocker is **not** decided here |
+| 0045 | The negotiation gets a floor, so a wrong port stops reading as healthy | **Accepted, implemented in Phase 4.11b** | Closes two of the three shapes 0040 recorded as an SSLRequest gap, and gives that step the floor the other three PostgreSQL steps already had. Disjoint from `POSTGRES_TLS_DECLINED` by class and from 0044 by state. The no-credential blocker is **not** decided here |
+| 0046 | A run that could not start says so, and the graph proves which run it was | **Accepted, implemented in Phase 4.11b** | Closes the no-credential gap 0041 recorded. Adds one generic `FailureClass`, because absence could not be distinguished from a run cancelled at the same point. Distinct from 0030's policy skip; 0040's twelve findings and 0044 unchanged |
 
 ## Decisions that govern work not yet written
 
@@ -341,6 +342,20 @@ A deferral is a decision too, and each names the condition that should reopen it
   not been measured, and this phase measured an unexpected *byte*, not an `ErrorResponse`. It is
   half a phase: the no-credential blocker hit two second-opinion triggers and was returned as a
   packet instead of decided.
+
+- **0046** is the last PostgreSQL BASIC blocker, and the one whose *evidence* had to move before
+  any claim was possible. Forgetting a password produced a report where every step passed,
+  `status: OK`, and no broken layer at all — worse than the transport silences 0043 and 0044
+  closed, because there was not even a FAIL node to hint at it. The obvious rule could not be
+  written: ADR 0041 records nothing when the budget ends before the credentialed step, so a
+  cancelled run left a byte-identical graph, and a rule reading absence would have claimed "no
+  credential was configured" about a run that had one. So the fact moved to the producer, which
+  needed one generic `FailureClass` — `EXEC_REQUIRED_INPUT_MISSING`, service-neutral, and none of
+  the three execution classes it sits beside. Two details repay attention: the check is second,
+  after the capability gap, so an endpoint demanding `md5` is not answered with "configure a
+  password"; and the finding is WARN, because the endpoint did nothing wrong and severity is not a
+  lever for forcing an exit code. Whether a run that never reached a session should *look* clean
+  in a terminal is a renderer question, and 0046 says so rather than solving it with severity.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

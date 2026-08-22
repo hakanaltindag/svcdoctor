@@ -651,6 +651,43 @@ claims something about *this endpoint*, so a second address working withholds no
 And `Origin` remains deferred: nothing here lets any layer ask how an arbitrary subject
 entered a run.
 
+### 5.7 A step that cannot run says so, at the step
+
+Most evidence records what a peer did. One kind records what *svcdoctor* could not
+do, and it exists because absence turned out to be unreadable.
+
+A run that reaches PostgreSQL's authentication step without a credential used to
+record nothing, and so did a run cancelled at that exact point. The two graphs
+were byte-identical, so no rule could tell them apart — and the first of them
+reported `status: OK` with every node passing and no session established
+(**ADR 0046**).
+
+The fix generalizes, and it is the same shape §5.6 uses for ownership:
+
+> **A fact about why a step did not run belongs to the step, recorded by its
+> producer at the moment it is discovered. Diagnosis reads nodes; it never infers
+> from a node that is not there.**
+
+Three properties keep it honest:
+
+- **SKIPPED, not FAIL or UNKNOWN.** Nothing failed — no byte was sent and the peer
+  was never asked — and nothing was indeterminate. The step was intentionally not
+  executed, which is what SKIPPED means.
+- **The class is generic.** `EXEC_REQUIRED_INPUT_MISSING` names no service, no
+  protocol and no kind of input, and is distinct from the policy skip, the
+  capability gap and the privilege gap that sit beside it. A future step needing a
+  certificate or a token it was never given reaches the same condition.
+- **Ordering is part of the contract.** The check sits after the capability gap —
+  an endpoint demanding a mechanism svcdoctor cannot perform is answered with that,
+  not with "configure a credential" — and before the channel policy, the endpoint
+  binding and every layer that could derive or reveal a secret.
+
+The claim it supports is `WARN`, not `ERROR`: the endpoint did nothing wrong, and
+severity is the impact of a claim about its own subject rather than a lever for
+forcing a process exit code. Whether a run that never reached a session should
+*look* clean in a terminal is a renderer question, and the record says so instead
+of answering it with severity.
+
 ## 6. Diagnosis
 
 Diagnosis consumes normalized evidence only.

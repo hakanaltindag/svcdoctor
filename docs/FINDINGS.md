@@ -41,7 +41,7 @@ TLS_CERTIFICATE_EXPIRED
 > `DNS_RESOLUTION_FAILED` and `TCP_CONNECTION_NOT_ESTABLISHED` are produced by
 > `internal/diagnosis/transport` for the operator-requested target; section 7 carries them.
 > With the two `KAFKA_ADVERTISED_ENDPOINT_*` and the twelve `POSTGRES_*` codes in section 6,
-> svcdoctor produces **twenty-two**.
+> svcdoctor produces **twenty-four**.
 >
 > The blocker was run intent — "is this a Kafka diagnosis or a bare endpoint check?" — which
 > `diagnosis.Rule` cannot see, receiving only a `Graph`. ADR 0042 put it in the graph as an L0
@@ -404,6 +404,23 @@ Five properties of the set are worth reading before the record itself:
   rule disjoint from `POSTGRES_TLS_DECLINED` and excludes the SKIPPED handshake node the
   adapter mints when the negotiation failed. ADR 0044 supersedes this record's earlier refusal
   and argues why.
+- **`POSTGRES_SSL_NEGOTIATION_FAILED`** is the L3 floor, added by ADR 0045: the negotiation
+  failed for a reason that is not a decline — an answer the protocol does not define, a peer
+  that closed, a reply that could not be decoded. `CONFIRMED` / `ERROR` / `HIGH`, and
+  `vantageDependent: true` where `POSTGRES_TLS_DECLINED` on the same node is `false`, because a
+  floor attributes nothing and cannot exclude a cause keyed on the path. It is what stops a
+  wrong port reading as healthy.
+- **`POSTGRES_CREDENTIAL_NOT_CONFIGURED`** is added by ADR 0046: the endpoint required
+  authentication and the run held nothing to present. `CONFIRMED` / **`WARN`** / `HIGH` /
+  `vantageDependent: true`. It is the only PostgreSQL finding produced by a graph in which
+  **nothing failed** — every node passed, and the run simply could not continue. Severity is
+  WARN because the endpoint did nothing wrong, and `SummaryStatus` stays `OK`; whether a run
+  that never reached a session should look clean in a terminal is a renderer question that
+  ADR 0046 names rather than answers with severity.
+- **Absence is never evidence.** `POSTGRES_CREDENTIAL_NOT_CONFIGURED` fires on an explicit
+  SKIPPED authentication node carrying `EXEC_REQUIRED_INPUT_MISSING`, never on the *absence* of
+  an authentication node — because a run cancelled before the credentialed step leaves exactly
+  that absence, and a rule reading it would claim the wrong thing about the wrong run.
 
 See ADR 0040 for the trigger, claim, must-not-claim list, evidence set and recommendation
 boundary of each, and `docs/validation/POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` for the evidence.

@@ -2,16 +2,28 @@
 
 ## Status
 
-Accepted as **policy**. No rule is implemented here.
+**Accepted, and implemented in Phase 4.11b.**
+
+`internal/diagnosis/postgres.SSLRequest` gained the floor beside
+`POSTGRES_TLS_DECLINED`, over a closed three-class set. Measured: an HTTP server
+on the port now produces one ERROR finding and `PROBLEMS_FOUND` where it produced
+`findings: []` and `status: OK`.
+
+Implemented alongside ADR 0046 in the same phase; together they took
+`FindingCode` from 22 to **24**. `FailureClass` moved only for ADR 0046's one
+addition, `schemaVersion` stays **1** and `security.Reveal` **two**.
+
+The `E` answer still has no claim of its own, on the reasoning in §3.
 
 It decides one thing: who owns a `postgres.ssl_request` node that failed for any
 reason other than the endpoint declining to encrypt. It adds one finding code, no
 `FailureClass`, no schema field, no dependency and no engine behaviour.
 
-**It is deliberately half of what Phase 4.11a set out to decide.** The other
+**It was deliberately half of what Phase 4.11a set out to decide.** The other
 PostgreSQL BASIC blocker — a run that reaches Startup and stops because no
-credential was configured — is *not* settled here. It hit two of the phase's own
-second-opinion triggers and is returned as a packet rather than decided. See §9.
+credential was configured — hit two of that phase's own second-opinion triggers
+and was returned as a packet rather than decided. **ADR 0046 settles it**, and the
+two were implemented together in Phase 4.11b.
 
 It closes the gap ADR 0040 recorded under "What this does not own" and extends
 that record's floor pattern to a fourth step. ADR 0041, ADR 0043 and ADR 0044 are
@@ -283,5 +295,5 @@ classifier reads typed sentinels only — and this record does not reintroduce i
 - **A measured `E` answer** — its own claim, §3.
 - **A producer emitting a fourth FAIL class at this step** — the mapping is closed
   and would withhold, which is safe but should then be reviewed.
-- **The no-credential decision** — §9 of Phase 4.11a's packet; it may or may not
-  land in this package.
+- **The no-credential decision** — settled by ADR 0046, which landed in this same
+  package.

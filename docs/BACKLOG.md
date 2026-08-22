@@ -1880,8 +1880,7 @@ and for two separate reasons:
 - [x] **Implement the three ADR 0043 rules** in `internal/diagnosis/transport/`, and narrow
       the module-wide code ban to an allow-list of exactly those three — still rejecting every
       `TLS_` code, so §14's deferral keeps a mechanical guard
-- [ ] **PostgreSQL in-band TLS diagnosis** — its own decision phase; ADR 0043 §15 records the
-      measured gap and deliberately does not widen generic ownership to reach it
+- [x] **PostgreSQL in-band TLS diagnosis** — ADR 0044, implemented in Phase 4.9d
 - [ ] **Generic TLS policy** — blocked on a producer; ADR 0043 §14
 - [ ] Until then, keep each gap stated in the report rather than papered over by a service rule
 
@@ -2162,19 +2161,16 @@ Everything recorded anywhere in the repository as a PostgreSQL BASIC gap, so tha
 check rather than a memory:
 
 - [x] **ADR 0044 implementation** (Phase 4.9d) — the five in-band TLS codes
-- [ ] **No credential configured** — **still undecided; a second-opinion packet was returned in
-      Phase 4.11a rather than an ADR.** Measured: every step PASSes, no authentication node, no
-      session node, `findings: []`, `status: OK`, `firstBrokenLayer: none`. The blocker is not the
-      claim — `POSTGRES_CREDENTIAL_WITHHELD` is precedent for a WARN finding about the run rather
-      than the target — but the *predicate*: a graph cancelled between Startup and the credentialed
-      step is byte-identical to one where no credential existed, and diagnosis cannot see
-      `Result.Incomplete()`. Resolving it needs either an accepted narrow false positive, or an
-      evidence node nobody is currently authorized to mint
-- [ ] **`postgres.ssl_request` failures other than a decline** — **decided by ADR 0045**, not yet
-      implemented. One floor, `POSTGRES_SSL_NEGOTIATION_FAILED`, over `PROTOCOL_UNEXPECTED_RESPONSE`,
-      `PROTOCOL_PEER_CLOSED` and `PROTOCOL_MALFORMED_RESPONSE`. Measured trigger: an HTTP server on
-      the port produced a FAIL negotiation, no finding and `status: OK`. The `E` answer still has no
-      claim of its own and keeps its reopen condition
+- [x] **No credential configured** — **ADR 0046, implemented in Phase 4.11b.** The blocker was
+      never the claim but the predicate: a graph cancelled between Startup and the credentialed
+      step was byte-identical to one where no credential existed. The fact moved to the producer
+      — `postgres.authentication` SKIPPED with the new generic class
+      `EXEC_REQUIRED_INPUT_MISSING` — so the two graphs now differ mechanically, and diagnosis
+      infers nothing from absence
+- [x] **`postgres.ssl_request` failures other than a decline** — **ADR 0045, implemented in
+      Phase 4.11b.** One floor, `POSTGRES_SSL_NEGOTIATION_FAILED`, over
+      `PROTOCOL_UNEXPECTED_RESPONSE`, `PROTOCOL_PEER_CLOSED` and `PROTOCOL_MALFORMED_RESPONSE`.
+      The `E` answer still has no claim of its own and keeps its reopen condition
 - [ ] **Confirm no `SummaryStatusOK`-with-failed-evidence case remains** for PostgreSQL, by
       enumerating every FAIL-producing step and checking each has an owner. L1, L2, L3-in-band,
       L4 and L5 all have owners as of Phase 4.9d; what remains unchecked is whether any *other*
@@ -2190,6 +2186,32 @@ Deliberately **not** on this list, because they are not BASIC: replica/read-only
 version facts (ADR 0040 §20), capacity and availability (ADR 0039 §10), peer implementation
 identification (ADR 0040 §18), and certificate expiry on a *passing* handshake, which is expiry
 monitoring rather than diagnosis (ADR 0044).
+
+### Phase 4.11a/4.11b — the final PostgreSQL BASIC terminal gaps: COMPLETE
+
+**ADR 0045** and **ADR 0046**, decided and implemented. `FindingCode` 22 → **24**;
+`FailureClass` 39 → **40**, the first addition since Phase 4.6a.5.
+
+- [x] `POSTGRES_SSL_NEGOTIATION_FAILED` — the L3 floor. A wrong port stops reading as healthy
+- [x] `EXEC_REQUIRED_INPUT_MISSING` — one generic class, service-neutral, distinct from the
+      policy skip, the capability gap and the privilege gap
+- [x] `POSTGRES_CREDENTIAL_NOT_CONFIGURED` — WARN, on an explicit node, never on absence
+- [x] The producer records it, not the run and not diagnosis: `internal/app` keeps its single
+      evidence authority (ADR 0042 §3)
+- [x] Ordering: the capability gap outranks the missing input, and the missing input precedes
+      the channel policy, the endpoint binding, `SecretFor` and `security.Reveal` — guarded by
+      reading the source order, not only the paths a behaviour test exercises
+- [x] Orchestration's budget check before the credentialed step is now load-bearing and is
+      guarded structurally, because a cancellation timed into that window is not reproducible
+- [x] Real integration for both: a SCRAM server with no credential, and a trust endpoint with
+      none, which must stay silent
+- [x] 23 mutations applied, all caught, all restored
+
+**Two things worth remembering.** The missing-credential finding is the only PostgreSQL finding
+produced by a graph in which *nothing failed*, which is why `SummaryStatus` stays `OK` and why
+the exit-code question belongs to the renderer rather than to severity. And `Authenticate` lost
+an invocation error: a zero credential used to be the caller's defect, which is precisely what
+kept a real diagnostic outcome out of the report.
 
 ### Phase 5 — CLI, renderers and productization: NOT STARTED
 
