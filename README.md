@@ -330,8 +330,12 @@ no configuration file and no runtime data directory.
 
 There are currently no Homebrew, Docker, apt, RPM or prebuilt-binary distributions.
 
-`svcdoctor --version` prints the version. A build from source prints `dev`; release builders
-can inject a value with `-ldflags "-X main.version=v0.1.0"`.
+`svcdoctor --version` reports the release the binary was built as, and the same value is
+recorded in every report. A binary installed from a tagged module —
+`go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.1.0` — reports that tag. A
+build from a working checkout reports `dev`, as does a build from a modified tree, because
+neither corresponds to a released commit. Release builders can also inject a value with
+`-ldflags "-X main.version=v0.1.0"`, which takes precedence over both.
 
 ## Current scope
 
