@@ -108,6 +108,40 @@ linters:
             - pkg: math/rand/v2
               desc: diagnosis must be deterministic
 
+        # A service vocabulary package is a leaf: constants and nothing else.
+        # ADR 0034 section 19 authorized internal/service/kafka on exactly that
+        # basis, so the property is enforced rather than remembered. It exists
+        # because depguard denies diagnosis the adapter import (above) and the
+        # two layers still share three constants; a vocabulary package that grew
+        # a dependency would become the shared service layer that decision
+        # declined to create.
+        service-vocabulary-is-a-leaf:
+          files:
+            - "**/internal/service/**"
+          deny:
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter
+              desc: a service vocabulary holds constants; protocol logic stays in the adapter
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/probe
+              desc: a service vocabulary collects nothing
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/diagnosis
+              desc: a service vocabulary concludes nothing
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/render
+              desc: a service vocabulary explains nothing
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/platform
+              desc: a service vocabulary reads no environment
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/security
+              desc: a service vocabulary holds no secret and no credential
+            - pkg: net
+              desc: a service vocabulary performs no I/O
+            - pkg: net/http
+              desc: a service vocabulary performs no I/O
+            - pkg: crypto/tls
+              desc: a service vocabulary performs no TLS operations
+            - pkg: os
+              desc: a service vocabulary reads no files, environment or process state
+            - pkg: os/exec
+              desc: a service vocabulary runs no commands
+
         # Redaction transforms one valid report into another. It performs no I/O
         # and reaches no other layer. docs/ARCHITECTURE.md section 6.2, ADR 0018.
         redaction-is-a-transformation:

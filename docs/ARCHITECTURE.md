@@ -450,8 +450,10 @@ with the generic transport chain — DNS, TCP and TLS — and nothing else
 ### 5.5 A service rule anchored at a service fact needs no provenance
 
 Phase 3.5 decided what may be concluded from advertised-endpoint reachability
-evidence, before any rule was written (**ADR 0034**). One idea in it generalizes
-past Kafka and belongs here rather than in a service record:
+evidence, before any rule was written (**ADR 0034**); Phase 3.6 implemented that
+decision as `internal/diagnosis/kafka.AdvertisedEndpointUnreachable`, svcdoctor's
+first rule. One idea in it generalizes past Kafka and belongs here rather than in
+a service record:
 
 > **A diagnosis rule that starts at a service fact and walks derivation edges
 > downward has its context by construction. A rule that starts at a transport
@@ -632,8 +634,19 @@ Desired extension shape:
 ```text
 internal/adapter/redis/
 internal/diagnosis/redis/
+internal/service/redis/          (only when both of the above name the same constant)
 internal/adapter/redis/testdata/
 ```
+
+`internal/service/<service>` is a **leaf vocabulary package**: constants, no behaviour, and
+`internal/domain` as its only import. It exists because diagnosis may not import an adapter,
+and a rule anchored at a service fact must still name the step it anchors at.
+
+It is created on demand and only for what a second package genuinely reads. It is not a
+shared service layer: no interface, no registry, no dispatcher, no protocol logic, and no
+second copy of a value the evidence already carries. Phase 3.6 created the first one for
+exactly three Kafka constants and left the rest in the adapter. See ADR 0034 §19, and the
+`service-vocabulary-is-a-leaf` depguard rule that keeps it a leaf.
 
 See ADR 0009.
 
@@ -819,7 +832,14 @@ cmd -> app -> adapter/probe -> domain
              render --------> domain
              platform ------> domain
              security ------> shared safe primitives
+
+             adapter/<svc>  -> service/<svc> -> domain
+             diagnosis/<svc> ---^
 ```
+
+`service/<service>` sits below both an adapter and a service's rules, which is what lets the
+two share a constant without diagnosis importing the adapter. It imports `domain` and nothing
+else.
 
 Forbidden dependencies include:
 

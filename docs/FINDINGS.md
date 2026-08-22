@@ -37,6 +37,7 @@ TLS_CERTIFICATE_EXPIRED
 ```
 
 > **These remain naming examples. No generic transport rule is authorized, and none exists.**
+> The only finding code svcdoctor produces today is `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`.
 > ADR 0034 gives advertised-endpoint transport failures to the Kafka rule outright, so a
 > generic rule firing on the same evidence would duplicate it. Whether generic transport
 > findings should exist *at all* is still open, and it is blocked on a fact rather than on
@@ -199,8 +200,9 @@ probes by default, per `docs/SECURITY.md`.
 ### Settled by ADR 0034
 
 Phase 3.5 turned the conceptual description above into an exact policy, against the real
-Phase 3.4 evidence graph. The finding is **authorized and not yet implemented**; Phase 3.6
-implements it and invents nothing. The binding parts:
+Phase 3.4 evidence graph, and Phase 3.6 implemented it as
+`internal/diagnosis/kafka.AdvertisedEndpointUnreachable` — inventing nothing, because every
+field below was already fixed. The binding parts:
 
 | | |
 |---|---|

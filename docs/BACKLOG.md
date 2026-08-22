@@ -55,7 +55,7 @@ stale and should be corrected against this table.
 | 0 | Architecture and safety foundation | Complete |
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
-| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy complete |
+| 3 | Kafka Vertical Slice | **In progress** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule complete |
 | 4 | PostgreSQL Vertical Slice | Not started |
 | 5 | Productization, Platform and Renderers | Not started |
 | 6 | Real-world Validation and Hardening | Not started |
@@ -79,7 +79,7 @@ condition that should reopen it.
 | **Generic vs service finding overlap** | **Answered for advertised endpoints by ADR 0034**: the Kafka finding owns that evidence outright and no generic finding fires for it, resolved by ownership rather than engine suppression. ADR 0034 §3 also defines the general duplicate/complementary/causal test. Still open: whether generic transport findings exist **at all**, which needs run intent that `diagnosis.Rule` cannot see | Application orchestration exists and the bootstrap path acquires an owner (ADR 0034 §16) |
 | **Execution deduplication, and a many-causes→one-execution graph shape** | Phase 3.4 runs one transport sweep per advertisement, including when two advertisements name one endpoint. A deduplicated sweep would have two causes and one effect, and the derivation parent is singular — recording it would mean picking one cause by a tiebreak and leaving the other with no measurement a finding could reference (ADR 0033 §3) | The graph gains a truthful many-causes→one-execution representation; the dedup key stays the normalized endpoint, never the node identifier |
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
-| **Service attribute-key ownership** | Where service-specific key constants live is unsettled, and `internal/domain` must not grow a registry of them | The Kafka adapter demonstrates the real boundary, in Phase 3 |
+| **Service attribute-key ownership** | **Settled for the keys that have a second consumer, in Phase 3.6.** A key lives with the code that produces it until something outside that package genuinely reads it; then it moves to a leaf vocabulary package (`internal/service/<service>`) that imports `internal/domain` and nothing else. Three Kafka constants moved on exactly that trigger (ADR 0034 §19); the rest stayed. `internal/domain` still holds no service key | A key acquires a consumer outside the package that produces it |
 | **Contract-package placement** for the adapter contract, the registry, the probe chain contract and CLI orchestration | Concrete structs first; interfaces only at real boundaries. A placement chosen before a real consumer is a guess | Each is forced by the implementation that needs it |
 | **SCRAM's implementation route** | franz-go's SCRAM lives in the main module, alongside `kgo` and three transitive dependencies, which would end this project's one-dependency property. The alternative is hand-rolled crypto. Neither belongs in a phase about SASL generally | SCRAM is its own subphase with its own dependency decision (ADR 0026 §7.4) |
 | **A `SKIPPED` protocol node for a transport path that failed** | The adapter receives completed paths only, so it cannot know an address it was never handed exists. Nothing today knows a service step was *requested* for one: the transport chain must not know Kafka, and the layer that would is the orchestration boundary Phase 3.1 did not build. The subject rule does not forbid the node — `ip:port` is known — so this is an open question, not a settled shape (ADR 0025 §9) | Phase 3 orchestration sequences transport and an adapter for one endpoint, or a rule needs to tell "L4 was never reached here" from "no L4 node here" |
@@ -1097,6 +1097,64 @@ code, no severity enum change, no schema change, no adapter or probe behaviour c
       for "the cluster advertises an endpoint no client can act on" is genuinely independent
       and deserves its own decision. **Reopen when** that decision is taken
 
+### Phase 3.6 — Kafka advertised endpoint diagnosis rule (complete)
+
+**The first diagnosis rule svcdoctor ships, and the first finding it can produce.** It
+implements ADR 0034 and decides nothing: every field of the finding was fixed in Phase 3.5.
+
+- [x] `internal/diagnosis/kafka` — `AdvertisedEndpointUnreachable`, one exported rule function
+      plus the `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` code constant. `diagnosis.Rule` is
+      unchanged: the graph is still the only argument, and the function already had the shape
+- [x] `internal/service/kafka` — the leaf vocabulary package ADR 0034 §19 authorized, holding
+      exactly `StepMetadata`, `StepBrokerAdvertised` and `AttrBrokerNodeID`. The adapter
+      re-exports all three, so every wire value, evidence identifier and serialized report is
+      byte-identical. It imports `internal/domain` and nothing else
+- [x] depguard gained `service-vocabulary-is-a-leaf`, so the leaf property is enforced rather
+      than remembered. No existing rule was weakened; `diagnosis-is-pure` still denies the
+      adapter, and the move exists precisely because it does
+- [x] Anchoring verified empirically: the rule enumerates advertisements and walks `Children`
+      down. It reads no sweep scope, parses no evidence identifier, matches no subject, and
+      names no `Origin` — pinned by an AST scan over the package's own sources
+- [x] The terminal layer is read off the graph, never from a plan field, a port, or the
+      bootstrap channel
+- [x] Report integration: every authorized finding passes ADR 0014 reference validation, and
+      the canonical JSON is stable across graph assembly order
+- [x] Redaction: the finding carries identity only on its subject and its evidence references,
+      where structural redaction already transforms it. Prose is byte-identical before and
+      after, so no new heuristic was needed (`test/security/kafka_finding_redaction_test.go`)
+- [x] Nine mutations of the implementation were run and every one was caught by a named test
+
+**Deliberately not done in 3.6:** no generic transport rule, no engine change, no suppression,
+no registry, no `Origin`, no aggregate finding, no partial-reachability finding, no schema
+change, no domain change, no dependency change, no new `security.Reveal` call site.
+
+**Implementation-level decisions, none of which change ADR 0034's policy:**
+
+- [x] **The finding's `layer` is L6.** ADR 0034 fixes every other field and does not name this
+      one. L6 is the layer the *claim* concerns — the advertisement it anchors at is an L6 node
+      — and not the earliest failing layer, which travels in the summary per
+      `docs/FINDINGS.md` §5 while the report derives `firstBrokenLayer` from the graph. Nothing
+      reads a finding's layer yet. **Reopen when** a renderer gives it meaning
+- [x] **The terminal-layer quantifier is universal.** "TLS when the sweep's TCP nodes have TLS
+      children" is read as *every*, not *any*. The pinned biconditional makes the two agree on
+      every graph the chain produces, so the choice is visible only where it is already
+      violated — and there the universal reading withholds a claim instead of calling a passing
+      TCP path insufficient. **Reopen** never, while the invariant holds
+- [x] **A structurally unexpected sweep withholds every claim.** An advertisement with two
+      Metadata parents, a transport node in the wrong place, or two handshakes under one
+      connection produces no finding rather than a guess. ADR 0034 does not enumerate these
+      because no producer creates them; the bias is `docs/FINDINGS.md` §4
+- [x] **`domain.NewFinding` cannot fail here, and the omission branch is proven unreachable**
+      rather than trusted. `Rule` has no error channel and silently returning fewer findings is
+      the failure mode the claim discipline exists to prevent, so
+      `TestEveryAuthorizedShapeBuildsAValidFinding` drives the whole authorized matrix
+
+**One documentation imprecision found in ADR 0034 and left uncorrected** because the intent is
+unambiguous: §11.5 states "no reference is ever a PASS node" immediately after a table whose
+every row includes the `kafka.metadata` node, which §5 requires to be PASS. The invariant is
+§11.3's, and §11.3 scopes it correctly to the *causal set*. The implementation follows §11's
+numbered list: exchange + advertisement + causal set, and no PASS node among the causal set.
+
 ### Phase 3.2d — SCRAM (not started, blocked on a dependency decision)
 
 - [ ] SCRAM-SHA-256 / SCRAM-SHA-512, with the dependency route decided first (ADR 0026 §7.4)
@@ -1167,11 +1225,12 @@ ADR 0017 exists to prevent.
       mapping. `Origin` was examined a third time and **stays deferred**: a rule anchored at
       the advertisement has its context by construction and never asks how an endpoint entered
       the run
-- [ ] **Phase 3.6 — implement the `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` rule** under
-      `internal/diagnosis/kafka/`, inventing no policy. Prerequisite, mechanical: create
-      `internal/service/kafka` holding `StepMetadata`, `StepBrokerAdvertised` and
-      `AttrBrokerNodeID` so the rule needs no adapter import (ADR 0034 §19). depguard is not
-      weakened
+- [x] **Phase 3.6 — the `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` rule (complete).** Implemented
+      under `internal/diagnosis/kafka/` with no policy invented. `internal/service/kafka` was
+      created as the leaf vocabulary package and the three constants moved into it with
+      byte-identical values; depguard was strengthened rather than weakened. The rule is
+      anchored, pure, deterministic, and the only exported symbols are the rule function and
+      its finding code
 - [ ] Concrete generic transport rules under `internal/diagnosis/transport/` — **not
       authorized.** ADR 0034 gives advertised-endpoint evidence to the Kafka rule, and whether
       generic transport findings exist at all needs run intent `diagnosis.Rule` cannot see

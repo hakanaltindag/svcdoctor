@@ -28,21 +28,30 @@
 // internal/diagnosis/transport, and service rules in internal/diagnosis/<service>,
 // per docs/ARCHITECTURE.md section 6. Both are just rules to the engine.
 //
-// # Why this package ships no rules yet
+// # Which rules exist, and which deliberately do not
 //
-// Phase 1.5 implements the contract and the engine and deliberately implements no
-// concrete rules. Writing one would require choosing a Severity, and Severity is
-// impact, which the repository does not yet define for a transport failure.
+// Phase 1.5 implemented the contract and the engine and shipped no rules,
+// because writing one would have required choosing a Severity for a transport
+// failure, and severity is impact — which depends on whether the endpoint was
+// the one the user asked about or one discovered from it. That distinction is
+// Origin, deferred since ADR 0013.
 //
-// The reason is specific rather than a lack of effort. Whether a failed DNS
-// lookup or a refused connection prevents correct use depends on whether the
-// endpoint was the one the user asked about or one discovered from it. That
-// distinction is Origin, which ADR 0013 deliberately defers until topology
-// orchestration exists. Assigning a severity today would either hardcode one
-// answer for both cases or invent a policy no document states.
+// Phase 3.6 ships the first rule, internal/diagnosis/kafka, and the blocker
+// above is why it lives there rather than in internal/diagnosis/transport. A
+// rule anchored at a service fact walks derivation edges downward and has its
+// context by construction: it only ever runs on discovered endpoints, so it
+// needs no Origin to state impact. A generic rule meeting a failed dns.lookup
+// node has no such anchor, and the question it must answer first is exactly the
+// deferred one.
 //
-// A second gap points the same way: docs/FINDINGS.md section 5 forbids
-// manufacturing downstream failure findings, but nothing yet says how a generic
-// transport rule and a service rule avoid both reporting the same failed
-// endpoint. See ADR 0017 and docs/BACKLOG.md.
+// So ADR 0017's blocker dissolved for service-anchored rules and stands
+// unchanged for unanchored ones. internal/diagnosis/transport is still empty,
+// and is not a gap waiting to be filled: whether generic transport findings
+// should exist at all needs run intent — "is this a Kafka diagnosis or a bare
+// endpoint check?" — which Rule cannot see, because it receives only a Graph.
+//
+// The overlap question docs/FINDINGS.md section 5 raised is answered the same
+// way: where a service rule owns a piece of evidence, no generic rule is written
+// for it. Ownership is resolved by anchoring, never by the engine suppressing
+// one finding in favour of another. See ADR 0034 and docs/BACKLOG.md.
 package diagnosis

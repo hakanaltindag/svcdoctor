@@ -45,7 +45,7 @@ does not overturn it, and both remain authoritative.
 | 0031 | Metadata discovers a topology, records it, and probes none of it | Accepted | First topology discovery. Answers the `Origin` reopen condition of 0013 and the topology-uniqueness case of 0019 |
 | 0032 | A sweep names an execution, so one run can measure a host twice | Accepted | Resolves the *Topology* uniqueness case 0019 left open. Adds a generic primitive; unblocks Phase 3.4 |
 | 0033 | An advertised endpoint is measured once per advertisement, and only at L1-L3 | Accepted | The consumer 0031 was built to feed and the first caller of 0032. Answers the execution-dedup question by deliberately not deduplicating |
-| 0034 | A Kafka rule owns advertised-endpoint reachability, anchored at the advertisement | Accepted (policy) | Revisits the two questions 0017 deferred and answers them for service-anchored rules. Authorizes one finding code; implements none |
+| 0034 | A Kafka rule owns advertised-endpoint reachability, anchored at the advertisement | Accepted (policy), implemented in Phase 3.6 | Revisits the two questions 0017 deferred and answers them for service-anchored rules. Authorizes one finding code and fixes every field of it; `internal/diagnosis/kafka` implements it and invents nothing |
 
 ## Decisions that govern work not yet written
 
@@ -132,7 +132,7 @@ A deferral is a decision too, and each names the condition that should reopen it
   blocker; today it correctly has none.
 
 - **0034** is a policy record: it decides what may be concluded from 0033's
-  evidence and implements nothing. It closes the generic-versus-service overlap
+  evidence and implements nothing itself; Phase 3.6 implements it exactly. It closes the generic-versus-service overlap
   **for advertised endpoints** by giving the Kafka rule exclusive ownership, and
   it settles severity by reading it as per-subject impact under an anchor. Its
   central move is that **ADR 0017's severity blocker dissolves for a rule

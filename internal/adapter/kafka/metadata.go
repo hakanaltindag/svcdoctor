@@ -13,6 +13,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/kafka/wire"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
+	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
 
 // The two steps this file produces.
@@ -28,14 +29,31 @@ import (
 // one node, both would have to point at the whole exchange, and "which entry
 // caused this?" would be answerable only by parsing an attribute — which ADR
 // 0019 forbids for identifiers and ADR 0018 forbids for redaction. See ADR 0031.
+//
+// # They live in internal/service/kafka now
+//
+// Phase 3.6 is the second consumer ADR 0031 section 9 named as the reopen
+// condition: a diagnosis rule anchors at StepBrokerAdvertised and requires
+// StepMetadata, and depguard denies diagnosis this package. The definitions
+// moved to the leaf vocabulary package and are re-exported here, so every
+// existing reference, evidence identifier and serialized report is unchanged —
+// the move is a change of definition site and of nothing else. See ADR 0034
+// section 19.
 const (
-	StepMetadata         domain.Step = "kafka.metadata"
-	StepBrokerAdvertised domain.Step = "kafka.broker_advertised"
+	StepMetadata         = servicekafka.StepMetadata
+	StepBrokerAdvertised = servicekafka.StepBrokerAdvertised
 )
 
-// The attributes topology discovery records. They live here for the reason given
-// on the ApiVersions keys, and they will move with those when the first Kafka
-// diagnosis rule needs them — which it still does not.
+// The attributes topology discovery records.
+//
+// All but one live here, for the reason given on the ApiVersions keys: an
+// attribute key belongs with the code that produces it until something outside
+// this package genuinely reads it. AttrBrokerNodeID now is read outside, so it
+// moved; the rest are not, so they did not. ADR 0034 section 19 fixed that split
+// deliberately rather than moving the group for consistency — in particular the
+// advertised host and port stay here, because they are already on the
+// advertisement's subject and a second copy would create two sources for one
+// fact.
 const (
 	// AttrMetadataControllerID is the node the cluster named as its controller.
 	//
@@ -74,7 +92,11 @@ const (
 	// restarts, and this step deliberately preserves responses where it is
 	// neither. Treating it as a durable cluster-wide identity would be a claim
 	// the protocol does not make.
-	AttrBrokerNodeID domain.AttributeKey = "kafka.broker.node_id"
+	//
+	// It moved to internal/service/kafka with the two steps above and for the
+	// same reason: a rule names the broker a finding is about. It is re-exported
+	// here, so its value and every use of it are unchanged (ADR 0034 section 19).
+	AttrBrokerNodeID = servicekafka.AttrBrokerNodeID
 
 	// AttrBrokerAdvertisedHost is the host a broker was advertised at.
 	//

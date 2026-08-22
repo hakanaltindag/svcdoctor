@@ -56,17 +56,29 @@ record it by picking one advertisement as *the* cause and silently leaving the o
 measurement attached. Truthful attribution was chosen over saving a bounded number of
 credential-free connections (ADR 0033).
 
-**The first diagnosis policy is settled, and no rule is written yet.** Phase 3.5 decided what
-svcdoctor may conclude from advertised-endpoint reachability evidence: the Kafka finding owns
-those transport failures outright so no generic finding duplicates them, an unreachable
-advertised broker is `ERROR` because severity is the impact of a finding's claim about its own
-subject, a partially reachable endpoint gets no finding because svcdoctor does not observe
-which address a client would select, and an unfinished measurement never becomes a remote
-failure. `Origin` was examined a third time and stays deferred — a rule anchored at the
-advertisement has its context by construction (ADR 0034).
+**svcdoctor now produces its first finding.** Phase 3.5 decided what may be concluded from
+advertised-endpoint reachability evidence and Phase 3.6 implemented it, inventing nothing: the
+Kafka finding owns those transport failures outright so no generic finding duplicates them, an
+unreachable advertised broker is `ERROR` because severity is the impact of a finding's claim
+about its own subject, a partially reachable endpoint gets no finding because svcdoctor does
+not observe which address a client would select, and an unfinished measurement never becomes a
+remote failure — it becomes a `HYPOTHESIS` at `WARN`, or nothing at all. `Origin` was examined
+a third time and stays deferred (ADR 0034).
+
+- `internal/diagnosis/kafka` — `AdvertisedEndpointUnreachable`, the rule behind
+  `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` (Phase 3.6)
+- `internal/service/kafka` — a leaf holding the three Kafka constants both the adapter and the
+  rule name. It imports `internal/domain` and nothing else
+
+**The rule anchors at the advertisement and walks down.** It enumerates the advertisement
+nodes and follows derivation edges to the sweep each one caused; it never meets a transport
+failure and asks what that failure is about. That direction is what lets it say "the cluster
+answered, and then advertised an address this client cannot reach" without ever inferring how
+an endpoint entered the run — which is why the same host being both bootstrap target and
+advertised broker stays two honest measurements and one finding.
 
 What is not implemented: SCRAM and every other SASL mechanism, protocol checks against
-discovered brokers, topic and partition analysis, PostgreSQL, diagnosis rules of any kind,
+discovered brokers, topic and partition analysis, PostgreSQL, generic transport rules,
 renderers and the CLI. Those directories contain no Go code.
 
 > **Picking this up with no context?** Start with **[`docs/PHASE1_HANDOFF.md`](docs/PHASE1_HANDOFF.md)**.
