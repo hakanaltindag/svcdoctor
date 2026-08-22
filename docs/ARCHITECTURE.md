@@ -829,6 +829,15 @@ Additional claim rules:
 
 - An unsupported capability is not a FAIL. svcdoctor not supporting a mechanism is a gap in
   svcdoctor, not a defect in the target. Use `UNKNOWN`.
+
+  This rule has teeth as of Phase 4.4b, which is the first phase with several ways to be
+  unable to do something. A PostgreSQL server demanding md5, a server offering only
+  `SCRAM-SHA-256-PLUS`, a password outside the range svcdoctor can prepare, and an iteration
+  count above svcdoctor's ceiling are all `UNKNOWN` + a capability class — never `FAIL`, and
+  never `AUTH_CREDENTIALS_REJECTED`. Each says *"svcdoctor could not determine whether this
+  credential authenticates"*, and none of them is a claim about the target. A peer that
+  positively does **not** offer what svcdoctor speaks is the other case, and it stays `FAIL`
+  with `AUTH_MECHANISM_NOT_OFFERED`, because that is a fact the peer evidenced.
 - Missing privilege is not healthy and not a FAIL. Use `SKIPPED` and record the privilege required.
 - A local timeout is not a remote failure. Distinguish an exceeded local budget from an
   observed remote timeout; the former means nothing was learned about the target.
