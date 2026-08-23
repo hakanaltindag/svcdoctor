@@ -529,8 +529,20 @@ func buildReport(
 	if err != nil {
 		return domain.Report{}, fmt.Errorf("building target: %w", err)
 	}
-	reportSecurity, err := domain.NewReportSecurity(
-		domain.OutputModeLocalFull, params.TLSOptions.InsecureSkipVerify, false)
+	// **Gated on the plan, not on the option alone.** TLSOptions configures the
+	// handshake TLSRequired performs and is ignored under TLSDisabled, so a
+	// plaintext run that was handed InsecureSkipVerify disabled no verification:
+	// there was none to disable. Reporting true there would be a TLS fact about a
+	// run that attempted no TLS, and a reader correcting for it would have to know
+	// to cross-check the graph for a handshake node.
+	//
+	// The CLI now refuses that combination outright (ADR 0060), which makes this
+	// unreachable from the command line. It is still asserted here, because
+	// internal/app is its own boundary and a truthful report is its contract
+	// rather than a consequence of who happened to call it. Kafka's
+	// buildKafkaReport gates the identical boolean the identical way.
+	insecure := params.TLS == postgres.TLSRequired && params.TLSOptions.InsecureSkipVerify
+	reportSecurity, err := domain.NewReportSecurity(domain.OutputModeLocalFull, insecure, false)
 	if err != nil {
 		return domain.Report{}, fmt.Errorf("building report security: %w", err)
 	}
