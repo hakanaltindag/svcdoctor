@@ -471,6 +471,25 @@ A deferral is a decision too, and each names the condition that should reopen it
   empty, the two wire packages bound peer payloads eight times apart so the core must bound
   itself, and Kafka has no `Reveal`-count guard. Implementation waits on Phase 6.2a-R2.
 
+- **[0056](0056-model-d-scram-api-and-security-contract.md) — The Model D SCRAM API and
+  security contract.** The Phase 6.2a-R2 review, and the record that authorizes Phase 6.2. It
+  fixes the exact API — `Begin`/`Continue`/`Verify` over a pointer `State` with a three-step
+  machine, a named `Username` type, and no nonce parameter, because a caller-supplied nonce
+  puts entropy authority in two wire packages. The derivation callback runs **exactly once**,
+  after ten validation steps, and zero times on every rejection path; that is structural, since
+  one call expression exists in the package and it is in no loop. Eight core-owned bounds,
+  because the two wire packages bound peer payloads eight times apart — including an
+  encoded-salt check placed *before* the base64 decode, which today's parser does after. Its
+  hardest decision is to **refuse SASLprep**: PostgreSQL applies it, Apache Kafka does not
+  (`KAFKA-6272`), so the two services need opposite behaviour for non-ASCII and no shared
+  implementation is correct for both — restricting to printable ASCII, where SASLprep is
+  provably the identity, is the only correct choice and needs no Unicode dependency. SASLname
+  escaping is core-owned. Three residual risks are recorded rather than argued away: a password
+  could be passed as the `Username`, the callback closes over scope the core cannot inspect, and
+  the SaltedPassword is not harmless. It also **supersedes one sentence of 0055**: the negative
+  gate guard is not deleted on acceptance but swapped atomically for the positive guards in the
+  commit that introduces the package.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention
