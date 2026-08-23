@@ -328,6 +328,39 @@ func TestTheTopologyLineCountsWhatWasReached(t *testing.T) {
 			want: "1 of 1 advertised broker endpoints reached",
 		},
 		{
+			// The budget expired before this advertisement's sweep began, so the
+			// advertisement node stands alone. MeasureAdvertised breaks out of
+			// its loop on a done context, which is the production shape.
+			name: "an advertisement whose sweep never began is not measured",
+			build: func(t *testing.T) *kafkaGraph {
+				g := metadataObtained(t)
+				g.reachable(1, "broker-1.internal:9093", "198.51.100.21:9093")
+				g.neverSwept(2, "broker-2.internal:9093")
+				return g
+			},
+			want: "1 of 2 advertised broker endpoints reached, 1 not measured",
+		},
+		{
+			name: "an advertisement whose lookup was cut short is not measured",
+			build: func(t *testing.T) *kafkaGraph {
+				g := metadataObtained(t)
+				g.reachable(1, "broker-1.internal:9093", "198.51.100.21:9093")
+				g.lookupCutShort(2, "broker-2.internal:9093")
+				return g
+			},
+			want: "1 of 2 advertised broker endpoints reached, 1 not measured",
+		},
+		{
+			name: "a resolved name nothing was attempted against is not measured",
+			build: func(t *testing.T) *kafkaGraph {
+				g := metadataObtained(t)
+				g.reachable(1, "broker-1.internal:9093", "198.51.100.21:9093")
+				g.resolvedButUnattempted(2, "broker-2.internal:9093")
+				return g
+			},
+			want: "1 of 2 advertised broker endpoints reached, 1 not measured",
+		},
+		{
 			name: "duplicate advertisements are counted as the cluster stated them",
 			build: func(t *testing.T) *kafkaGraph {
 				g := metadataObtained(t)
@@ -360,18 +393,66 @@ func TestARunWithNoAdvertisementsHasNoTopologyLine(t *testing.T) {
 }
 
 // TestNotMeasuredIsNeverCollapsedIntoNotReached is ADR 0052's hardest rule.
+//
+// # It runs over every shape that leaves an advertisement unresolved
+//
+// classify has four ways to reach `not measured`, and until Phase 6.5 only one
+// of them — an address whose connection was cut short — was asserted anywhere.
+// Mutation found the other three: making an advertisement with no sweep, one
+// whose lookup was cut short, or one whose resolved name nothing was attempted
+// against read as `not reached` survived the whole suite.
+//
+// Each of those is production-reachable. `MeasureAdvertised` breaks out of its
+// loop the moment the context is done, so a budget that expires part-way
+// through a topology leaves later advertisements with no sweep at all, and one
+// that expires inside a sweep leaves the lookup or the attempt list short.
+//
+// Counting any of them as unreached would assert a failure nobody observed —
+// `1 of 3 reached` for two endpoints svcdoctor never looked at — which is the
+// same false certainty ADR 0051's PASS-is-existential / FAIL-is-universal rule
+// prevents one layer up. `internal/app`'s twin predicate has covered all four
+// since ADR 0051 landed; this is the renderer half.
 func TestNotMeasuredIsNeverCollapsedIntoNotReached(t *testing.T) {
+	shapes := map[string]func(*kafkaGraph){
+		"an address whose connection was cut short": func(g *kafkaGraph) {
+			g.unmeasured(2, "broker-2.internal:9093", "198.51.100.22:9093")
+		},
+		"an advertisement whose sweep never began": func(g *kafkaGraph) {
+			g.neverSwept(2, "broker-2.internal:9093")
+		},
+		"an advertisement whose lookup was cut short": func(g *kafkaGraph) {
+			g.lookupCutShort(2, "broker-2.internal:9093")
+		},
+		"a resolved name nothing was attempted against": func(g *kafkaGraph) {
+			g.resolvedButUnattempted(2, "broker-2.internal:9093")
+		},
+	}
+	for name, build := range shapes {
+		t.Run(name, func(t *testing.T) {
+			g := metadataObtained(t)
+			g.reachable(1, "broker-1.internal:9093", "198.51.100.21:9093")
+			build(g)
+			text := renderKafka(t, g.report(), true)
+
+			if !strings.Contains(text, "1 not measured") {
+				t.Errorf("an unresolved advertisement is not reported as "+
+					"unmeasured:\n%s", text)
+			}
+			if containsRow(text, "topology",
+				"1 of 2 advertised broker endpoints reached") {
+				t.Errorf("an unmeasured endpoint was counted as unreached:\n%s", text)
+			}
+		})
+	}
+}
+
+// TestALocallyCutShortSweepKeepsItsReasonLegible pins the stage row beside the
+// count, so a reader can see why an endpoint was never measured.
+func TestALocallyCutShortSweepKeepsItsReasonLegible(t *testing.T) {
 	g := metadataObtained(t)
 	g.reachable(1, "broker-1.internal:9093", "198.51.100.21:9093")
 	g.unmeasured(2, "broker-2.internal:9093", "198.51.100.22:9093")
 	text := renderKafka(t, g.report(), true)
-
-	if !strings.Contains(text, "1 not measured") {
-		t.Errorf("an unresolved advertisement is not reported as unmeasured:\n%s", text)
-	}
-	if containsRow(text, "topology", "1 of 2 advertised broker endpoints reached") {
-		t.Errorf("an unmeasured endpoint was counted as unreached:\n%s", text)
-	}
 	// And the stage row keeps the local class, so the reason is legible too.
 	if !strings.Contains(text, "EXEC_LOCAL_TIMEOUT") {
 		t.Error("the unmeasured path lost the class that says svcdoctor stopped")
@@ -715,6 +796,40 @@ func (g *kafkaGraph) refused(nodeID int64, name, address string) {
 	ad := g.advertisement(nodeID, name, domain.StatePass, domain.FailureNone)
 	g.sweep(ad, name, address, passed(vocabulary.StepDNSLookup, 160),
 		[]stage{failed(tcp, domain.FailureTCPConnectionRefused, 210)})
+}
+
+// neverSwept records an advertisement the run's budget stopped it from
+// measuring at all: the node stands alone, with no lookup beneath it.
+//
+// It is what MeasureAdvertised leaves behind when it breaks out of its loop on a
+// done context, and the advertisement node alone claims nothing about
+// reachability.
+func (g *kafkaGraph) neverSwept(nodeID int64, name string) {
+	g.t.Helper()
+	g.advertisement(nodeID, name, domain.StatePass, domain.FailureNone)
+}
+
+// lookupCutShort records an advertisement whose own name resolution ended
+// undetermined because svcdoctor's budget expired.
+//
+// Nothing was learned about the endpoint: an unresolved name is not a name that
+// does not resolve.
+func (g *kafkaGraph) lookupCutShort(nodeID int64, name string) {
+	g.t.Helper()
+	ad := g.advertisement(nodeID, name, domain.StatePass, domain.FailureNone)
+	g.sweep(ad, name, "", unknownAt(
+		vocabulary.StepDNSLookup, domain.FailureExecLocalTimeout, measured(80000)))
+}
+
+// resolvedButUnattempted records an advertisement whose name resolved and
+// against which nothing was tried.
+//
+// That is not a negative anybody proved: a client selecting one of those
+// addresses might have connected.
+func (g *kafkaGraph) resolvedButUnattempted(nodeID int64, name string) {
+	g.t.Helper()
+	ad := g.advertisement(nodeID, name, domain.StatePass, domain.FailureNone)
+	g.sweep(ad, name, "", passed(vocabulary.StepDNSLookup, 160))
 }
 
 func (g *kafkaGraph) unmeasured(nodeID int64, name, address string) {
