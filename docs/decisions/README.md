@@ -521,6 +521,22 @@ A deferral is a decision too, and each names the condition that should reopen it
   describes the target rather than svcdoctor. A decision record: no production Go changed, and
   three product gaps are recorded in §14 rather than repaired here.
 
+- **[0059](0059-ip-literal-targets-and-resolution-free-transport.md) — An address is not a
+  name, so a run that was given one resolves nothing and says so.** A literal target performs
+  no resolution and records **no `dns.lookup` node at all**, which is what makes a DNS finding
+  unreachable for one structurally rather than suppressed. The graph gains a second shape,
+  `target.requested -> tcp.connect`, and four consumers learned it — requested-target and
+  advertised sweep collection, Kafka completeness and the terminal renderer — each by branching
+  on a step or layer the producer wrote, none by parsing a host string. `net/netip` is the
+  single classification and the single canonicalization: one address has one spelling,
+  IPv4-mapped is unmapped, and a **zone identifier is refused** rather than silently dropped as
+  it was before. TCP and generic TLS ownership landed with the producer (ADR 0054); layer stays
+  L2 and L3 because layer is data, not tree depth; identity is ADR 0058 unchanged, and the
+  bare literal — never the bracketed endpoint — is what a raw address verifies. Advertised
+  literals are first-class transport endpoints and still receive zero credential bytes.
+  `SchemaVersion` stays 1; no code, class, state or dependency was added. ADR 0058 §14's three
+  gaps proved to be one coupled defect and are deferred together in §14.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention

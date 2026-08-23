@@ -78,7 +78,7 @@ own flag set, help text and validation.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--host <host>` | *required* | the endpoint to diagnose |
+| `--host <host>` | *required* | the endpoint to diagnose: a hostname or an IPv4 or IPv6 address literal — see [Address literals](#address-literals) |
 | `--user <role>` | *required* | the role to connect as |
 | `--port <uint>` | `5432` | the port to connect to |
 | `--database <name>` | *empty* | database to select; empty lets the server default it to the role name |
@@ -91,7 +91,7 @@ own flag set, help text and validation.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--host <host>` | *required* | the bootstrap endpoint to diagnose |
+| `--host <host>` | *required* | the bootstrap endpoint to diagnose: a hostname or an IPv4 or IPv6 address literal — see [Address literals](#address-literals) |
 | `--sasl-mechanism <name>` | *required* | the SASL mechanism to propose, uppercase |
 | `--user <principal>` | *empty* | the principal to authenticate as; required with a credential source and refused without one |
 | `--port <uint>` | `9092` | the port to connect to |
@@ -408,6 +408,50 @@ setting, and svcdoctor will not verify one name while announcing another. It app
 advertised names, because a bootstrap address and a broker are different endpoints and
 frequently carry different certificates.
 
+### Address literals
+
+`--host` accepts a hostname or an IPv4 or IPv6 address literal, for both services.
+
+An address is already the address, so **svcdoctor resolves nothing and claims nothing about
+resolution**: the report holds no `dns.lookup` node for a literal target, no DNS finding can
+fire for one, and no prose says a hostname resolved. A hostname target is unchanged and still
+records its resolution. Transport, TLS, the protocol journey and the findings are otherwise
+identical — a literal is a first-class target, not a degraded one.
+
+```sh
+svcdoctor diagnose postgres --host 10.20.30.40 --user svcdoctor
+svcdoctor diagnose kafka    --host ::1 --port 9092 --sasl-mechanism PLAIN
+```
+
+Give IPv6 unbracketed and separately from the port. Brackets belong to the rendered
+`[2001:db8::1]:9092` endpoint form, which svcdoctor produces itself. One address has one
+spelling: `2001:0db8:0:0:0:0:0:1` and `2001:db8::1` are canonicalized to the same value, so
+they cannot appear as two endpoints in one report.
+
+**TLS against a literal verifies IP SANs.** With a bare address and no override, the
+certificate is checked against its IP SANs and no SNI is sent, because SNI carries names only.
+A DNS SAN does not satisfy a raw address. If the endpoint's certificate carries a name rather
+than an address, name the identity explicitly:
+
+```sh
+svcdoctor diagnose kafka --host 10.20.30.40 --tls-server-name kafka.internal \
+  --sasl-mechanism SCRAM-SHA-256 --user svcdoctor --password-stdin
+```
+
+That connects to `10.20.30.40` and verifies `kafka.internal`, sending it in SNI. It does not
+propagate to Kafka brokers learned from Metadata, which are verified against their own
+advertised endpoints.
+
+**A Kafka cluster may advertise addresses**, and svcdoctor measures those as transport
+endpoints exactly as it measures advertised names: DNS is skipped because there is nothing to
+resolve, TCP and TLS are measured, and the endpoint is counted in the topology line like any
+other. Advertised endpoints stay credential-free whatever form they take — no credential, no
+SASL, no bytes beyond transport.
+
+An address does not widen what a credential is authorized for. A credential bound to
+`10.20.30.40:9093` is not authorized for `10.20.30.41:9093`, and is never authorized for an
+advertised broker.
+
 Certificates are matched on subject alternative names. A `CN`-only certificate does not verify,
 matching every modern client; svcdoctor adds no compatibility exception for one.
 
@@ -540,8 +584,10 @@ These are deliberate boundaries, not defects:
   no mTLS client-certificate authentication
 - no Kafka topic, partition, consumer-group, lag or throughput inspection, and no cluster,
   broker or partition health claim
-- no literal IPv4/IPv6 target support — `--host` expects a name that resolves; the graph
-  semantics for a literal are an open design item
+- no scoped IPv6 — a zone identifier such as `fe80::1%en0` is refused with an invocation
+  error, because the zone is a vantage-local interface name with no decided representation in
+  the evidence subject, the credential binding key, the TLS identity or the pseudonym
+  namespace. Deferred, not rejected; see ADR 0059
 - no PostgreSQL DEEP, no diagnostic SQL of any kind
 - no `pg_stat_*` inspection, connection-pool, blocking-query or replication analysis
 - no table or query latency diagnosis
@@ -636,7 +682,10 @@ pending release validation.
 Next, in no committed order:
 
 - Kafka BASIC release validation
-- literal IPv4/IPv6 target semantics, for both services, and the three gaps ADR 0058 recorded
+- the three gaps ADR 0058 recorded, which Phase 6.7 measured and found to be one coupled
+  defect: PostgreSQL accepts TLS flags that its own `--tls disable` makes inert, so a
+  plaintext run can report `tlsVerificationDisabled: true`, so the terminal cannot yet safely
+  surface that fact beside a `TLS PASS` row
 - client certificates / mTLS, whose credential authority ADR 0058 deliberately left open
 - managed-service protocol compatibility: Redpanda, Confluent Cloud, AWS MSK, Azure Event
   Hubs' Kafka API; RDS, Aurora, Cloud SQL, Azure Database for PostgreSQL

@@ -2553,7 +2553,7 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 | **6.4** | Kafka renderer hierarchy + Kafka CLI | `collectPaths` promotes every `tcp.connect` to a top-level path, which conflates bootstrap and advertised sweeps; the tree needs a third level. Also owns the measured-zero versus unmeasured duration contract |
 | **6.5** | Kafka BASIC closure | **Complete.** Includes the ADR 0054 §5 closure test, re-run mechanically against the producers |
 | **6.6** | TLS trust and peer identity policy | **Complete.** ADR 0058. A decision phase: it had to precede IP literals, managed compatibility and release validation, because each would otherwise have made its own trust and identity assumption |
-| **6.7** | IP literal target semantics | The graph-shape decision and its implementation. **Not blocked by TLS** — ADR 0058 §6 settled IP SAN identity — and it also carries ADR 0058's three deferred product gaps |
+| **6.7** | IP literal target semantics | **Complete.** ADR 0059: Model A — a literal records no `dns.lookup` node at all. `net/netip` is the single classification and canonicalization; scoped IPv6 refused; TCP and generic TLS ownership landed with their producers; `schemaVersion` 1. ADR 0058's three gaps proved to be one coupled defect and moved to 6.8 |
 | **6.8** | Release and compatibility validation | Formerly numbered 6.6. Real-cluster release validation, and the first managed/Redpanda evidence |
 
 - [x] **6.1a** mechanism guard: UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`, zero `SecretFor`,
@@ -2587,7 +2587,16 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
       unguarded rather than unimplemented are now covered, and Go's IP-SAN and CN behaviour is
       pinned by test rather than remembered. Three product gaps recorded and deferred to 6.7.
       See "Phase 6.6" below
-- [ ] **6.7** IP literal target semantics, plus ADR 0058 §14's three deferred gaps
+- [x] **6.7** IP literal target semantics — **COMPLETE**, ADR 0059. First-class IPv4 and IPv6
+      literal targets for both services, requested and Kafka-advertised. A literal performs and
+      records **no resolution**: no `dns.lookup` node, no DNS finding, no hostname prose. One
+      address has one spelling. Scoped IPv6 is refused rather than silently mis-measured. 30
+      mutations, one equivalent mutant, two real gaps found and closed — verification silently
+      relaxed for a literal, and the Kafka completeness predicate partially reading a mixed
+      shape. `schemaVersion` 1, 40 finding codes, 41 failure classes, 2 `Reveal` call sites,
+      one credential-bearing Kafka auth attempt, SCRAM byte-identical. ADR 0058 §14's three
+      gaps were measured, found to be one coupled defect, and deferred to 6.8. See
+      "Phase 6.7" below
 - [ ] **6.8** Kafka release validation against the real cluster *(this was Phase 6.6 until the
       TLS policy review took that number in Phase 6.6; the content is unchanged)*
 
@@ -3243,9 +3252,11 @@ strictness question was not touched; it remains the separate decision recorded b
 
 These are recorded elsewhere in this document and are **not** closed by Phase 6.5:
 
-- [ ] IP literal target semantics — reproduction and the full decision list are recorded below.
-      The public contract is that `--host` expects a name that resolves, and that sentence is
-      now held by `TestTheREADMENeverClaimsIPLiteralSupport` and its `--help` sibling
+- [x] IP literal target semantics — *closed afterwards by Phase 6.7 and ADR 0059.* The public
+      contract is now that `--host` accepts a hostname or an IPv4/IPv6 address literal, and the
+      guard that used to forbid that sentence inverted to require it:
+      `TestTheDocsRecordIPLiteralSupport`, with `assertNoScopedIPv6Claim` taking over the
+      forbidding side
 - [x] TLS Trust & Identity Policy Review — system roots versus a supplied CA, trust
       replacement versus augmentation, internal and enterprise PKI, `ServerName` override, IP
       SAN verification, insecure mode, discovered-broker identity, mTLS. **No trust widening
@@ -3259,6 +3270,81 @@ These are recorded elsewhere in this document and are **not** closed by Phase 6.
       only item that tests the Kafka protocol against a non-Apache implementation
 - [ ] SCRAM server-final strictness hardening — the four-row table below is pinned at
       first-wins behaviour and row three is the one worth revisiting
+
+### Phase 6.7 — IP literal target semantics: COMPLETE
+
+**Output: ADR 0059, production changes in seven packages, and six new test files.** Unlike
+Phase 6.6 this was an implementation phase; the decision it rests on is the graph shape.
+
+#### What was wrong, measured before the fix
+
+`net.Resolver` returns a literal unchanged, so a literal target produced a **passing L1
+measurement, with a duration, of an operation that never happened** — and a downstream rule
+read it as the denominator of a claim about resolution:
+
+```text
+  ✓ PASS  DNS  78µs                     ← nothing was resolved
+  ✗ ERROR  TCP_CONNECTION_NOT_ESTABLISHED  127.0.0.1:1
+    Every address the hostname resolved to was tried...
+                     ^^^^^^^^ there was no hostname
+```
+
+Two more were found in the same pass: `--host 2001:0db8:0:0:0:0:0:1` produced an anchor and a
+connection subject naming two different spellings of one address, and `--host fe80::1%lo0`
+named `[fe80::1%lo0]:1` while measuring `[fe80::1]:1`.
+
+#### The decision
+
+**Model A.** A literal records no `dns.lookup` node at all; the connections derive directly
+from whatever caused the sweep. Models B (a `dns.lookup` in a new "not required" state), C (a
+new `address.literal` step) and D (resolve anyway) were each rejected with reasons, in
+ADR 0059 §4.
+
+`net/netip` is the single classification *and* the single canonicalization, in
+`internal/probe`, shared by L0 input normalization, the transport chain and the credential
+key. Diagnosis cannot reach it — `depguard` denies the import — which is a forcing function:
+a rule answers "did resolution happen here?" structurally or not at all.
+
+#### Producer before owner
+
+Two FAIL-producing stages became reachable in a new shape, and both were measured **unowned**
+in the intermediate state — a literal TCP refusal produced `findings none` and `status OK`,
+exactly the ADR 0054 failure. Both owners landed in the same change-set as the producer. The
+generic TLS rule needed no change at all: its predicate is "a handshake directly under a
+connection under this anchor", a sentence that never mentioned DNS.
+
+#### What the mutation pass found
+
+30 mutations, one equivalent mutant, **two real gaps**:
+
+- **Verification silently relaxed for a literal survived the first pass.** Nothing stopped the
+  chain from setting `InsecureSkipVerify` for an address target — the exact shortcut somebody
+  reaches for when an IP fails to verify. Closed by a real handshake against a DNS-only
+  certificate, plus its positive twin against a matching IP SAN.
+- **The Kafka completeness predicate partially read a mixed shape.** A lookup with a stray
+  sibling connection took the lookup branch and ignored the sibling. Found by a test written
+  for this phase, against code written for this phase; now unresolved, because unrecognized
+  must always err towards "the run is not finished".
+
+The equivalent mutant is worth recording: removing the DNS rule's `hasLookup` guard changes
+nothing, because a zero `Evidence` has `State` `UNKNOWN` and the rule requires `FAIL`. The
+claim is unreachable for a literal by two independent mechanisms.
+
+#### The Phase 6.5 guard, inverted
+
+`TestTheREADMENeverClaimsIPLiteralSupport` and its `--help` sibling existed to stop the
+capability being advertised while the semantics were undecided. They fired on the first
+documentation edit of this phase, which is what they were for. They now require the sentence
+they used to forbid, and `assertNoScopedIPv6Claim` took over the forbidding side — the guard
+kept its shape and changed sides.
+
+#### Unchanged
+
+`schemaVersion` 1. 40 finding codes. 41 failure classes. 2 production `security.Reveal` call
+sites. One credential-bearing Kafka authentication attempt per run. Zero `SecretFor`, zero
+`Reveal` and zero SASL bytes to an advertised endpoint, literal or named. SCRAM untouched. No
+new dependency, state, step or layer. The generic TCP finding gained a second *detail string*,
+not a second code.
 
 ### Phase 6.6 — TLS trust and peer identity policy: COMPLETE
 
@@ -3377,69 +3463,86 @@ A separate decision must settle it, and must bring:
 - [ ] real integration evidence for both services before, not after, the change
 - [ ] whether the two services may diverge here at all, given one shared core
 
-### IP literal target semantics — a product requirement, not an edge case
+### IP literal target semantics — CLOSED by ADR 0059 (Phase 6.7)
 
-**PostgreSQL and Kafka must support literal IPv4 and IPv6 targets as first-class input.**
-Operators diagnose by address routinely — a broker that only advertises an IP, a database
-behind a load-balancer VIP, a host with no DNS entry at all — and today the graph is shaped
-around a name that resolves.
+**PostgreSQL and Kafka support literal IPv4 and IPv6 targets as first-class input**, for the
+requested target and for Kafka advertised broker endpoints.
 
-Nothing here is implemented, and none of it should be attempted piecemeal:
+Every item this section used to carry as open is decided and implemented:
 
-- [ ] how the requested-target anchor represents a literal
-- [ ] whether `dns.lookup` remains a graph stage for a literal at all
-- [ ] if it remains, how it records *resolution was not required* — which is neither PASS nor
-      SKIPPED-for-policy, and must not read as either
-- [ ] **no DNS finding may be produced for a literal target**, in any state
-- [ ] IPv4 canonicalization
-- [ ] IPv6 canonicalization, including zone identifiers
-- [ ] IPv6 bracket-and-port formatting, everywhere a subject is rendered
-- [ ] TLS verification against IP SANs rather than DNS SANs
-- [ ] interaction with an explicit `--tls-server-name`
-- [ ] a Kafka bootstrap target given as a literal
-- [ ] a Kafka **advertised** broker endpoint that is a literal
-- [ ] redaction and pseudonymization of literals, which today are hostnames' problem
-- [ ] a deterministic graph shape, so a literal and a name that resolves to it do not produce
-      structurally different reports for the same endpoint
-- [ ] what run completeness means when there was nothing to resolve
+- [x] how the requested-target anchor represents a literal — the canonical spelling, minted at
+      L0 by `probe.ParseHost` before validation, so the anchor, the report envelope, the
+      endpoint every node is scoped by and the credential key are one string
+- [x] whether `dns.lookup` remains a graph stage for a literal — **it does not.** Model A:
+      `target.requested -> tcp.connect`, no L1 node at all
+- [x] how it records *resolution was not required* — by absence. No new state, no new step, no
+      new attribute; `dns.lookup` names an operation and none of its states means "there was
+      nothing to attempt"
+- [x] **no DNS finding may be produced for a literal, in any state** — unreachable by two
+      independent mechanisms, neither of which is a hostname heuristic, an EvidenceID parse or
+      renderer hiding
+- [x] IPv4 canonicalization — dotted decimal, IPv4-mapped IPv6 unmapped
+- [x] IPv6 canonicalization — RFC 5952 via `netip.Addr.String`
+- [x] zone identifiers — **refused**, explicitly and with the limitation named. Deferred, not
+      rejected; see ADR 0059 §3
+- [x] IPv6 bracket-and-port formatting everywhere a subject is rendered — `net.JoinHostPort`,
+      pinned against `net.SplitHostPort` round-tripping
+- [x] TLS verification against IP SANs — ADR 0058 §6, and now pinned end to end through the
+      chain, including that verification is never relaxed for an address
+- [x] interaction with `--tls-server-name` — connect by address, verify the name, send it in
+      SNI; does not propagate to advertised brokers
+- [x] a Kafka bootstrap target given as a literal
+- [x] a Kafka **advertised** broker endpoint that is a literal — first-class, counted in the
+      topology line, credential-free
+- [x] redaction and pseudonymization of literals — already correct; now proved with canaries
+      in both families, and four mutations against the path are caught
+- [x] a deterministic graph shape — a literal and a name that resolves to it produce
+      structurally different graphs *by design*, because one performed an L1 measurement and
+      the other did not. What is deterministic is the spelling: one address, one identity
+- [x] what run completeness means when there was nothing to resolve — ADR 0051's asymmetry,
+      applied to the second shape
 
-This overlapped the TLS item below at IP SAN verification. **That half is now decided:**
-ADR 0058 §6 establishes, by measurement against the standard library, that an IP literal
-already verifies against a certificate's IP SANs with no flag, that Go sends no SNI for one,
-and that `--host <address> --tls-server-name <name>` connects by address and verifies the name.
-`internal/probe/tls/ipsan_test.go` pins all of it.
+**The defect this closed, reproduced against the shipped binary before the fix**, is quoted in
+ADR 0059's Context along with the two it found alongside it: a non-canonical IPv6 spelling
+producing two endpoints in one report, and a zone identifier silently dropped so that
+svcdoctor named one endpoint and measured another.
 
-So **TLS is not what blocks IP literals.** Everything remaining above is DNS, graph shape,
-canonicalization, rendering and redaction, and none of it needs a TLS decision.
+### The three ADR 0058 §14 gaps — one coupled defect, deferred to 6.8
 
-**Measured in Phase 6.4C, against the real binary, rather than assumed.** A literal target is
-accepted today and produces a run that is useful and partly untrue:
+Phase 6.7 was asked to decide whether the insecure-mode terminal gap had to be fixed as an
+IP/TLS truthfulness prerequisite. It was measured, and the three are **one defect with one fix
+order** rather than three independent items:
 
-```text
-$ svcdoctor diagnose kafka --host 127.0.0.1 --port 1 --sasl-mechanism PLAIN --tls disable
+1. **PostgreSQL accepts `--tls-insecure` alongside `--tls disable`**, where Kafka refuses the
+   pair with a usage error. This is the cause.
 
-  ✓ PASS  DNS  51µs                     ← nothing was resolved
-  ...
-  ✗ ERROR  TCP_CONNECTION_NOT_ESTABLISHED  127.0.0.1:1
-    Every address the hostname resolved to was tried and none accepted a connection.
-                     ^^^^^^^^ there was no hostname
-```
+   ```text
+   $ svcdoctor diagnose postgres --host 127.0.0.1 --port 1 --user u --database d \
+       --tls disable --tls-insecure          → accepted, exit 1
+   $ svcdoctor diagnose kafka --host 127.0.0.1 --port 1 --sasl-mechanism PLAIN \
+       --tls disable --tls-insecure          → "--tls-insecure has no effect with --tls disable"
+   ```
 
-`net.Resolver` returns a literal unchanged, so `dns.lookup` records PASS with a measured
-duration for work that did not happen, and the generic TCP finding's prose names a hostname
-that does not exist. IPv6 behaves the same and formats correctly as `[::1]:1`.
+2. **So a plaintext PostgreSQL run reports `tlsVerificationDisabled: true`** — a TLS fact about
+   a run that established no TLS. Measured, still reproducible.
 
-So the transport diagnosis below L1 is right, and the L1 claim is not. **This was deliberately
-not patched in the CLI phase** — the fix is the graph-shape decision above, not a special case
-in a command — and Phase 6.4C's README states plainly that `--host` expects a name that
-resolves. That is the honest position until this item is decided: the capability is not
-advertised, and the defect is recorded with its reproduction.
+3. **So the terminal cannot yet safely surface that fact** beside a `TLS PASS` row. Adding the
+   row today would print a TLS security warning on plaintext runs, making gap 2 visible to
+   every operator — worse than the gap it fixes.
 
-## Standing security-sensitive design items — NOT STARTED, deliberately separate
+**Disposition: all three deferred to 6.8, as one item, in that order.** Fixing gap 1 is a
+released-CLI behaviour change on a path with nothing to do with address literals, and Phase
+6.7's own stop conditions forbid making it there. Phase 6.7 touched none of this code.
 
-Both were identified during the Phase 6.2a and 6.2a-R2 SCRAM reviews and both were kept out
-of them on purpose. Neither is a SCRAM question, and folding either into a secret-authority
-record would produce one document answering neither well.
+All three are pinned by test exactly as they stand — `TestPostgresStillAcceptsInertTLSFlags`
+and `TestKafkaStillRefusesInertTLSFlags` — so none can drift without a decision, and each fails
+with a message saying so rather than inviting a test update.
+
+**Reopen condition:** 6.8, before release validation. Fix in the order above.
+
+The mitigation that *is* shipped: an operator hitting an address whose certificate carries a
+name does not need `--tls-insecure`. `--tls-server-name` names the identity explicitly and
+keeps verification on, and both `--help` and the README now say so.
 
 ### TLS Trust & Identity Policy Review — CLOSED by ADR 0058 (Phase 6.6)
 
