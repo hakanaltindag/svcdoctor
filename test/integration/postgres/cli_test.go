@@ -840,12 +840,36 @@ func TestCLITextIsTheDefaultOutput(t *testing.T) {
 	if strings.Contains(inv.stdout, "\x1b") {
 		t.Error("the terminal output contains an escape sequence")
 	}
-	// The three facts, all present, on a run that really authenticated.
-	for _, want := range []string{"session    established", "execution  complete", "status     OK"} {
-		if !strings.Contains(inv.stdout, want) {
+	// The facts, all present, on a run that really authenticated.
+	//
+	// The **label** is `outcome`, not `session`: ADR 0052 generalized it so that
+	// Kafka's terminal fact has somewhere truthful to go, and preserved
+	// PostgreSQL's wording — "session established" — verbatim as the value. The
+	// row is matched with padding collapsed, because the column width is set by
+	// the widest cell in the block and an unrelated row growing must not fail
+	// this.
+	for _, want := range []string{
+		"outcome session established", "execution complete",
+		"status OK no target-side error was proven",
+	} {
+		if !containsResultRow(inv.stdout, want) {
 			t.Errorf("the Result section is missing %q:\n%s", want, inv.stdout)
 		}
 	}
+	if strings.Contains(inv.stdout, "\n  session") {
+		t.Errorf("the Result section still labels the outcome `session`:\n%s", inv.stdout)
+	}
+}
+
+// containsResultRow reports whether one Result row is present, ignoring the
+// column padding tabwriter chose for that document.
+func containsResultRow(text, want string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Join(strings.Fields(line), " ") == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestCLITextNoCredentialCannotReadAsSuccess is the product invariant, rendered.
@@ -869,7 +893,7 @@ func TestCLITextNoCredentialCannotReadAsSuccess(t *testing.T) {
 		t.Errorf("status OK is printed without its gloss:\n%s", out)
 	}
 	// Nothing in the document may read as a successful session.
-	for _, misleading := range []string{"PostgreSQL OK", "✓ OK", "session    established"} {
+	for _, misleading := range []string{"PostgreSQL OK", "✓ OK", "session established"} {
 		if strings.Contains(out, misleading) {
 			t.Errorf("the output could be read as a successful session: %q", misleading)
 		}

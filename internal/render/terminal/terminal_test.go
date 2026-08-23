@@ -9,6 +9,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/render"
+	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
@@ -27,6 +28,20 @@ type builder struct {
 	t     *testing.T
 	graph *domain.GraphBuilder
 	last  map[domain.Step]domain.EvidenceID
+
+	// service names the run, so the same builder can produce a Kafka report.
+	// Empty means PostgreSQL, which is what every pre-Kafka test assumed.
+	service string
+
+	// shareable makes report() build the SHAREABLE_REDACTED projection, which
+	// is what the header line reads to announce itself.
+	shareable bool
+
+	// inputs and edges are held until report(), so a fixture can describe a
+	// graph in whatever order reads best and the builder still adds every node
+	// before any parent edge that names it.
+	inputs []domain.EvidenceInput
+	edges  [][2]domain.EvidenceID
 }
 
 func newBuilder(t *testing.T) *builder {
@@ -34,10 +49,83 @@ func newBuilder(t *testing.T) *builder {
 	return &builder{t: t, graph: domain.NewGraphBuilder(), last: map[domain.Step]domain.EvidenceID{}}
 }
 
-// add records one node, optionally beneath a parent step.
+// addUnder records one node beneath an explicit parent identifier.
+//
+// The `add` helpers above thread parentage through the *last node of a step*,
+// which is enough for a single-path PostgreSQL graph and wrong for a Kafka one:
+// two bootstrap paths hold two `tcp.connect` nodes, and a `tls.handshake` must
+// attach to its own. So Kafka fixtures name the parent.
+func (b *builder) addUnder(
+	id string, step domain.Step, layer domain.Layer, subject string,
+	state domain.State, failure domain.FailureClass, elapsed domain.Elapsed,
+	parent domain.EvidenceID,
+) domain.EvidenceID {
+	b.t.Helper()
+
+	subj, err := domain.NewEndpointSubject(subject)
+	if err != nil {
+		b.t.Fatalf("NewEndpointSubject(%q): %v", subject, err)
+	}
+	b.record(domain.EvidenceInput{
+		ID: domain.EvidenceID(id), Subject: subj, Layer: layer, Step: step,
+		State: state, FailureClass: failure,
+		StartedAt: time.Unix(0, 0).UTC(), Elapsed: elapsed,
+	}, parent)
+	return domain.EvidenceID(id)
+}
+
+// addAdvertisement records one discovered endpoint, carrying the identity a
+// reader correlates by.
+func (b *builder) addAdvertisement(
+	id, subject string, state domain.State, failure domain.FailureClass,
+	nodeID int64, parent domain.EvidenceID,
+) domain.EvidenceID {
+	b.t.Helper()
+
+	subj, err := domain.NewEndpointSubject(subject)
+	if err != nil {
+		b.t.Fatalf("NewEndpointSubject(%q): %v", subject, err)
+	}
+	b.record(domain.EvidenceInput{
+		ID: domain.EvidenceID(id), Subject: subj,
+		Layer: domain.LayerTopology, Step: servicekafka.StepBrokerAdvertised,
+		State: state, FailureClass: failure,
+		Attributes: map[domain.AttributeKey]domain.AttrValue{
+			servicekafka.AttrBrokerNodeID: domain.IntAttr(nodeID),
+		},
+		StartedAt: time.Unix(0, 0).UTC(),
+		// An advertisement is a fact read out of a response, not a timed
+		// operation, which is what the production producer records too.
+		Elapsed: domain.Unmeasured(),
+	}, parent)
+	return domain.EvidenceID(id)
+}
+
+// record defers construction until report(), so replace can amend a node.
+func (b *builder) record(in domain.EvidenceInput, parent domain.EvidenceID) {
+	b.inputs = append(b.inputs, in)
+	if parent != "" {
+		b.edges = append(b.edges, [2]domain.EvidenceID{in.ID, parent})
+	}
+}
+
+// add records one measured node, optionally beneath a parent step.
+//
+// It wraps d in domain.Measured, because a node built by this helper stands for
+// a step that ran. addElapsed is the way to build one that timed nothing.
 func (b *builder) add(
 	id string, step domain.Step, layer domain.Layer, subject string,
 	state domain.State, failure domain.FailureClass, d time.Duration, parent domain.Step,
+) domain.EvidenceID {
+	b.t.Helper()
+	return b.addElapsed(id, step, layer, subject, state, failure, domain.Measured(d), parent)
+}
+
+// addElapsed records one node whose measurement — or lack of one — is given
+// exactly.
+func (b *builder) addElapsed(
+	id string, step domain.Step, layer domain.Layer, subject string,
+	state domain.State, failure domain.FailureClass, e domain.Elapsed, parent domain.Step,
 ) domain.EvidenceID {
 	b.t.Helper()
 
@@ -48,7 +136,7 @@ func (b *builder) add(
 	evidence, err := domain.NewEvidence(domain.EvidenceInput{
 		ID: domain.EvidenceID(id), Subject: subj, Layer: layer, Step: step,
 		State: state, FailureClass: failure,
-		StartedAt: time.Unix(0, 0).UTC(), Duration: d,
+		StartedAt: time.Unix(0, 0).UTC(), Elapsed: e,
 	})
 	if err != nil {
 		b.t.Fatalf("NewEvidence(%s): %v", id, err)
@@ -71,11 +159,30 @@ func (b *builder) add(
 func (b *builder) report(findings ...domain.Finding) domain.Report {
 	b.t.Helper()
 
+	for _, in := range b.inputs {
+		evidence, err := domain.NewEvidence(in)
+		if err != nil {
+			b.t.Fatalf("NewEvidence(%s): %v", in.ID, err)
+		}
+		if err := b.graph.AddEvidence(evidence); err != nil {
+			b.t.Fatalf("AddEvidence(%s): %v", in.ID, err)
+		}
+	}
+	for _, edge := range b.edges {
+		if err := b.graph.AddParent(edge[0], edge[1]); err != nil {
+			b.t.Fatalf("AddParent(%s -> %s): %v", edge[0], edge[1], err)
+		}
+	}
+
 	graph, err := b.graph.Freeze()
 	if err != nil {
 		b.t.Fatalf("Freeze: %v", err)
 	}
-	service, err := domain.NewServiceID("postgres")
+	name := b.service
+	if name == "" {
+		name = "postgres"
+	}
+	service, err := domain.NewServiceID(name)
 	if err != nil {
 		b.t.Fatalf("NewServiceID: %v", err)
 	}
@@ -83,7 +190,11 @@ func (b *builder) report(findings ...domain.Finding) domain.Report {
 	if err != nil {
 		b.t.Fatalf("NewRunMetadata: %v", err)
 	}
-	target, err := domain.NewTarget("db.internal:5432", "db.internal:5432")
+	requested := "db.internal:5432"
+	if b.service == "kafka" {
+		requested = kafkaTarget
+	}
+	target, err := domain.NewTarget(requested, requested)
 	if err != nil {
 		b.t.Fatalf("NewTarget: %v", err)
 	}
@@ -91,9 +202,21 @@ func (b *builder) report(findings ...domain.Finding) domain.Report {
 	if err != nil {
 		b.t.Fatalf("NewLocalVantage: %v", err)
 	}
+	// Only a real redaction may produce SHAREABLE_REDACTED, and the ordinary
+	// constructor refuses the mode outright — which is the invariant, not an
+	// inconvenience. A fixture that wants the shareable projection derives it
+	// the way redaction does, from a LOCAL_FULL value.
 	security, err := domain.NewReportSecurity(domain.OutputModeLocalFull, false, false)
 	if err != nil {
 		b.t.Fatalf("NewReportSecurity: %v", err)
+	}
+	if b.shareable {
+		security, err = domain.NewShareableReportSecurity(security, domain.RedactionCounts{
+			Hostname: 2, IPAddress: 2,
+		})
+		if err != nil {
+			b.t.Fatalf("NewShareableReportSecurity: %v", err)
+		}
 	}
 	report, err := domain.NewReport(domain.ReportInput{
 		Run: run, Target: target, Vantage: vantage,
@@ -135,21 +258,51 @@ func rendered(t *testing.T, in render.Input) string {
 	return out.String()
 }
 
-// --- the three facts ----------------------------------------------------------
+// --- the independent axes -----------------------------------------------------
 
-// TestTheResultSectionAlwaysSaysAllThree is the product invariant.
-func TestTheResultSectionAlwaysSaysAllThree(t *testing.T) {
+// TestTheResultSectionAlwaysSaysStatusOutcomeAndExecution is the product
+// invariant.
+//
+// The label is `outcome` rather than `session` (ADR 0052 section 2). PostgreSQL's
+// *value* is unchanged — "session established" — because the record generalized
+// the label and preserved the wording: a `session` label carrying a Kafka
+// metadata value is worse than either word alone.
+func TestTheResultSectionAlwaysSaysStatusOutcomeAndExecution(t *testing.T) {
 	text := rendered(t, render.Input{Report: healthyGraph(t).report()})
 
-	for _, want := range []string{"status", "session", "execution", "duration"} {
+	for _, want := range []string{"status", "outcome", "execution", "duration"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the Result section omits %q", want)
 		}
 	}
-	if !strings.Contains(text, "session     established") &&
-		!strings.Contains(text, "session    established") {
+	if !containsRow(text, "outcome", "session established") {
 		t.Errorf("a passing session is not reported as established:\n%s", text)
 	}
+	if strings.Contains(text, "\n  session") {
+		t.Errorf("the Result section still labels the outcome `session`:\n%s", text)
+	}
+	// A PostgreSQL run discovers no topology, so there is nothing to count and
+	// no line. `0 of 0` would suggest discovery ran and found nothing.
+	if strings.Contains(text, "topology") {
+		t.Errorf("a PostgreSQL run rendered a topology line:\n%s", text)
+	}
+}
+
+// containsRow reports whether one Result row carries a label and a value,
+// whatever column padding tabwriter chose for that document.
+//
+// Padding is collapsed on both sides, because a column's width is set by the
+// widest cell in its block and a test that pinned it would fail whenever an
+// unrelated row grew. The words, their order and the row they are on are the
+// contract; the spacing between them is not.
+func containsRow(text, label, value string) bool {
+	want := strings.Join(strings.Fields(label+" "+value), " ")
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Join(strings.Fields(line), " ") == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestOKNeverStandsAlone pins the wording that stops a reader misreading it.
@@ -394,8 +547,15 @@ func TestDurationFormatter(t *testing.T) {
 		in   time.Duration
 		want string
 	}{
-		{0, ""},
-		{-time.Second, ""},
+		// A measured zero prints. It is what a monotonic clock returns for an
+		// operation that starts and ends inside one tick, and it is a result
+		// rather than an absence. formatElapsed owns the absence case.
+		{0, "0s"},
+		// Unreachable rather than meaningful: NewEvidence rejects a negative
+		// measured duration and run metadata comes from a monotonic clock. It is
+		// pinned so the branch has a defined answer rather than an accidental one.
+		{-time.Second, "0s"},
+		{time.Nanosecond, "<1µs"},
 		{500 * time.Nanosecond, "<1µs"},
 		{198 * time.Microsecond, "198µs"},
 		{3200 * time.Microsecond, "3.2ms"},
@@ -406,6 +566,160 @@ func TestDurationFormatter(t *testing.T) {
 	for _, tt := range tests {
 		if got := formatDuration(tt.in); got != tt.want {
 			t.Errorf("formatDuration(%s) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestElapsedFormatterSeparatesMeasurementFromAbsence is the duration contract.
+//
+// Three classes, three renderings, and no two of them collide:
+//
+//	measured positive   a number
+//	measured zero       "0s"
+//	not measured        nothing at all
+//
+// Before domain.Elapsed the second and third were the same blank cell, which is
+// what made TestGoldenTerminalOutput fail about one run in three: the golden
+// fixtures measure a real clock around an in-memory resolver, that measurement
+// lands on zero when it completes inside one monotonic tick, and the DNS row
+// then rendered exactly like a step that had never run.
+func TestElapsedFormatterSeparatesMeasurementFromAbsence(t *testing.T) {
+	tests := []struct {
+		name string
+		in   domain.Elapsed
+		want string
+	}{
+		{"measured milliseconds", domain.Measured(3200 * time.Microsecond), "3.2ms"},
+		{"measured sub-microsecond", domain.Measured(41 * time.Nanosecond), "<1µs"},
+		{"measured one nanosecond", domain.Measured(time.Nanosecond), "<1µs"},
+		{"measured zero", domain.Measured(0), "0s"},
+		{"not measured", domain.Unmeasured(), ""},
+		{"the zero Elapsed", domain.Elapsed{}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatElapsed(tt.in); got != tt.want {
+				t.Errorf("formatElapsed = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// The two collapses this contract forbids, stated as the assertions a
+	// mutation has to survive rather than left implicit in the table.
+	if formatElapsed(domain.Unmeasured()) == formatElapsed(domain.Measured(0)) {
+		t.Error("an unmeasured step renders identically to one that measured zero")
+	}
+	if formatElapsed(domain.Measured(0)) == "" {
+		t.Error("a measured zero renders as an absent measurement")
+	}
+}
+
+// TestSubTickMeasurementsRenderIdenticallyAcrossTheWholeRange is the flake, put
+// under test at the layer that produced it.
+//
+// Every value here is a plausible reading from a monotonic clock whose tick is
+// about 41.67ns measured around an in-memory resolver — the exact shape the
+// golden fixtures produce. What matters is not which token appears but that all
+// of them are non-empty, because an empty one is indistinguishable from a step
+// that never ran and that is what shifted the golden output.
+func TestSubTickMeasurementsRenderIdenticallyAcrossTheWholeRange(t *testing.T) {
+	for _, ns := range []int64{0, 41, 42, 83, 84, 125, 208, 416, 834, 999} {
+		got := formatElapsed(domain.Measured(time.Duration(ns)))
+		if got == "" {
+			t.Errorf("a measurement of %dns renders as no measurement at all", ns)
+		}
+	}
+}
+
+// TestAStepThatNeverRanShowsNoDuration walks the whole document rather than the
+// formatter, so a renderer that reached around formatElapsed is still caught.
+func TestAStepThatNeverRanShowsNoDuration(t *testing.T) {
+	b := newBuilder(t)
+	b.add("dns", vocabulary.StepDNSLookup, domain.LayerDNS, "db.internal:5432",
+		domain.StatePass, domain.FailureNone, 2*time.Millisecond, "")
+	b.add("tcp", vocabulary.StepTCPConnect, domain.LayerTCP, "10.0.0.10:5432",
+		domain.StatePass, domain.FailureNone, time.Millisecond, vocabulary.StepDNSLookup)
+	// SKIPPED by policy: svcdoctor decided not to run it, so it timed nothing.
+	b.addElapsed("ssl", servicepostgres.StepSSLRequest, domain.LayerTLS, "10.0.0.10:5432",
+		domain.StateSkipped, domain.FailureExecSkippedByPolicy, domain.Unmeasured(),
+		vocabulary.StepTCPConnect)
+
+	text := rendered(t, render.Input{Report: b.report()})
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.Contains(line, "SSLRequest") {
+			continue
+		}
+		if strings.Contains(line, "0s") {
+			t.Errorf("a step that never ran claims a measurement:\n%s", line)
+		}
+		if !strings.Contains(line, "EXEC_SKIPPED_BY_POLICY") {
+			t.Errorf("the skipped row lost its class:\n%s", line)
+		}
+	}
+}
+
+// TestAMeasuredZeroStepKeepsItsMeasurement is the mirror of the test above.
+func TestAMeasuredZeroStepKeepsItsMeasurement(t *testing.T) {
+	b := newBuilder(t)
+	b.addElapsed("dns", vocabulary.StepDNSLookup, domain.LayerDNS, "db.internal:5432",
+		domain.StatePass, domain.FailureNone, domain.Measured(0), "")
+	b.add("tcp", vocabulary.StepTCPConnect, domain.LayerTCP, "10.0.0.10:5432",
+		domain.StatePass, domain.FailureNone, time.Millisecond, vocabulary.StepDNSLookup)
+
+	text := rendered(t, render.Input{Report: b.report()})
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "DNS") && !strings.Contains(line, "0s") {
+			t.Errorf("a step that measured zero lost its measurement:\n%s", line)
+		}
+	}
+}
+
+// TestAnUnknownLocalTimeoutKeepsItsMeasurement pins the case ADR 0047 turns on.
+//
+// svcdoctor's own budget ending is not a claim about the endpoint, and the wait
+// it did measure is the one fact that says how long it gave the target. The row
+// stays UNKNOWN, keeps the class, and keeps the number.
+func TestAnUnknownLocalTimeoutKeepsItsMeasurement(t *testing.T) {
+	b := newBuilder(t)
+	b.add("dns", vocabulary.StepDNSLookup, domain.LayerDNS, "db.internal:5432",
+		domain.StatePass, domain.FailureNone, 2*time.Millisecond, "")
+	b.add("tcp", vocabulary.StepTCPConnect, domain.LayerTCP, "10.0.0.10:5432",
+		domain.StateUnknown, domain.FailureExecLocalTimeout, 80*time.Millisecond,
+		vocabulary.StepDNSLookup)
+
+	text := rendered(t, render.Input{Report: b.report(), Incomplete: true})
+	if !strings.Contains(text, "? UNKNOWN") {
+		t.Error("a local timeout is not rendered as UNKNOWN")
+	}
+	if !strings.Contains(text, "EXEC_LOCAL_TIMEOUT") {
+		t.Error("a local timeout lost its class")
+	}
+	if !strings.Contains(text, "80.0ms") {
+		t.Error("a local timeout lost the wait it measured")
+	}
+}
+
+// TestRenderingIsByteIdenticalAcrossRepeats runs the whole document repeatedly.
+//
+// Every fixture below holds a fixed report, so any difference between runs is
+// the renderer reading something outside it — a clock, a map iteration, an
+// environment. The duration column is the one that historically did.
+func TestRenderingIsByteIdenticalAcrossRepeats(t *testing.T) {
+	b := newBuilder(t)
+	b.addElapsed("dns", vocabulary.StepDNSLookup, domain.LayerDNS, "db.internal:5432",
+		domain.StatePass, domain.FailureNone, domain.Measured(0), "")
+	b.add("tcp", vocabulary.StepTCPConnect, domain.LayerTCP, "10.0.0.10:5432",
+		domain.StatePass, domain.FailureNone, 41*time.Nanosecond, vocabulary.StepDNSLookup)
+	b.addElapsed("ssl", servicepostgres.StepSSLRequest, domain.LayerTLS, "10.0.0.10:5432",
+		domain.StateSkipped, domain.FailureExecSkippedByPolicy, domain.Unmeasured(),
+		vocabulary.StepTCPConnect)
+	report := b.report()
+
+	in := render.Input{Report: report}
+	first := rendered(t, in)
+	for range 200 {
+		if got := rendered(t, in); got != first {
+			t.Fatal("re-rendering the same report produced different bytes")
 		}
 	}
 }

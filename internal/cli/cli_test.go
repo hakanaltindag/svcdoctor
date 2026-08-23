@@ -302,6 +302,9 @@ type harness struct {
 	app            *App
 	captured       app.PostgresParams
 	calls          int
+
+	capturedKafka app.KafkaParams
+	kafkaCalls    int
 }
 
 func newHarness(result app.Result, runErr error) *harness {
@@ -310,6 +313,14 @@ func newHarness(result app.Result, runErr error) *harness {
 	h.app.diagnosePostgres = func(_ context.Context, p app.PostgresParams) (app.Result, error) {
 		h.calls++
 		h.captured = p
+		return result, runErr
+	}
+	// Wired for every harness, so a routing mutation that sent a PostgreSQL
+	// invocation to the Kafka command fails on the parameters rather than
+	// panicking on a nil seam and looking like an unrelated defect.
+	h.app.diagnoseKafka = func(_ context.Context, p app.KafkaParams) (app.Result, error) {
+		h.kafkaCalls++
+		h.capturedKafka = p
 		return result, runErr
 	}
 	return h
@@ -354,8 +365,13 @@ func TestCommandDispatch(t *testing.T) {
 			ExitUsage, false, true},
 		{"inspect is not exposed", []string{"inspect", "postgres", "--host", "db", "--user", "app"},
 			ExitUsage, false, true},
-		{"kafka is not exposed", []string{"diagnose", "kafka", "--host", "db", "--user", "app"},
+		// Kafka is routed as of Phase 6.4C, so what this row proves changed: not
+		// that the route is refused, but that the Kafka command validates its
+		// own invocation. --sasl-mechanism is missing and has no default, so the
+		// run stops at exit 2 without reaching the application.
+		{"kafka without a mechanism", []string{"diagnose", "kafka", "--host", "db"},
 			ExitUsage, false, true},
+		{"kafka help", []string{"diagnose", "kafka", "--help"}, ExitOK, true, false},
 	}
 
 	for _, tt := range tests {
@@ -436,7 +452,20 @@ func TestVersionHasOneAuthority(t *testing.T) {
 func TestHelpDocumentsOnlyWhatExists(t *testing.T) {
 	literalPassword := regexp.MustCompile(`--password([^-\w]|$)`)
 
-	for _, args := range [][]string{{"--help"}, {"diagnose", "--help"}, {"diagnose", "postgres", "--help"}} {
+	commands := []struct {
+		args []string
+		// forbidden are words this particular help must not contain, beyond the
+		// list every help shares.
+		forbidden []string
+	}{
+		{args: []string{"--help"}, forbidden: []string{"kafka", "postgres"}},
+		{args: []string{"diagnose", "--help"}},
+		{args: []string{"diagnose", "postgres", "--help"}, forbidden: []string{"kafka"}},
+		{args: []string{"diagnose", "kafka", "--help"}, forbidden: []string{"postgres"}},
+	}
+
+	for _, command := range commands {
+		args := command.args
 		h := newHarness(app.Result{}, nil)
 		h.run(args...)
 		text := h.stdout.String()
@@ -445,10 +474,11 @@ func TestHelpDocumentsOnlyWhatExists(t *testing.T) {
 			t.Errorf("`%s` help offers a literal --password; ADR 0049 refuses it outright",
 				strings.Join(args, " "))
 		}
-		for _, word := range []string{
+		shared := []string{
 			"PGPASSWORD", "SVCDOCTOR_PASSWORD", "environment variable",
-			"prompt", "--color", "--verbose", "inspect", "kafka",
-		} {
+			"prompt", "--color", "--verbose", "inspect",
+		}
+		for _, word := range append(shared, command.forbidden...) {
 			if strings.Contains(text, word) {
 				t.Errorf("`%s` help mentions %q, which is refused or deferred",
 					strings.Join(args, " "), word)

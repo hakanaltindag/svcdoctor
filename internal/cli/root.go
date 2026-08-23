@@ -51,20 +51,25 @@ type App struct {
 	// metadata.
 	Version string
 
-	// diagnosePostgres is the seam, and it is deliberately one function rather
-	// than an interface.
+	// diagnosePostgres and diagnoseKafka are the seams, and they are deliberately
+	// two functions rather than one interface with two implementations.
 	//
-	// It exists so that argument parsing, parameter construction, output routing
-	// and the exit-code decision can be tested against a scripted result instead
-	// of a live PostgreSQL server — the parts of this package that have nothing
-	// to do with PostgreSQL and would otherwise be reachable only through
+	// They exist so that argument parsing, parameter construction, output
+	// routing and the exit-code decision can be tested against a scripted result
+	// instead of a live server — the parts of this package that have nothing to
+	// do with either protocol and would otherwise be reachable only through
 	// Docker.
 	//
-	// **It is not a plugin point.** It is unexported, it has exactly one
-	// production value, and it names a concrete function. A second service gets
-	// a second command with its own wiring, which is the extensibility ADR 0009
-	// asked for; it does not get a slot in a registry here.
+	// **Neither is a plugin point.** They are unexported, each has exactly one
+	// production value, and each names a concrete function. A third service gets
+	// a third command with its own wiring, which is the extensibility ADR 0009
+	// asked for; it does not get a slot in a registry here. Two fields side by
+	// side is what "no central conditional dispatch" looks like when there are
+	// two services: the dispatch is the switch in diagnose, at one place, and
+	// nothing about PostgreSQL is reachable from the Kafka command or the
+	// reverse.
 	diagnosePostgres func(context.Context, app.PostgresParams) (app.Result, error)
+	diagnoseKafka    func(context.Context, app.KafkaParams) (app.Result, error)
 }
 
 // New builds the production command environment.
@@ -75,6 +80,7 @@ func New(stdin io.Reader, stdout, stderr io.Writer, version string) *App {
 		Stderr:           stderr,
 		Version:          version,
 		diagnosePostgres: app.DiagnosePostgres,
+		diagnoseKafka:    app.DiagnoseKafka,
 	}
 }
 
@@ -88,13 +94,19 @@ func New(stdin io.Reader, stdout, stderr io.Writer, version string) *App {
 //
 // `svcdoctor diagnose postgres`. ADR 0041 fixed the shape and partially
 // supersedes ADR 0011, whose reason survives: each service owns its own flags,
-// help and validation, so there is nothing to share between `diagnose postgres`
-// and a future `diagnose kafka` but the word `diagnose`.
+// help and validation, so `diagnose postgres` and `diagnose kafka` share the word
+// `diagnose`, the exit mapping, the credential sources and the output switch —
+// and no service knowledge at all.
 //
-// `inspect` and `diagnose kafka` are **not routed**. ADR 0041 reserved the
-// `inspect` namespace and deferred its output contract, and Kafka has no
-// composition root to call; a branch that parsed either and then refused would
-// be a product surface that does nothing.
+// `inspect` is **not routed**. ADR 0041 reserved the namespace and deferred its
+// output contract; a branch that parsed it and then refused would be a product
+// surface that does nothing.
+//
+// `diagnose kafka` is routed as of Phase 6.4C. It waited for three things and
+// not for convenience: a composition root to call, an owner for every
+// production-reachable FAIL outcome (ADR 0054), and a renderer that presents a
+// discovered broker as a discovered broker rather than as an endpoint the
+// operator named (ADR 0052 section 5).
 func (a *App) Run(ctx context.Context, args []string) int {
 	if len(args) == 0 {
 		a.usageRoot(a.Stderr)
@@ -138,6 +150,9 @@ func (a *App) diagnose(ctx context.Context, args []string) int {
 
 	case "postgres":
 		return a.diagnosePostgresCommand(ctx, args[1:])
+
+	case "kafka":
+		return a.diagnoseKafkaCommand(ctx, args[1:])
 
 	default:
 		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: unknown service %q\n\n", args[0])
