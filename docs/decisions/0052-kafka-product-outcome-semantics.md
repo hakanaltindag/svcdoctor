@@ -2,7 +2,21 @@
 
 ## Status
 
-**Accepted.** Not implemented, and no code changes with this record.
+**Accepted. Not implemented — this is renderer vocabulary, and the Kafka renderer
+is Phase 6.4.**
+
+Phase 6.1c produced the facts the lines restate, and deliberately no more. A
+composed run's graph carries the `kafka.metadata` node whose state is the
+`outcome` line, and the `kafka.broker_advertised` nodes and their transport
+sweeps that the `topology` count reads. The count's predicate and ADR 0051's
+completeness rule share one implementation — `transportPath.reachedTransport` in
+`internal/app/kafkacompleteness.go` — so when the renderer arrives, the two
+cannot disagree about what "reached" means.
+
+**No Report field was added, and none is needed.** §5's rejected alternative
+holds: the outcome is a presentation restatement of a node's state, and
+serializing it would put a derived claim in the canonical model. `schemaVersion`
+stays 1.
 
 It fixes the user-facing outcome vocabulary for Kafka and the one renderer
 extension that vocabulary requires.

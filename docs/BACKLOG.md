@@ -2553,7 +2553,8 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 - [x] **6.1a** mechanism guard: UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`, zero `SecretFor`,
       zero `Reveal`, zero bytes written, proven by test — **COMPLETE**
 - [x] **6.1b** generic requested-target TLS rule and its five codes (24 → 29) — **COMPLETE**
-- [ ] **6.1c** `DiagnoseKafka`, requested-target anchor, ADR 0051 completeness predicate
+- [x] **6.1c** `DiagnoseKafka`, requested-target anchor, ADR 0051 completeness predicate,
+      ADR 0050 structurally enforced, closure guard turned positive — **COMPLETE**
 - [ ] **6.2** SCRAM extraction security review, then extraction and Kafka SCRAM-SHA-256
 - [ ] **6.3** Kafka protocol diagnosis ownership
 - [ ] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka`
@@ -2719,20 +2720,72 @@ re-exports them, so no identifier and no serialized report moved.
 `Result.Incomplete()` is unchanged, `SummaryStatus` is unchanged, and no schema field, no
 `FailureClass`, no dependency and no `Origin` was added.
 
-### Phase 6.1c — `DiagnoseKafka` application composition: NEXT, and no longer blocked by ownership
+### Phase 6.1c — `DiagnoseKafka` application composition: COMPLETE
 
-The ADR 0054 gate that stopped it is closed. Every generic and Kafka-specific owner it needs
-now exists: generic DNS and TCP (Phase 4.9b), generic requested-target TLS (6.1b), the Kafka
-protocol stages (6.1c-P2) and the advertised-broker rules (Phase 3.4).
+`internal/app.DiagnoseKafka` is the second composition root, and the commit that
+introduced it is the commit that made every Kafka stage product-reachable. It was safe to
+land because ADR 0054's ordering was honoured rather than waived: 6.1a, 6.1b, 6.1c-P1 and
+6.1c-P2 all landed first, and the first attempt at this phase was **stopped** rather than
+argued around.
 
-What composition must still implement is unchanged and is recorded in its own ADRs: ADR 0050's
-credential authority — a credential is presented only on the selected bootstrap path, and
-Metadata-discovered brokers get credential-free DNS/TCP/TLS — and ADR 0051's completeness
-algorithm, whose ten cases are listed there.
+- [x] `KafkaParams` / `DiagnoseKafka` / `Result`, beside the PostgreSQL pair. `Result` is
+      reused unchanged — one report, one `Incomplete()` boolean, no exit code
+- [x] The requested-target anchor through the existing service-neutral `logicalTarget`;
+      `internal/app` still creates exactly one kind of evidence, at one site, in
+      `target.go`
+- [x] Bootstrap sweep with a **TLS plan** — the first production producer of a generic
+      requested-target `tls.handshake` node, which is what ADR 0053 landed a phase early
+      for
+- [x] ApiVersions and SaslHandshake on **every** completed path; both are credential-free
+- [x] **At most one** credential-bearing authentication, on the canonically smallest path
+      whose broker accepted the mechanism. No retry, no mechanism fallback, no channel
+      downgrade
+- [x] Metadata on the authenticated session, then a credential-free DNS/TCP/TLS sweep of
+      every advertisement, gated on the exchange having completed
+- [x] ADR 0051's completeness predicate in `incompleteKafkaRun`, all ten acceptance rows
+      pinned plus five shapes the record implies
+- [x] Six diagnosis rules wired: generic DNS, TCP and TLS, Kafka protocol, advertised
+      reachability and unusable advertisements
+- [x] `test/security/kafka_production_reachability_test.go` **transformed**, not deleted —
+      see below
 
-`test/security/kafka_production_reachability_test.go` will fail on the first composition
-commit. That is intentional: it is the ADR 0054 gate, and the commit that composes Kafka is the
-commit that should retire it.
+**ADR 0050 is structurally enforced, four ways.** A credential bound to anything but the
+logical target is refused at the door as `ErrInvalidInput`, before any socket opens. The
+composition calls `NewCredential`, `NewSecret`, `Reveal` and `SecretFor` nowhere, asserted
+statically. `kafka.TransportPlan` has no field that could hold credential material,
+asserted by reflection. And a hostile broker that advertises an attacker endpoint holding
+a **valid certificate signed by the CA the run trusts** receives zero application bytes
+above its TLS layer, asserted at the socket.
+
+**One composition decision is not in an ADR and is recorded here.** The advertised sweep
+inherits the run's `RootCAs`, version bounds and `InsecureSkipVerify`, but **not**
+`ServerName`. An explicit server name pins one endpoint's identity; applying it to every
+advertised sweep would verify each broker's certificate against the bootstrap's name and
+produce identity mismatches no real client would see. Clearing it restores verification
+against the advertised hostname, which is what a client checks. This is ADR 0050's
+reasoning one layer down — a value authorized for the endpoint the operator named does not
+travel to an endpoint a peer named — and it is exercised by a test that would fail if the
+name travelled.
+
+**The ADR 0054 gate was transformed rather than retired.** The old file asserted that
+`internal/adapter/kafka` had zero production importers and that no `DiagnoseKafka` existed.
+It now asserts the positive closure: **exactly one** production importer and it is
+`internal/app`, **exactly one** `DiagnoseKafka` and it is in `internal/app/kafka.go`, the
+exact set of six rules the composition wires, no credential minting or secret resolution in
+the composition root, one authentication call site outside any loop, no credential-bearing
+field on the advertised transport plan, and that the protocol closure test still fails in
+both directions. Two guard files vouch for each other, so deleting either fails the other.
+
+**Known limitation, recorded rather than fixed.** `kafka.Metadata` consumes an
+`AuthenticatedSession`, so a Kafka listener with **no SASL at all** cannot reach Metadata
+through this composition: the handshake fails and the run stops with a truthful protocol
+finding. That restriction is the adapter's, not Kafka's, and it is documented on
+`kafka.Metadata` itself. Lifting it needs a session type the adapter deliberately does not
+have, and it is not in Kafka BASIC's scope.
+
+**Deliberately not done in 6.1c:** no CLI route, no renderer, no `outcome` or `topology`
+line, no SCRAM, no new `FindingCode`, no new `FailureClass`, no schema field, no
+dependency, and no change to `Reveal`'s two production call sites.
 
 ### Phase 6.2 — BLOCKED until 6.2a is Accepted
 
@@ -2743,6 +2796,14 @@ commit that should retire it.
 which must be Accepted first. Extraction moves revealed plaintext across a package boundary
 for the first time, and that is the one place in the Kafka plan where a security boundary is
 *relaxed* rather than tightened.
+
+**As of Phase 6.1c this gate is mechanically enforced, not merely written down.**
+`test/security/kafka_production_reachability_test.go`'s `TestNoSharedSCRAMPackageExists`
+fails the build if `internal/sasl`, `internal/scram` or `internal/crypto/scram` appears. It
+is to be deleted **in the commit that records 6.2a's acceptance**, never in the commit that
+wants the package. Phase 6.1c completing authorizes nothing here: composition exposed no
+new SCRAM need, and an unsupported mechanism still travels through the 6.1a guard to the
+6.1c-P2 owner as `UNKNOWN` + `AUTH_MECHANISM_UNSUPPORTED`.
 
 The review must re-open Model A and settle: `string` vs `[]byte`; plaintext copies and escape
 analysis where useful; Go's zeroization limits; accidental `fmt`/error formatting; panic paths;

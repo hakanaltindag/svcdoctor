@@ -2,11 +2,29 @@
 
 ## Status
 
-**Accepted.** Not implemented, and no code changes with this record.
+**Accepted, and implemented in Phase 6.1c.**
 
-It is a prerequisite for Kafka application composition (Phase 6.1c). Nothing in
-`internal/adapter/kafka` changes; what changes is what a future `DiagnoseKafka`
-is permitted to build.
+`internal/app.DiagnoseKafka` is the `DiagnoseKafka` this record was written to
+constrain, and it is constrained in four independent ways rather than by review:
+
+- `KafkaParams.validate` refuses a credential bound to anything but the logical
+  target, before any socket opens, as `ErrInvalidInput` and never as evidence
+  (§4);
+- the composition calls `security.NewCredential`, `security.NewSecret`,
+  `security.Reveal` and `Credential.SecretFor` **nowhere**, asserted statically
+  in `test/security/kafka_production_reachability_test.go`;
+- `kafka.TransportPlan` has no field that can hold credential material, asserted
+  by reflection over the real struct;
+- a behavioural test drives §5's scenario exactly — a bootstrap broker that
+  advertises `attacker.…` holding a **valid certificate signed by the CA the run
+  trusts** — and counts zero application bytes at the attacker above its TLS
+  layer.
+
+`MeasureAdvertised` is unchanged, which is what §1 predicted: this record made
+its existing shape a policy rather than an implementation detail, and
+composition had to add nothing to comply.
+
+Nothing in `internal/adapter/kafka` changed with the implementation either.
 
 The governing invariant, stated once so that later records can cite it:
 

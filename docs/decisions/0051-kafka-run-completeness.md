@@ -2,7 +2,26 @@
 
 ## Status
 
-**Accepted.** Not implemented, and no code changes with this record.
+**Accepted, and implemented in Phase 6.1c** as `incompleteKafkaRun` in
+`internal/app/kafkacompleteness.go`, beside the PostgreSQL predicate.
+
+Graph accessors only, as §4 requires: `Nodes`, `Children`, `Node`, `Step`,
+`State` and `FailureClass`. No identifier parsing, no `Origin`, no sweep scope,
+no subject matching and no schema change — `Result` still carries one boolean.
+
+All ten acceptance rows are pinned as tests, plus five shapes this record implies
+without tabulating: a passing handshake resolving a TLS-plan advertisement, a
+failed lookup as a complete negative, a locally timed-out lookup, a resolved
+lookup with nothing attempted beneath it, and an unusable advertisement needing
+no sweep.
+
+**One implementation detail is worth recording**, because it is a distinction §4's
+pseudocode does not have to make and an implementation does. *Absent* and
+*unrecognized* are different: zero `tls.handshake` children means the plan was
+plaintext and a passing connection is transport success, while two of them is a
+shape the chain cannot produce. Reading the second as "no TLS plan" would turn an
+incomprehensible graph into a reachability claim. Every unrecognized shape reads
+as **unresolved**, which is the direction this predicate is required to err in.
 
 It fixes what `Result.Incomplete()` means for a Kafka run, which ADR 0047 defined
 only for PostgreSQL's shape.

@@ -917,9 +917,16 @@ require a *passing* `kafka.metadata`.
 
 ### 5.8 Kafka BASIC: decided in Phase 6.0, not implemented
 
-Five records fix Kafka's prerequisites before any composition root exists. Each is
-**Accepted**; none describes shipped code. `internal/adapter/kafka` has no production
-importer today, so no Kafka stage is product-reachable.
+Five records fix Kafka's prerequisites. Each is **Accepted**, and as of Phase 6.1c three
+of them describe shipped code: ADR 0050 and ADR 0051 are implemented by the composition
+root in §5.9, and ADR 0053 was implemented a phase earlier by design. ADR 0052 remains
+renderer vocabulary and waits for Phase 6.4; the SCRAM constraints below wait for the
+Phase 6.2a security review.
+
+**`internal/adapter/kafka` now has exactly one production importer, `internal/app`, so
+every Kafka stage is product-reachable.** That sentence used to read "no production
+importer", and the guard that enforced it was transformed rather than deleted — see
+§12.1.
 
 **Discovery does not widen secret authority (ADR 0050).**
 
@@ -964,6 +971,128 @@ must not call `security.Reveal`, perform I/O, log plaintext, put plaintext in er
 retain connection state; it accepts plaintext only as a short-lived argument and returns
 derived protocol material. `Reveal` stays in wire packages and its call-site count is
 unchanged by extraction unless a separate security record authorizes otherwise.
+
+### 5.9 Kafka application composition: one journey, one credential, one selected socket
+
+**Implemented in Phase 6.1c.** `internal/app.DiagnoseKafka` is the second composition
+root and the first production importer of `internal/adapter/kafka`, which makes every
+Kafka stage product-reachable in one commit. It was allowed to land because the owners
+landed first (§12.1): the mechanism guard in 6.1a, generic requested-target TLS in 6.1b,
+the required-input producer in 6.1c-P1 and the protocol claim table in 6.1c-P2.
+
+```text
+target.requested                                   L0, the only node app creates
+  └── dns.lookup                                   L1
+        ├── tcp.connect [addr A] ── tls.handshake  L2/L3, every resolved address
+        └── tcp.connect [addr B] ── tls.handshake
+                 ├── kafka.api_versions            L4, every completed path
+                 └── kafka.sasl_handshake          L5, every completed path
+  ------------------------ credential boundary ------------------------
+                       └── kafka.sasl_authenticate L5, at most ONE path
+                             └── kafka.metadata    L6
+                                   └── kafka.broker_advertised × N
+                                         └── dns.lookup    credential-free
+                                               └── tcp.connect
+                                                     └── tls.handshake
+```
+
+**Discover broadly, authenticate narrowly.** Everything above the credential boundary is
+credential-free, and the SASL handshake is credential-free as a property of the Kafka
+protocol rather than as a promise: a `SaslHandshake` request carries a mechanism name and
+nothing else. Measuring a second path therefore costs the broker a connection and not an
+authentication attempt, which is what makes per-path divergence observable before any
+secret is in play.
+
+**Bootstrap-only credential authority.** ADR 0050 is enforced in four independent ways,
+none of which relies on review:
+
+- `KafkaParams.validate` refuses a credential bound to anything but the logical target, so
+  a rebind costs the target zero connections and comes back as `ErrInvalidInput` rather
+  than as evidence.
+- The composition calls `security.NewCredential`, `security.NewSecret`, `security.Reveal`
+  and `Credential.SecretFor` **nowhere**; a static guard in `test/security` fails on any
+  of them.
+- `kafka.MeasureAdvertised` takes a builder, a list of advertisements and a transport
+  plan. No parameter can hold credential material, and a reflection guard fails if
+  `TransportPlan` ever grows a field that could.
+- A behavioural test drives a hostile broker that advertises an attacker endpoint holding
+  a **valid certificate signed by the CA the run trusts**, and counts zero application
+  bytes at the attacker above its TLS layer.
+
+**At most one credential-bearing attempt per run.** One `kafka.Authenticate` call site,
+outside any loop, both asserted statically. There is no retry against a sibling address,
+no mechanism fallback and no channel downgrade: a credential-bearing retry is not an L2 or
+L3 transport retry, because it spends an attempt against whatever counts them.
+
+**Path selection.** Candidates are the paths whose broker accepted the mechanism, and the
+canonically smallest address wins. Unlike PostgreSQL's selector there is no class
+partition, because a `HandshakeSession` exists only where the broker agreed to
+authenticate — the other class is unreachable. Canonical order is a tie-break among paths
+that were **all** already measured through TLS, ApiVersions and the handshake, not a
+preference for an address family.
+
+**A path that is not usable is not selectable, structurally.** `transport.Run` records a
+`Continuation` only when the handshake produced a connection, so TCP PASS + TLS FAIL and
+TCP PASS + TLS UNKNOWN never reach the Kafka adapter at all. The composition filters
+nothing; there is nothing to filter.
+
+**Continuation ownership.** Each stage consumes what it is given and hands on only what
+the protocol leaves usable. The composition closes unselected candidates explicitly at the
+moment of selection, and every stage result is closed on every path out through a
+deferred, idempotent `Close`. The two are deliberately redundant: either alone keeps the
+ledger balanced, and a test that counts opens against closes on real sockets is what makes
+that a fact rather than an inspection of `defer` statements.
+
+**Advertised measurement stops at transport.** No ApiVersions, no SaslHandshake, no
+SaslAuthenticate and no second Metadata is sent to a discovered endpoint, and the sweep is
+gated on the Metadata exchange having completed.
+
+#### 5.9.1 A TLS identity override is authority for one endpoint, and discovery cannot widen it
+
+**This is a trust-authority decision, not a plumbing detail**, and it is the second thing
+in this phase that a Metadata response must not be allowed to widen. ADR 0050 says a
+*credential* authorized for the endpoint the operator named does not travel to an endpoint
+a peer named. `TLSOptions.ServerName` is the same kind of value — **an assertion about who
+one endpoint must prove itself to be** — and it gets the same rule:
+
+> A bootstrap-only `ServerName` override **must not** be inherited by Metadata-discovered
+> brokers. Every advertised broker is verified against **its own advertised hostname**.
+
+The advertised plan therefore inherits exactly the run-wide trust configuration and nothing
+endpoint-specific:
+
+| Field | Inherited | Why |
+|---|---|---|
+| `RootCAs` | **yes** | which authorities this run trusts is a property of the run |
+| `MinVersion` / `MaxVersion` | **yes** | a protocol-version floor is a run-wide policy |
+| `InsecureSkipVerify` | **yes** | an explicit per-run opt-in, recorded once on the report |
+| `ServerName` | **no** | it names *one* endpoint's identity |
+
+Inheriting it would be wrong in both directions, which is why neither is acceptable. It
+would **manufacture false failures**: every advertised broker's certificate would be checked
+against the bootstrap's name, and managed Kafka routinely serves a distinct certificate per
+broker endpoint, so a healthy cluster would report identity mismatches no real client would
+ever see. And it would **weaken a real check**: whenever a discovered broker happened to
+present a certificate for the bootstrap name, it would verify — so an attacker who could
+obtain, or already holds, a certificate for the bootstrap name would be trusted at an
+address the operator never named.
+
+Clearing it restores the transport chain's default, which is to verify against the host the
+sweep was asked to reach. The advertised sweep therefore verifies **more** strictly, not
+less: each endpoint against its own identity rather than all of them against one.
+
+`TestASuccessfulMetadataExchangeSweepsAdvertisedEndpoints` fails if the override travels.
+
+**Completeness is Kafka's own predicate.** `incompleteKafkaRun` implements ADR 0051:
+`kafka.metadata` PASS does **not** short-circuit, because advertised reachability is half
+of what the command promised to measure. One working path resolves an advertisement
+outright; a failure resolves it only when no selectable sibling was left unmeasured. An
+unrecognized sweep shape reads as unresolved, never as a verdict.
+
+**What Phase 6.1c does not do.** No CLI route and no renderer: `svcdoctor diagnose kafka`
+does not exist, and ADR 0052's `outcome` and `topology` lines are Phase 6.4. No SCRAM —
+see §5.8 and the Phase 6.2a gate. No new `FindingCode`, no new `FailureClass`, no schema
+change, no dependency, and `Reveal` stays at two production call sites.
 
 ## 6. Diagnosis
 
@@ -1326,11 +1455,28 @@ Two consequences bind planning:
   advertised sweep was deliberately evidence-only for two phases — provided an Accepted ADR
   argues it and states a reopen condition.
 
-Enforcement is a **per-service closure test**, specified in ADR 0054 §5 and not yet written:
-it enumerates production-reachable FAIL, UNKNOWN and SKIPPED outcomes per step and fails on
-any that is reachable with neither an owner nor a recorded exemption. A static lint cannot
-substitute, because reachability of a `FailureClass` from a composition root is not decidable
-from the import graph.
+Enforcement is a **per-service closure test**, specified in ADR 0054 §5. A static lint
+cannot substitute, because reachability of a `FailureClass` from a composition root is not
+decidable from the import graph.
+
+**Kafka has one as of Phase 6.1c; PostgreSQL does not yet.** For Kafka it is two files that
+together satisfy §5, and the first of them is the old negative gate turned around rather
+than retired:
+
+- `internal/diagnosis/kafka`'s `TestTheAuthorizedTableIsExactlyTheProducedOutcomes`
+  enumerates every outcome the four protocol producers emit and fails in **both**
+  directions — a produced outcome with no owner, and an owner for an outcome no producer
+  emits.
+- `test/security/kafka_production_reachability_test.go` asserts the positive closure now
+  that composition exists: **exactly one** production importer of the adapter and it is
+  `internal/app`, **exactly one** `DiagnoseKafka`, the exact set of six rules the
+  composition wires, no credential minting or secret resolution in the composition root,
+  one authentication call site outside any loop, and no credential-bearing field on the
+  advertised transport plan.
+
+The two guard files assert each other's key contents, because a guard cannot protect
+itself and the failure this boundary exists to prevent is a guard deleted to make a commit
+pass.
 
 ## 13. Execution budget, cancellation, and concurrency
 

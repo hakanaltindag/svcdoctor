@@ -18,10 +18,21 @@ together are the closure test §5 asks for:
   derived by reading `internal/adapter/kafka`, and fails in **both** directions:
   a produced outcome with no owner, and an owner for an outcome no producer
   emits.
-- `test/security/kafka_production_reachability_test.go` asserts that
-  `internal/adapter/kafka` has zero production importers and that no
-  `DiagnoseKafka` entry point exists, which is what made it safe for Phase
-  6.1c-P1 to land a producer whose owner arrived one phase later.
+- `test/security/kafka_production_reachability_test.go`, which until Phase 6.1c
+  asserted that `internal/adapter/kafka` had zero production importers and that
+  no `DiagnoseKafka` existed — the negative that made it safe for Phase 6.1c-P1
+  to land a producer whose owner arrived one phase later.
+
+**Phase 6.1c satisfied that gate's condition and turned the file around rather
+than deleting it**, which is what §5 asks for once a service becomes
+production-reachable. It now asserts the positive closure: exactly one
+production importer and it is `internal/app`, exactly one `DiagnoseKafka`, the
+exact set of rules the composition wires, no credential minting or secret
+resolution in the composition root, one authentication call site outside any
+loop, no credential-bearing field on the advertised transport plan, and that the
+outcome enumeration above still fails in both directions. The two files assert
+each other's key contents, because a guard cannot protect itself and deletion is
+the failure mode this record exists to prevent.
 
 The record of that ordering is worth keeping, because it is §4 in practice and it
 cost a phase. Phase 6.1c was **stopped** by this invariant: composition would have
