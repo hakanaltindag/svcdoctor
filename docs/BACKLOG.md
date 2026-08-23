@@ -2544,7 +2544,7 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 | **6.1a** | Kafka authentication mechanism guard | `Authenticate` reads `Mechanism()` nowhere and calls `ExchangePLAIN` unconditionally. The guard must precede `SecretFor`, `Reveal` and any credential-bearing wire output |
 | **6.1b** | Generic requested-target TLS diagnosis (ADR 0053) | The owner must exist before 6.1c makes the producer reachable, or `tls.handshake` FAIL lands with `findings: []` and `status: OK` |
 | **6.1c** | `DiagnoseKafka` application composition | Anchor, bootstrap sweep, ApiVersions, handshake, one authenticated path, Metadata, advertised sweep, ADR 0051's predicate. Existing rules wired; no new findings |
-| **6.2** | Shared SCRAM core extraction + Kafka SCRAM-SHA-256 | Requires a dedicated security review before extraction (§5.8) |
+| **6.2** | Shared SCRAM core extraction + Kafka SCRAM-SHA-256 | 6.2a is Accepted and rejected Model A; ADR 0055 adopts Model D. Implementation waits on 6.2a-R2 |
 | **6.3** | Kafka protocol diagnosis ownership | ApiVersions, SASL handshake, authentication, Metadata. Closes the reachable outcomes Phase 5.6 enumerated as unowned |
 | **6.4** | Kafka renderer hierarchy + Kafka CLI | `collectPaths` promotes every `tcp.connect` to a top-level path, which conflates bootstrap and advertised sweeps; the tree needs a third level |
 | **6.5** | Kafka BASIC closure | Includes the ADR 0054 §5 closure test |
@@ -2555,7 +2555,10 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 - [x] **6.1b** generic requested-target TLS rule and its five codes (24 → 29) — **COMPLETE**
 - [x] **6.1c** `DiagnoseKafka`, requested-target anchor, ADR 0051 completeness predicate,
       ADR 0050 structurally enforced, closure guard turned positive — **COMPLETE**
-- [ ] **6.2** SCRAM extraction security review, then extraction and Kafka SCRAM-SHA-256
+- [x] **6.2a** shared SCRAM core security review — **COMPLETE**, ADR 0055: Model A
+      **rejected**, Model D adopted, seventeen implementation conditions recorded
+- [ ] **6.2a-R2** confirm Model D against a written core API, then delete the gate test
+- [ ] **6.2** extraction under ADR 0055, `saslname` escaping, and Kafka SCRAM-SHA-256
 - [ ] **6.3** Kafka protocol diagnosis ownership
 - [ ] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka`
 - [ ] **6.5** Kafka BASIC closure gate, including the per-service ownership closure test
@@ -2787,7 +2790,42 @@ have, and it is not in Kafka BASIC's scope.
 line, no SCRAM, no new `FindingCode`, no new `FailureClass`, no schema field, no
 dependency, and no change to `Reveal`'s two production call sites.
 
-### Phase 6.2 — BLOCKED until 6.2a is Accepted
+**Open, not forgotten.** Phase 6.1c observed one unexplained one-off `internal/cli` test
+failure under load. It did not reproduce across subsequent full/race runs. Reopen if it
+recurs. It did not reproduce in the Phase 6.2a baseline either — `go test ./...`,
+`go test -count=1 -race ./...`, `make check` and both integration suites all passed.
+
+### Phase 6.2 — BLOCKED. 6.2a is Accepted and rejected Model A
+
+**Phase 6.2a is complete and its outcome is ADR 0055: Model A rejected, Model D adopted.**
+The shared core must accept **no password in any type**; it receives a derivation callback
+and the wire package keeps the plaintext and the `crypto/pbkdf2` call. What crosses the
+package boundary is the SaltedPassword, which authenticates one principal to one target
+rather than being the operator's reusable password.
+
+Three things the review found that the plan did not have:
+
+- **`saslname` escaping is new code, not extracted code.** PostgreSQL sends `n=` — an empty
+  username, because the role travels in the `StartupMessage`. Kafka reads the username from
+  `n=`, so RFC 5802 §5.1 escaping (`,` → `=2C`, `=` → `=3D`) is required. A repository-wide
+  search found no escaping of any kind, and the existing RFC 7677 vector passes a literal
+  `client-first-bare` into `derive`, so message construction with a username has never been
+  tested.
+- **The two wire packages bound peer payloads eight times apart** — PostgreSQL's
+  `MaxMessageSize` is 1 MiB, Kafka's `maxResponseSize` is 8 MiB. The core cannot inherit a
+  caller's bound and must bound message length, salt length, nonce length and attribute count
+  itself.
+- **Kafka has no `Reveal`-count guard.** `forbidigo` confines the call to wire packages and
+  `TestPostgresCredentialSurfaceIsExactlyTwoCalls` pins PostgreSQL at one, but nothing pins
+  Kafka's. Phase 6.2 adds the analogue and a repository-wide "exactly two" assertion.
+
+**Implementation is authorized by Phase 6.2a-R2**, a short follow-up review confirming Model D
+against a written API and ADR 0055's seventeen conditions. `TestNoSharedSCRAMPackageExists`
+stays until then and is deleted in the commit that records *that* acceptance.
+
+The Model A framing below is retained as history; ADR 0055 supersedes it.
+
+### Phase 6.2 — the Model A gate as written before 6.2a (history)
 
 **Phase 6.2 implementation must not begin as a normal implementation phase.** It begins with:
 
