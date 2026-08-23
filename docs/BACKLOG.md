@@ -2629,7 +2629,80 @@ Rejecting would make every PostgreSQL sweep ill-formed — its connect carries a
 is also what keeps PostgreSQL's in-band handshake outside this rule: it is a grandchild of the
 connection, never a direct child.
 
-### Phase 6.1c — `DiagnoseKafka` application composition: NEXT
+### Phase 6.1c — `DiagnoseKafka` application composition: STOPPED by the ADR 0054 gate
+
+Composition was attempted and **declined**. `internal/diagnosis/kafka` owns only the two
+advertised-broker findings, and both anchor on `kafka.broker_advertised`. Nothing owns
+`kafka.api_versions` FAIL, `kafka.sasl_handshake` FAIL, `kafka.sasl_authenticate`
+FAIL/UNKNOWN/SKIPPED or `kafka.metadata` FAIL.
+
+`deriveSummary` sets `SummaryStatus` from findings alone, and `incompleteRun` returns true only
+for `StateUnknown` with `EXEC_LOCAL_TIMEOUT` or `EXEC_CANCELLED`. A composition today would
+therefore let a **rejected Kafka credential** arrive as `findings: []`, `status: OK`,
+`incomplete: false`, exit 0 — and would silence the fail-closed credential-transport refusal
+ADR 0029 exists to make loud.
+
+Owner before producer is normative, so **Phase 6.3 moves ahead of 6.1c**. The reordering is a
+correctness property, not a preference: "the Kafka CLI does not exist yet" is not a defence,
+because ADR 0054 is about production application reachability rather than user routing.
+
+### Phase 6.1c-P1 — Kafka required-authentication-input producer: COMPLETE
+
+The Kafka analogue of ADR 0046, and the first of the two prerequisites 6.1c uncovered.
+
+A broker that agreed to a mechanism svcdoctor can perform, on a run holding no credential,
+returned `ErrInvalidInput`/`ErrUnboundCredential` and recorded **no authentication node at
+all**. The graph was indistinguishable from one where the step never came up. It now records:
+
+```text
+kafka.sasl_authenticate   SKIPPED   EXEC_REQUIRED_INPUT_MISSING
+```
+
+with `SecretFor` = 0, `Reveal` = 0 and zero bytes written, proven at the socket rather than by
+a call count. No new `FailureClass`, no `FindingCode`, no schema change, no dependency.
+
+Four authentication outcomes are now distinct, and `TestFourAuthenticationOutcomesStayDistinct`
+holds them apart so no future change can collapse two into an umbrella class:
+
+| Condition | State | Class |
+| --- | --- | --- |
+| svcdoctor cannot perform the mechanism | `UNKNOWN` | `AUTH_MECHANISM_UNSUPPORTED` |
+| the run configured no credential | `SKIPPED` | `EXEC_REQUIRED_INPUT_MISSING` |
+| a credential existed and the policy withheld it | `SKIPPED` | `EXEC_SKIPPED_BY_POLICY` |
+| the broker evaluated a credential and refused it | `FAIL` | `AUTH_CREDENTIALS_REJECTED` |
+
+The order in `Authenticate` is the security contract and is pinned mechanically: mechanism
+guard → required input → channel policy → endpoint binding → `SecretFor` → `Reveal`. The
+mechanism guard wins over a missing credential, because supplying one would change nothing for
+an exchange svcdoctor cannot frame. A missing credential wins over the channel policy, because
+with nothing to present there is no credential for a policy to refuse.
+
+**This outcome has no diagnosis owner yet, and that is safe only because Kafka is not
+production-reachable.** `test/security/kafka_production_reachability_test.go` enforces exactly
+that: zero production importers of `internal/adapter/kafka`, and no `DiagnoseKafka` entry
+point. It is the ADR 0054 gate in executable form, and it must fail on the first composition
+commit.
+
+### Phase 6.1c-P2 — Kafka protocol diagnosis ownership: NEXT, and required before composition
+
+Formerly Phase 6.3. It must own every production-reachable Kafka outcome before `DiagnoseKafka`
+exists:
+
+- `kafka.api_versions` FAIL — `PROTOCOL_UNEXPECTED_RESPONSE`, `PROTOCOL_PEER_CLOSED`,
+  `PROTOCOL_MALFORMED_RESPONSE`, `PROTOCOL_UNSUPPORTED_VERSION`
+- `kafka.sasl_handshake` FAIL — including `AUTH_MECHANISM_NOT_OFFERED`
+- `kafka.sasl_authenticate` — all four outcomes in the table above
+- `kafka.metadata` FAIL
+
+A candidate for the missing-input owner is recorded so the decision is not re-derived:
+`KAFKA_CREDENTIAL_NOT_CONFIGURED`, CONFIRMED/WARN/HIGH, mirroring
+`POSTGRES_CREDENTIAL_NOT_CONFIGURED`. Its `vantageDependent` value is **open and must be
+reasoned about rather than copied**: PostgreSQL's `true` reflects `pg_hba.conf` varying by
+client address, while Kafka's authentication requirement varies by *listener*, which is a
+property of the endpoint dialled rather than of the vantage it was dialled from.
+
+`Result.Incomplete()` must not widen to cover it. A missing credential is a complete execution
+with an explicit run-side limitation, not a cancellation or a local timeout.
 
 ### Phase 6.2 — BLOCKED until 6.2a is Accepted
 

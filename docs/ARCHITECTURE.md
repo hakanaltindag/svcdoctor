@@ -821,6 +821,52 @@ declared classes with no producer gain no code, and an unrecognized class produc
 a default branch folding the unknown into the floor would grant a new producer a claim nobody
 reviewed.
 
+### 5.7c Four ways an authentication does not happen, and none of them is the others
+
+**Implemented for Kafka in Phase 6.1c-P1; the PostgreSQL half has held since Phase 4.11b
+(ADR 0046).**
+
+An authentication step that presents nothing has four distinct reasons for it, and each
+sends an operator somewhere different:
+
+| Condition | State | Class | What the operator does |
+| --- | --- | --- | --- |
+| svcdoctor cannot perform the negotiated mechanism | `UNKNOWN` | `AUTH_MECHANISM_UNSUPPORTED` | nothing — the gap is svcdoctor's |
+| the run configured no credential | `SKIPPED` | `EXEC_REQUIRED_INPUT_MISSING` | supply a credential |
+| a credential existed and the policy withheld it | `SKIPPED` | `EXEC_SKIPPED_BY_POLICY` | fix the channel, then retry |
+| the broker evaluated a credential and refused it | `FAIL` | `AUTH_CREDENTIALS_REJECTED` | fix the credential |
+
+They must never be collapsed into one class. The two `SKIPPED` rows are the pair most at
+risk, because both end with nothing sent, and they are the pair that matters most:
+`EXEC_SKIPPED_BY_POLICY` reads as *establish verified TLS and this will work*, which is
+false when the run holds nothing to present. Over a perfect channel it would still have
+nothing to offer.
+
+The ordering in the adapter is what keeps them apart, and it is the security contract:
+
+```text
+negotiated mechanism supported?          -> AUTH_MECHANISM_UNSUPPORTED
+  -> credential present?                 -> EXEC_REQUIRED_INPUT_MISSING
+  -> channel policy permits a credential? -> EXEC_SKIPPED_BY_POLICY
+  -> endpoint authorizes this credential? (SecretFor)
+  -> Reveal
+  -> credential-bearing wire output      -> AUTH_CREDENTIALS_REJECTED
+```
+
+**The mechanism guard outranks the missing credential**, because supplying one would change
+nothing for an exchange svcdoctor cannot frame; reporting a missing credential would send an
+operator to configure one for a mechanism that can never run. **The missing credential
+outranks the channel policy**, because with nothing to present the policy has no question to
+answer and there is no endpoint binding to check.
+
+Each of the first three records a node and returns normally. They are diagnostic outcomes,
+not invocation failures. A missing credential was an invocation error in Kafka until Phase
+6.1c-P1, which is precisely how a real diagnostic outcome stayed outside the report.
+
+None of the three carries credential-derived attributes — not a length, not an identity, not
+an "empty password" string. Each describes a secret that was never supplied, and a length is
+a genuine disclosure.
+
 ### 5.8 Kafka BASIC: decided in Phase 6.0, not implemented
 
 Five records fix Kafka's prerequisites before any composition root exists. Each is
