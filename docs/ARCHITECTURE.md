@@ -986,8 +986,27 @@ bounds, because the two wire packages bound peer payloads eight times apart. `Re
 wire packages and its production call-site count remains **exactly two**.
 
 Extraction is not purely extraction: Kafka reads the username from the SCRAM `n=` field, so
-RFC 5802 §5.1 `saslname` escaping is new, unvectored code. Phase 6.2 implementation waits on
-Phase 6.2a-R2 confirming Model D against a written API.
+RFC 5802 §5.1 `saslname` escaping is new, unvectored code.
+
+**Phase 6.2a-R2 made that contract exact (ADR 0056), and Phase 6.2 is authorized.** The core is
+`internal/sasl/scram`, a leaf importing nothing internal and exactly six standard-library
+packages. It exposes `Begin(Username) (*State, clientFirstBare, error)`,
+`(*State).Continue(serverFirst, Derive) (clientFinal, error)` and `(*State).Verify(serverFinal)
+error`. It generates the nonce itself — a caller-supplied nonce would put entropy authority in
+two wire packages. The derivation callback is called **exactly once**, after ten validation
+steps including the iteration ceiling and an encoded-salt bound checked *before* the base64
+decode, and never on any rejection path. State is minimized at each step: after `Continue` it
+holds a 32-byte expected server signature and nothing else.
+
+**SASLprep is refused for a correctness reason, not a convenience one.** PostgreSQL applies it
+on both sides; Apache Kafka does not (`KAFKA-6272`). The two services require **opposite**
+behaviour for non-ASCII credentials, so no shared implementation is correct for both. Over
+printable ASCII SASLprep is provably the identity, so svcdoctor restricts usernames and SCRAM
+passwords to U+0020–U+007E and is correct against both, with no Unicode dependency. SASLname
+escaping is core-owned, because it is pure RFC grammar.
+
+The gate transition is atomic: `TestNoSharedSCRAMPackageExists` is deleted in the *same* commit
+that introduces the package, the depguard allowlist and the positive guards — never before.
 
 ### 5.9 Kafka application composition: one journey, one credential, one selected socket
 
