@@ -752,6 +752,41 @@ forcing a process exit code. Whether a run that never reached a session should
 *look* clean in a terminal is a renderer question, and the record says so instead
 of answering it with severity.
 
+### 5.7a A mechanism svcdoctor cannot perform is decided before a credential is opened
+
+**Implemented for Kafka in Phase 6.1a; the same ordering has held in
+`internal/adapter/postgres` since Phase 4.4b.**
+
+An adapter decides whether it can perform the negotiated authentication mechanism
+**before** anything reasons about a credential:
+
+```text
+negotiated mechanism supported?
+  -> credential present?
+  -> channel policy permits a credential?
+  -> endpoint authorizes this credential?   (SecretFor)
+  -> Reveal
+  -> credential-bearing wire output
+```
+
+Each step is a precondition for the next, and the first one is not negotiable. Kafka's
+SASL mechanisms differ in message *framing*, not only in cryptography, so handing a
+session that agreed to SCRAM to a PLAIN exchange writes the identity and password as
+RFC 4616's three NUL-separated fields to a peer that never agreed to receive them. The
+secret is on the wire whether or not the peer can parse it. Phase 6.1a reproduced exactly
+that before closing it.
+
+**The mechanism gap outranks the channel-policy refusal.** Both decline to send a
+credential, and they read differently: a policy refusal says *establish verified TLS and
+this will work*, which is false when the mechanism cannot be performed at all. Reporting
+the channel would send an operator to fix TLS and change nothing.
+
+The outcome is `UNKNOWN` + a capability class — `AUTH_MECHANISM_UNSUPPORTED` — never
+`FAIL`, and never `AUTH_MECHANISM_NOT_OFFERED`, which is the opposite direction and
+belongs to the handshake step. §12 states the general rule: an unsupported capability is a
+gap in svcdoctor, not a defect in the target. The node carries no blocker edge, because
+nothing in the graph obstructed the step.
+
 ### 5.8 Kafka BASIC: decided in Phase 6.0, not implemented
 
 Five records fix Kafka's prerequisites before any composition root exists. Each is

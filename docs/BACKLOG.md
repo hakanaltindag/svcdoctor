@@ -2550,8 +2550,8 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 | **6.5** | Kafka BASIC closure | Includes the ADR 0054 §5 closure test |
 | **6.6** | Kafka release validation | |
 
-- [ ] **6.1a** mechanism guard: UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`, zero `SecretFor`,
-      zero `Reveal`, zero bytes written, proven by test
+- [x] **6.1a** mechanism guard: UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`, zero `SecretFor`,
+      zero `Reveal`, zero bytes written, proven by test — **COMPLETE**
 - [ ] **6.1b** generic requested-target TLS rule and its five codes (24 → 29)
 - [ ] **6.1c** `DiagnoseKafka`, requested-target anchor, ADR 0051 completeness predicate
 - [ ] **6.2** SCRAM extraction security review, then extraction and Kafka SCRAM-SHA-256
@@ -2559,6 +2559,71 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 - [ ] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka`
 - [ ] **6.5** Kafka BASIC closure gate, including the per-service ownership closure test
 - [ ] **6.6** Kafka release validation against the real cluster
+
+### Phase 6.1a — Kafka authentication mechanism guard (complete)
+
+`kafka.Authenticate` inspected `HandshakeSession.Mechanism()` nowhere and called
+`wire.ExchangePLAIN` unconditionally. A session that negotiated SCRAM-SHA-256 therefore
+received RFC 4616 PLAIN framing — `authzid NUL authcid NUL passwd` — carrying the real
+identity and password, to a peer that had agreed to a different mechanism and would never
+parse them as PLAIN. **The defect was reproduced against the fixture broker before the fix:
+one SaslAuthenticate payload, three NUL-separated fields, containing the secret.**
+
+- [x] `wire.MechanismPLAIN`, the one mechanism this adapter can perform
+- [x] `supportedMechanism` — an exact-match whitelist of exactly that one, with no folding,
+      no fallback and no retry
+- [x] The guard runs **first**: before the credential check, before the channel policy,
+      before the endpoint binding, before `SecretFor`, before `Reveal`, before any wire write
+- [x] Unsupported → `UNKNOWN` + `AUTH_MECHANISM_UNSUPPORTED`, a truthful
+      `kafka.sasl_authenticate` node parented to the handshake, mechanism attribute only,
+      zero duration, **no blocker edge** — nothing in the graph obstructed it
+- [x] Zero-access proofs: `SecretFor` unreachable (a credential bound elsewhere would error
+      and does not), zero credential payloads, and **zero bytes written** on a plaintext path
+
+**Ordering changed deliberately, and it is a behaviour change in one combination.** The
+mechanism gap now outranks the channel-policy refusal. Previously an unsupported mechanism on
+an unverified channel reported `SKIPPED` + `EXEC_SKIPPED_BY_POLICY`, which reads as *establish
+verified TLS and this will work* — false when svcdoctor cannot perform the mechanism at all.
+This matches `internal/adapter/postgres`, whose `admissibleMechanism` precedes its transport
+policy for the same reason (`docs/ARCHITECTURE.md` §5.7).
+
+**Two gaps recorded rather than closed here:**
+
+- **Kafka has no missing-input producer.** A zero credential is still `ErrUnboundCredential`, a
+  caller error, where PostgreSQL records `EXEC_REQUIRED_INPUT_MISSING` evidence (ADR 0046).
+  Kafka has no "no credential configured" path at all. **Phase 6.1c/6.3.**
+- **`AUTH_MECHANISM_UNSUPPORTED` has no diagnosis owner.** ADR 0054 permits this only while the
+  outcome is not product-reachable, and it is not: `internal/adapter/kafka` still has zero
+  production importers, no `DiagnoseKafka`, no CLI. **Ownership must land no later than Phase
+  6.3, before Kafka becomes product-reachable, and the Phase 6.5 closure gate must verify it
+  mechanically.**
+
+### Phase 6.1b — generic requested-target TLS diagnosis: NEXT
+
+Implements ADR 0053. It must land before 6.1c, so the owner exists before composition makes
+the producer reachable.
+
+### Phase 6.2 — BLOCKED until 6.2a is Accepted
+
+**Phase 6.2 implementation must not begin as a normal implementation phase.** It begins with:
+
+> **Phase 6.2a — shared SCRAM core security review**
+
+which must be Accepted first. Extraction moves revealed plaintext across a package boundary
+for the first time, and that is the one place in the Kafka plan where a security boundary is
+*relaxed* rather than tightened.
+
+The review must re-open Model A and settle: `string` vs `[]byte`; plaintext copies and escape
+analysis where useful; Go's zeroization limits; accidental `fmt`/error formatting; panic paths;
+the depguard rule for the shared package; RFC 5802 test vectors; nonce injection and test
+seams; PostgreSQL regression risk; Kafka framing separation; the `Reveal` count; whether any
+sensitive intermediate material is returned; whether SCRAM-SHA-512 belongs now or stays
+deferred; and whether a smaller package boundary is safer.
+
+Constraints already fixed (`docs/ARCHITECTURE.md` §5.8): the shared core must not import
+`internal/security` or `net`, must not call `security.Reveal`, perform I/O, log plaintext, put
+plaintext in errors or retain connection state; plaintext enters only as a short-lived
+argument; `Reveal` stays in wire packages and its call-site count is unchanged by extraction.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
