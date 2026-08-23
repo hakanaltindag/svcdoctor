@@ -2597,8 +2597,10 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
       one credential-bearing Kafka auth attempt, SCRAM byte-identical. ADR 0058 §14's three
       gaps were measured, found to be one coupled defect, and deferred to 6.8. See
       "Phase 6.7" below
-- [ ] **6.8** Kafka release validation against the real cluster *(this was Phase 6.6 until the
-      TLS policy review took that number in Phase 6.6; the content is unchanged)*
+- [x] **6.8** Kafka release validation against the real cluster — **complete.** 6.8A closed the
+      three ADR 0058 §14 TLS gaps (ADR 0060), 6.8B re-validated both services through a
+      release-shaped binary against the real fixtures, 6.8C produced the first non-Apache Kafka
+      evidence, 6.8D the compatibility matrix. Recommended next version **v0.2.0**; not tagged
 
 ### Phase 6.1a — Kafka authentication mechanism guard (complete)
 
@@ -3507,42 +3509,40 @@ ADR 0059's Context along with the two it found alongside it: a non-canonical IPv
 producing two endpoints in one report, and a zone identifier silently dropped so that
 svcdoctor named one endpoint and measured another.
 
-### The three ADR 0058 §14 gaps — one coupled defect, deferred to 6.8
+### The three ADR 0058 §14 gaps — CLOSED by ADR 0060 (Phase 6.8A)
 
-Phase 6.7 was asked to decide whether the insecure-mode terminal gap had to be fixed as an
-IP/TLS truthfulness prerequisite. It was measured, and the three are **one defect with one fix
-order** rather than three independent items:
+**Settled.** Phase 6.7 measured the three and found them to be **one coupled defect with one
+fix order**. Phase 6.8A reproduced all three against a release-shaped binary before changing
+anything, then closed them in that order in one change-set.
 
-1. **PostgreSQL accepts `--tls-insecure` alongside `--tls disable`**, where Kafka refuses the
-   pair with a usage error. This is the cause.
+- [x] **PostgreSQL accepted `--tls-ca-file`, `--tls-server-name` and `--tls-insecure` alongside
+      `--tls disable`**, where Kafka refused all three. Now refused by both, from one shared
+      `refuseInertTLSFlags`. This is a **released-CLI tightening**: three previously-accepted
+      invocations now exit 2. The compatibility packet is ADR 0060 §5, and `--tls disable` on
+      its own is unchanged.
+- [x] **A plaintext PostgreSQL run reported `tlsVerificationDisabled: true`.** Now gated on the
+      run's TLS *plan* in both composition roots, and guarded at `internal/app` rather than only
+      at the CLI, because the CLI refusal makes the combination unreachable from the command
+      line and a test there would pass for the wrong reason.
+- [x] **The terminal never said verification was disabled.** It now says so twice: a header line
+      for the run, read from `security.tlsVerificationDisabled`, and a note on each affected
+      handshake row, read from that node's own `tls.verified`. Two readings on purpose, so a
+      renderer inventing either from the other fails a test. **Not a finding** — the operator
+      asked for it, and the status and exit code are unchanged.
 
-   ```text
-   $ svcdoctor diagnose postgres --host 127.0.0.1 --port 1 --user u --database d \
-       --tls disable --tls-insecure          → accepted, exit 1
-   $ svcdoctor diagnose kafka --host 127.0.0.1 --port 1 --sasl-mechanism PLAIN \
-       --tls disable --tls-insecure          → "--tls-insecure has no effect with --tls disable"
-   ```
+The tripwires `TestPostgresStillAcceptsInertTLSFlags` and `TestKafkaStillRefusesInertTLSFlags`
+existed so this could not drift without a decision. The decision was taken, so both were
+removed and `internal/cli/tls_test.go` pins the contract they were guarding.
 
-2. **So a plaintext PostgreSQL run reports `tlsVerificationDisabled: true`** — a TLS fact about
-   a run that established no TLS. Measured, still reproducible.
+`SchemaVersion` stays **1**. The three verification states stay distinguishable across two
+existing fields — `security.tlsVerificationDisabled` and the presence and `tls.verified` of a
+handshake node — so no schema change was needed and none was made. No `FindingCode`,
+`FailureClass`, flag or dependency was added.
 
-3. **So the terminal cannot yet safely surface that fact** beside a `TLS PASS` row. Adding the
-   row today would print a TLS security warning on plaintext runs, making gap 2 visible to
-   every operator — worse than the gap it fixes.
-
-**Disposition: all three deferred to 6.8, as one item, in that order.** Fixing gap 1 is a
-released-CLI behaviour change on a path with nothing to do with address literals, and Phase
-6.7's own stop conditions forbid making it there. Phase 6.7 touched none of this code.
-
-All three are pinned by test exactly as they stand — `TestPostgresStillAcceptsInertTLSFlags`
-and `TestKafkaStillRefusesInertTLSFlags` — so none can drift without a decision, and each fails
-with a message saying so rather than inviting a test update.
-
-**Reopen condition:** 6.8, before release validation. Fix in the order above.
-
-The mitigation that *is* shipped: an operator hitting an address whose certificate carries a
-name does not need `--tls-insecure`. `--tls-server-name` names the identity explicitly and
-keeps verification on, and both `--help` and the README now say so.
+**One guard gap was found and closed**, by the mutation that shortened `--tls-insecure`'s help
+entry to `skip TLS verification`: true, insufficient, and invisible to every test. The
+capability-claim audit in `internal/cli/docsclaims_test.go` now covers the entry's content for
+both services, in the same spirit as the managed-provider guard beside it.
 
 ### TLS Trust & Identity Policy Review — CLOSED by ADR 0058 (Phase 6.6)
 
@@ -3590,22 +3590,55 @@ CA appending to the system store passed the whole suite, and so did a transport 
 ignored `--tls-server-name` outright. A third file pins Go's IP-SAN and CN behaviour, so
 Phase 6.7 inherits a measured contract rather than a remembered one.
 
-### Managed-service protocol compatibility
+### Managed-service protocol compatibility — FIRST EVIDENCE TAKEN in Phase 6.8C/6.8D
 
-Later, and about **protocol** compatibility — not about adding cloud-provider SDK authority.
-Kafka SCRAM against Apache Kafka alone proves less than it appears to.
+The full matrix, with its evidence level per platform, is **`docs/COMPATIBILITY.md`**. It grades
+by what was actually done rather than by what the vendor documents, and a guard in
+`internal/cli/docsclaims_test.go` fails the build if a row claims a tested level for a platform
+nobody ran against.
 
-- [ ] Kafka: Apache Kafka, Redpanda self-hosted, Redpanda Cloud, Confluent Cloud,
-      AWS MSK SCRAM, AWS MSK IAM, Azure Event Hubs' Kafka API
-- [ ] PostgreSQL: AWS RDS, Aurora PostgreSQL, Cloud SQL PostgreSQL, Azure Database for
-      PostgreSQL
+- [x] **Redpanda self-hosted** — Level 2, TESTED BASIC. `PLAIN` over TLS completes the whole
+      journey against a real v25.1.9 instance. See below for the one thing that does not.
+- [x] **Apache Kafka**, **PostgreSQL self-hosted** — Level 3, and already were
+- [ ] Redpanda Cloud, Confluent Cloud, Azure Event Hubs' Kafka API — Level 1, documentation
+      only. Each is protocol-plausible and **none has been run against**
+- [ ] AWS RDS, Aurora, Cloud SQL, Azure Database for PostgreSQL — Level 1, documentation only.
+      All four are ordinary PostgreSQL wire with a provider CA; Azure's roots are public and
+      may need no `--tls-ca-file` at all
+- [x] **AWS MSK SASL/SCRAM** — resolved and **negative**: MSK is `SCRAM-SHA-512` only, which
+      svcdoctor does not implement. Not a validation gap, a mechanism gap
+- [x] **AWS MSK IAM** — resolved and negative: needs `AWS_MSK_IAM` and AWS request signing
 
-Redpanda is the most valuable single addition, because it tests the Kafka protocol against a
-non-Apache implementation rather than against the same codebase the fixture already runs.
+Redpanda was indeed the most valuable single addition, and for the reason predicted: it tested
+the protocol against a non-Apache implementation and immediately found something the Apache
+fixture never could.
+
+#### Kafka SCRAM-SHA-256 fails against Redpanda — salt bound, deferred with a proven fix
+
+**Redpanda issues a 130-byte SCRAM salt. `internal/sasl/scram` bounds a salt at 128 bytes.**
+The server-first message is refused as malformed, `kafka.sasl_authenticate` fails with
+`PROTOCOL_MALFORMED_RESPONSE`, and svcdoctor correctly declines to say the credential was
+rejected. Measured five times; the size is fixed, not sampling noise.
+
+Causality was **proven, not inferred**: raising the bound locally made the entire journey pass —
+authentication, Metadata, advertised topology — and the change was then reverted and the SCRAM
+freeze re-verified byte-for-byte.
+
+**Not fixed in 6.8, deliberately.** Phase 6.8's stop conditions list *"SCRAM must change"* as a
+STOP and the phase froze the shared core at entry. Both were right: `maxSaltLen` is a security
+bound with a recorded rationale (ADR 0056 §7), and its stated justification — *"128 is eight
+times the largest value in common use"* — is now known to be **factually wrong**, since RFC 5802
+and RFC 7677 set no maximum and a mainstream implementation exceeds it.
+
+**Reopen condition:** a phase that owns the shared SCRAM core, with its own security review. It
+must decide what the bound protects against, what headroom covers implementations nobody has
+measured, and whether the answer is a larger constant or a bound derived from the framing limit.
+That is an ADR 0056 amendment.
+
+- [ ] raise the SCRAM salt bound under security review, then re-measure Redpanda SCRAM-SHA-256
+- [ ] a committed `test/integration/redpanda/` fixture — the remaining requirement for Level 3
+
 AWS MSK IAM stays detect-and-explain only unless scope changes explicitly.
-
-**Not Phase 6.2.** Phase 6.2 is the shared core plus Kafka SCRAM-SHA-256 against the existing
-fixture cluster, and nothing else.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 

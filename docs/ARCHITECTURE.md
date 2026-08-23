@@ -1704,6 +1704,15 @@ v0.1 uses typed Go rules. Do not add an external DSL. Rules must be deterministi
   the `integration` build tag, so `go test ./...` never needs Docker. It is the Phase 3
   acceptance gate; results are recorded in `docs/validation/KAFKA_PHASE3_VALIDATION.md`.
 
+**Compatibility with implementations the fixtures do not run** is a separate claim with a
+separate document, `docs/COMPATIBILITY.md`. It grades each platform by the evidence that
+produced the row — a real run against a real instance, or a reading of the vendor's
+documentation — because those are different claims and a table that merges them is worse than
+no table. `internal/cli/docsclaims_test.go` fails the build if a row claims a tested level for
+a platform nobody ran against, and if the README or the release notes describe an
+unimplemented mechanism as supported. The first such evidence is Phase 6.8C's, in
+`docs/validation/KAFKA_PHASE68_REDPANDA_STUDY.md`.
+
 ## 18. Open implementation decisions
 
 These are deliberately left open. Implementation should reveal the minimum natural boundary
@@ -1713,6 +1722,13 @@ rather than a boundary chosen in advance.
 shared normalized attribute vocabulary. Where those key definitions live is not decided. Any
 chosen location must not create a forbidden dependency direction (section 14). Kafka
 demonstrates the real boundary first; PostgreSQL later validates whether the pattern is stable.
+
+*Partially settled, by use rather than by decree.* `internal/vocabulary` holds the
+service-neutral keys, on one trigger: a key moves there when something outside the package that
+produces it genuinely reads it, and not before. Phase 6.8A is the first time that fired —
+`tls.verified` moved because `internal/render/terminal` had to read it and depguard denies a
+renderer the probe import. Every other generic transport key still has exactly one reader and
+stays where it is produced. The service-specific half remains open.
 
 **Contract-package placement.** Final package ownership for the Adapter contract, the
 registry, the probe chain contract, the diagnosis `Rule` contract, and CLI orchestration is

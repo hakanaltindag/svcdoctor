@@ -465,11 +465,41 @@ unverified, and the credential-transport policy refuses to present a password ov
 unverified channel. Such a run reports `POSTGRES_CREDENTIAL_WITHHELD` or
 `KAFKA_CREDENTIAL_WITHHELD` and sends nothing.
 
-> **Read the JSON to see that verification was disabled.** The canonical report records it as
-> `security.tlsVerificationDisabled` and marks each handshake `tls.verified: false`. **The
-> terminal output does not yet say so** — it shows `✓ PASS TLS` for a handshake whose peer was
-> never identified. That gap is recorded in [ADR 0058](docs/decisions/0058-tls-trust-and-peer-identity-authority.md)
-> §14.1 and is scheduled for the next phase.
+**What such a handshake proves, exactly:** the channel is encrypted. Nothing else. No chain was
+validated, no name or address was matched against the certificate, and nothing established who
+answered. An unverified TLS connection is not an authenticated one.
+
+**Both outputs say so.** The canonical report records
+`security.tlsVerificationDisabled: true` and marks each handshake `tls.verified: false`. The
+terminal states it under the run banner and again on every affected handshake row:
+
+```text
+svcdoctor · kafka · kafka.internal:9093
+Peer verification disabled · TLS proves the channel is encrypted, not who answered
+
+  Path 198.51.100.10:9093 · continued
+    ✓ PASS  TCP                         190µs
+    ✓ PASS  TLS                         1.7ms  peer verification disabled
+```
+
+It is **not** a finding and not a target-side problem: the operator asked for it, the endpoint
+did nothing wrong, and the status and exit code are unchanged. See
+[ADR 0060](docs/decisions/0060-tls-option-validity-and-verification-state-projection.md).
+
+### TLS-only flags require TLS
+
+`--tls-ca-file`, `--tls-server-name` and `--tls-insecure` all describe a handshake. Under
+`--tls disable` there is none, so all three are **refused** with exit 2 rather than accepted
+and ignored:
+
+```console
+$ svcdoctor diagnose postgres --host db.internal --user app --tls disable --tls-insecure
+svcdoctor: invalid invocation: --tls-insecure has no effect with --tls disable
+```
+
+Both services behave identically. Before v0.2.0 PostgreSQL accepted these combinations and
+ignored them; see [ADR 0060](docs/decisions/0060-tls-option-validity-and-verification-state-projection.md)
+§5 for the compatibility impact. `--tls disable` on its own is unchanged.
 
 ## Output modes
 
@@ -606,6 +636,25 @@ MySQL/MariaDB, Elasticsearch/OpenSearch.
 Out of scope for v0.1 entirely: host mode, eBPF, MCP server, PDF generation, tuning advisor,
 long-term monitoring, LLM-based core diagnosis, and generic rule scripting DSLs.
 
+## Compatibility
+
+**svcdoctor is validated against Apache Kafka and PostgreSQL.** Those are the two it has been
+run against, repeatedly, from committed fixtures.
+
+Other Kafka-protocol and PostgreSQL-protocol implementations are a separate question with a
+separate answer, and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) is where it is kept. That
+document grades every platform by what was actually done to it — whether svcdoctor ran against
+a real instance, or whether only the vendor's documentation was read — because those are not
+the same claim and reading a table that conflates them is worse than having no table.
+
+**No managed service has been validated.** None was contacted, and no cloud credential was used
+at any point.
+
+The one thing worth stating here, because it is a limit rather than an absence: svcdoctor
+performs `PLAIN` and `SCRAM-SHA-256` and nothing else. A platform that requires
+`SCRAM-SHA-512`, `OAUTHBEARER`, `GSSAPI`, `AWS_MSK_IAM` or mTLS is not usable with svcdoctor
+today, however standard that mechanism is.
+
 ## How it fits together
 
 ```text
@@ -677,18 +726,17 @@ cross-package and environment-dependent tests.
 ## Roadmap
 
 PostgreSQL-only v0.1.0 is tagged. Kafka BASIC is implemented, exposed and closed on `main`,
-pending release validation.
+and release-validated against real Apache Kafka and PostgreSQL.
 
 Next, in no committed order:
 
-- Kafka BASIC release validation
-- the three gaps ADR 0058 recorded, which Phase 6.7 measured and found to be one coupled
-  defect: PostgreSQL accepts TLS flags that its own `--tls disable` makes inert, so a
-  plaintext run can report `tlsVerificationDisabled: true`, so the terminal cannot yet safely
-  surface that fact beside a `TLS PASS` row
-- client certificates / mTLS, whose credential authority ADR 0058 deliberately left open
-- managed-service protocol compatibility: Redpanda, Confluent Cloud, AWS MSK, Azure Event
-  Hubs' Kafka API; RDS, Aurora, Cloud SQL, Azure Database for PostgreSQL
+- raising the shared SCRAM salt bound, under its own security review — it is what blocks
+  `SCRAM-SHA-256` against Redpanda, and the reason is measured rather than guessed
+- client certificates / mTLS — not implemented, and its credential authority is a question
+  ADR 0058 deliberately left open rather than one the trust policy already answered
+- managed-service protocol compatibility: Redpanda Cloud, Confluent Cloud, AWS MSK, Azure Event
+  Hubs' Kafka API; RDS, Aurora, Cloud SQL, Azure Database for PostgreSQL — none validated,
+  see the compatibility document
 - Markdown and HTML renderers, derived from the canonical report
 - the `inspect` namespace, once its output contract is decided
 - PostgreSQL DEEP
