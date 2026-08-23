@@ -600,6 +600,12 @@ Two leaf commands, `svcdoctor diagnose postgres` and `svcdoctor diagnose kafka`,
 JSON output, file and stdin credential input, shareable redaction, and the exit-code contract
 above.
 
+**Redpanda self-hosted v25.1.9 is tested** as well, `PLAIN` and `SCRAM-SHA-256`, by a committed
+fixture with its own `make` target. That evidence is about **v25.1.9 specifically** and says
+nothing about Redpanda Cloud or any other version — Redpanda's SCRAM salt size is a
+compile-time constant in its source, so another version is another measurement. See
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for what each evidence level means.
+
 BASIC is bounded on purpose: it learns what svcdoctor can observe while acting as the client
 for this run. Inspecting a server's operational state is a separate future body of work
 (PostgreSQL DEEP) and is not part of v0.1.
@@ -711,12 +717,19 @@ make check                 # fmt-check, test, vet, lint, build — mirrors CI
 make fmt                   # format sources in place
 make help                  # list targets
 
-make integration-postgres  # full PostgreSQL validation against a real server (needs Docker)
+make integration-postgres  # PostgreSQL 18, real server          (needs Docker)
+make integration-kafka     # Apache Kafka 4.0.0, 3-broker KRaft   (needs Docker)
+make integration-redpanda  # Redpanda v25.1.9, real broker        (needs Docker)
 ```
 
-`make check` is fast and hermetic. The integration gate is deliberately excluded from it
-because it requires Docker; it starts a real PostgreSQL 18 server, runs the suite against it
-and tears it down. See [`test/integration/postgres/README.md`](test/integration/postgres/README.md).
+`make check` is fast and hermetic. The integration gates are deliberately excluded from it
+because they require Docker; each starts a real server, runs its suite against it and tears it
+down. **Run them one at a time** — the Kafka and Redpanda clusters compete for cores, and a
+Kafka run under that contention once failed in a way that did not reproduce alone.
+
+See [`test/integration/postgres/README.md`](test/integration/postgres/README.md),
+[`test/integration/kafka/README.md`](test/integration/kafka/README.md) and
+[`test/integration/redpanda/README.md`](test/integration/redpanda/README.md).
 
 Linting uses [golangci-lint](https://golangci-lint.run) `v2.13.1` (v2 config format).
 
@@ -725,13 +738,12 @@ cross-package and environment-dependent tests.
 
 ## Roadmap
 
-PostgreSQL-only v0.1.0 is tagged. Kafka BASIC is implemented, exposed and closed on `main`,
-and release-validated against real Apache Kafka and PostgreSQL.
+PostgreSQL-only v0.1.0 is tagged, and v0.2.0 added Kafka BASIC. Both are release-validated
+against real Apache Kafka 4.0.0 and PostgreSQL 18.
+
 
 Next, in no committed order:
 
-- raising the shared SCRAM salt bound, under its own security review — it is what blocks
-  `SCRAM-SHA-256` against Redpanda, and the reason is measured rather than guessed
 - client certificates / mTLS — not implemented, and its credential authority is a question
   ADR 0058 deliberately left open rather than one the trust policy already answered
 - managed-service protocol compatibility: Redpanda Cloud, Confluent Cloud, AWS MSK, Azure Event

@@ -47,8 +47,8 @@ A platform supporting a mechanism svcdoctor does not implement makes that platfo
 | Platform | Wire | TLS | Auth overlap | Real tested | Level | Known gaps |
 |---|---|---|---|---|---|---|
 | **Apache Kafka** 4.0.0 | Kafka | verified TLS, custom CA, IP SAN | **`PLAIN` ✓, `SCRAM-SHA-256` ✓** | **YES** — 3-broker KRaft fixture | **3 — SUPPORTED BASIC** | none |
-| **Redpanda self-hosted** v25.1.9 | Kafka (clients 0.11+) | verified TLS, custom CA, IP SAN | `PLAIN` ✓ · **`SCRAM-SHA-256` ✗** | **YES** — real instance | **2 — TESTED BASIC** | **SCRAM-SHA-256 fails**: Redpanda's 130-byte salt exceeds svcdoctor's 128-byte bound. Root cause measured, fix proven, deferred — see below |
-| **Redpanda Cloud** | Kafka | TLS 1.2 mandatory | `SCRAM-SHA-256` ✓ per docs | **NO** | **1 — PROTOCOL-PLAUSIBLE** | `DOCUMENTATION ONLY`. Self-hosted evidence does **not** transfer; the SCRAM salt finding above may or may not apply |
+| **Redpanda self-hosted** v25.1.9 | Kafka (clients 0.11+) | verified TLS, custom CA, IP SAN | **`PLAIN` ✓, `SCRAM-SHA-256` ✓** | **YES** — committed `test/integration/redpanda` fixture | **3 — SUPPORTED BASIC** | Tested at **v25.1.9 only**. Its 130-byte SCRAM salt needed svcdoctor's defensive bounds re-derived (ADR 0061) — see below |
+| **Redpanda Cloud** | Kafka | TLS 1.2 mandatory | `SCRAM-SHA-256` ✓ per docs | **NO** | **1 — PROTOCOL-PLAUSIBLE** | `DOCUMENTATION ONLY`. Self-hosted evidence does **not** transfer, and the self-hosted row moving to Level 3 does not move this one |
 | **Confluent Cloud** | Kafka | TLS 1.2 mandatory, public CA | **`PLAIN` ✓** — API key = username, API secret = password | **NO** | **1 — PROTOCOL-PLAUSIBLE** | `DOCUMENTATION ONLY`. The credential shape fits `--user` + `--password-file` with no parsing; verified against svcdoctor's input model only, not against the service |
 | **AWS MSK — SASL/SCRAM** | Kafka | `SASL_SSL`, provider CA bundle | **✗ — `SCRAM-SHA-512` only** | **NO** | **0 — NOT EVALUATED** | `UNSUPPORTED BY CURRENT AUTH`. MSK documents `sasl.mechanism=SCRAM-SHA-512`; svcdoctor implements SHA-256 and does not fall back |
 | **AWS MSK — IAM** | Kafka | `SASL_SSL` | **✗ — `AWS_MSK_IAM` not implemented** | **NO** | **0 — NOT EVALUATED** | `UNSUPPORTED BY CURRENT AUTH`. Would need AWS SigV4 request signing and a cloud credential chain |
@@ -56,18 +56,29 @@ A platform supporting a mechanism svcdoctor does not implement makes that platfo
 
 ### Redpanda self-hosted, in detail
 
-The complete BASIC journey succeeds over **`PLAIN` on a TLS listener** — DNS, TCP, TLS,
-ApiVersions, SaslHandshake, SaslAuthenticate, Metadata, advertised-endpoint sweep, terminal,
-canonical JSON, shareable redaction — for hostname, IPv4-literal and IPv6-literal targets. The
-evidence graph is structurally identical to Apache Kafka's.
+The complete BASIC journey succeeds over **both `PLAIN` and `SCRAM-SHA-256` on a TLS
+listener** — DNS, TCP, TLS, ApiVersions, SaslHandshake, SaslAuthenticate, Metadata,
+advertised-endpoint sweep, terminal, canonical JSON, shareable redaction. The evidence graph is
+structurally identical to Apache Kafka's, and `app.DiagnoseKafka` is the only composition the
+fixture calls — **no production source names Redpanda**, which the suite itself asserts.
 
-**`SCRAM-SHA-256` does not work**, and the reason is svcdoctor's, not Redpanda's: Redpanda
-issues a **130-byte SCRAM salt** and `internal/sasl/scram` bounds a salt at **128 bytes**, so
-the server-first message is refused as malformed. Raising the bound was proven to fix it
-completely and was **deliberately not done** — the bound is a security parameter recorded in
-ADR 0056 §7, and changing one to accommodate a vendor inside a compatibility phase is the
-failure mode that phase exists to prevent. Full measurements:
+**`SCRAM-SHA-256` did not work until Phase 7.0b, and the reason was svcdoctor's.** Redpanda
+issues a **130-byte SCRAM salt** — hardcoded as `SaltSize` in its own source — encoding to
+**176 base64 characters**, and `internal/sasl/scram` bounded the *encoded* form at 172, so the
+server-first was refused before it was decoded and reported as a malformed broker response. It
+was legal RFC 5802 throughout.
+
+ADR 0061 re-derived every defensive bound from measured resource cost rather than from how
+common a value looked, and corrected the classification so a refusal svcdoctor makes is no
+longer reported as a defect in the peer. Full measurements:
+[`docs/validation/SCRAM_PHASE70_BOUNDS_STUDY.md`](validation/SCRAM_PHASE70_BOUNDS_STUDY.md) and
 [`docs/validation/KAFKA_PHASE68_REDPANDA_STUDY.md`](validation/KAFKA_PHASE68_REDPANDA_STUDY.md).
+
+**What Level 3 does and does not say here.** `make integration-redpanda` runs the whole journey
+against a pinned `redpandadata/redpanda:v25.1.9` and is reproducible from a clean checkout. It
+is evidence about **that version**: Redpanda's salt size is a compile-time constant in its
+source, so another version is another measurement. Nothing here is a claim about Redpanda
+Cloud.
 
 ### Azure Event Hubs — the credential shape is *not* the blocker
 
