@@ -5,23 +5,32 @@ services. You point it at a service endpoint, it attempts the journey a real cli
 and it reports what it measured at every stage — and, just as deliberately, what it did not
 learn.
 
-**PostgreSQL is supported today.** No APM, OpenTelemetry collector, sidecar or agent is
-required for a diagnostic run.
+**PostgreSQL BASIC and Kafka BASIC are supported today.** No APM, OpenTelemetry collector,
+sidecar or agent is required for a diagnostic run.
 
 ## What it does
 
-For PostgreSQL, svcdoctor behaves as the client you describe and walks the same path:
+svcdoctor behaves as the client you describe and walks the same path:
 
 ```text
-requested target → DNS → TCP → SSLRequest → TLS → Startup → Authentication → Session
+postgres   requested target → DNS → TCP → SSLRequest → TLS → Startup → Authentication → Session
+kafka      requested target → DNS → TCP → TLS → ApiVersions → SASL negotiation → Authentication → Metadata
+                                                                                   └→ per advertised broker: DNS → TCP → TLS
 ```
+
+For Kafka it then measures DNS, TCP and TLS for every broker endpoint the cluster advertised —
+**credential-free**. A discovered broker is an endpoint you never named, learned from
+peer-supplied data, so it receives transport probing and nothing else.
 
 At the end you get:
 
 - what was measured, stage by stage, and where the journey stopped;
 - the elapsed duration of each attempted stage;
 - findings, each one linked to the exact evidence that produced it;
-- whether a PostgreSQL session was actually established;
+- whether the service's terminal exchange succeeded — a PostgreSQL session, or Kafka
+  metadata obtained;
+- for Kafka, how many advertised broker endpoints were reached and how many were never
+  measured;
 - whether svcdoctor's own execution completed.
 
 The design goal is a report that separates **what was measured** from **what can honestly be
@@ -57,11 +66,15 @@ svcdoctor --help
 svcdoctor --version
 svcdoctor diagnose --help
 svcdoctor diagnose postgres --help
+svcdoctor diagnose kafka --help
 ```
 
 ## Flags
 
-`svcdoctor diagnose postgres` is the only leaf command in v0.1.
+Two leaf commands: `svcdoctor diagnose postgres` and `svcdoctor diagnose kafka`. Each owns its
+own flag set, help text and validation.
+
+### `diagnose postgres`
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -74,8 +87,31 @@ svcdoctor diagnose postgres --help
 | `--output text\|json` | `text` | output form — see [Output modes](#output-modes) |
 | `--shareable` | off | emit the redacted projection — see [Shareable reports](#shareable-reports) |
 
+### `diagnose kafka`
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--host <host>` | *required* | the bootstrap endpoint to diagnose |
+| `--sasl-mechanism <name>` | *required* | the SASL mechanism to propose, uppercase |
+| `--user <principal>` | *empty* | the principal to authenticate as; required with a credential source and refused without one |
+| `--port <uint>` | `9092` | the port to connect to |
+| `--timeout <duration>` | `30s` | bound on the whole run |
+| `--step-timeout <duration>` | `10s` | bound on each individual exchange |
+| `--output text\|json` | `text` | output form — see [Output modes](#output-modes) |
+| `--shareable` | off | emit the redacted projection — see [Shareable reports](#shareable-reports) |
+
+**svcdoctor can perform `PLAIN` and `SCRAM-SHA-256`, and no other Kafka SASL mechanism.**
+Naming any other registered mechanism is allowed and useful: svcdoctor proposes it, records
+what the broker answered, and reports that it cannot perform it — sending no credential and no
+byte derived from one. `SCRAM-SHA-512`, `SCRAM-SHA-256-PLUS`, `OAUTHBEARER`, `GSSAPI`,
+`AWS_MSK_IAM` and mTLS client-certificate authentication are **not** implemented.
+
+`--sasl-mechanism` has no default and svcdoctor never picks one. A default would be a silent
+decision about the framing that carries your password. There is no fallback in either
+direction and no retry: one mechanism, one credential-bearing attempt (ADR 0057).
+
 TLS flags are described under [TLS](#tls), and credential flags under
-[Credentials](#credentials). `svcdoctor diagnose postgres --help` is authoritative.
+[Credentials](#credentials). `svcdoctor diagnose <service> --help` is authoritative.
 
 ## Example output
 
@@ -98,8 +134,8 @@ Findings
   none
 
 Result
-  status     OK           no target-side error was proven
-  session    established
+  status     OK                   no target-side error was proven
+  outcome    session established
   execution  complete
   duration   13.5ms
 ```
@@ -130,19 +166,75 @@ Findings
 
 Result
   status       PROBLEMS FOUND
-  session      NOT established
+  outcome      session NOT established
   execution    complete
-  first break  L3               tls
+  first break  L3                       tls
   duration     18.2ms
 ```
 
-Three lines are always printed, and they are independent of one another: `status`, `session`
-and `execution`.
+And a Kafka run whose bootstrap journey succeeded while one advertised broker did not answer:
+
+```text
+svcdoctor · kafka · kafka.prod.internal:9093
+
+  ✓ PASS  DNS  1.9ms
+
+  Path 10.0.4.21:9093 · continued
+    ✓ PASS  TCP                         1.4ms
+    ✓ PASS  TLS                         4.2ms
+    ✓ PASS  Kafka API versions          0.4ms
+    ✓ PASS  SASL mechanism negotiation  0.2ms
+    ✓ PASS  Authentication              1.1ms
+    ✓ PASS  Kafka metadata              0.9ms
+
+  Advertised broker 1 · broker-1.prod.internal:9093
+    ✓ PASS  Broker advertisement
+    ✓ PASS  DNS                   0.3ms
+
+    Path 10.0.4.21:9093
+      ✓ PASS  TCP  1.3ms
+      ✓ PASS  TLS  3.9ms
+
+  Advertised broker 2 · broker-2.prod.internal:9093
+    ✓ PASS  Broker advertisement
+    ✓ PASS  DNS                   0.3ms
+
+    Path 10.0.4.22:9093
+      ✗ FAIL  TCP  2.1ms  TCP_CONNECTION_REFUSED
+      ·       TLS         not reached
+
+Findings
+  ✗ ERROR  KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE  broker-2.prod.internal:9093
+    ...
+
+Result
+  status       PROBLEMS FOUND
+  outcome      Kafka metadata obtained
+  topology     1 of 2 advertised broker endpoints reached
+  execution    complete
+  first break  L2                                          tcp
+  duration     16.4ms
+```
+
+The Result lines are independent of one another: `status`, `outcome`, `execution`, and — when
+a run discovered a topology — `topology`. None is derived from another. A run can be `OK` with
+no metadata obtained, or `PROBLEMS FOUND` with metadata obtained, and both are coherent.
+
+**`topology` counts, and judges nothing.** `reached` means at least one required transport path
+for that endpoint completed from this vantage during this run. When svcdoctor's own budget
+stopped a sweep, the line says so separately — `1 of 3 reached, 1 not measured` — because an
+endpoint nobody measured is not one that refused.
+
+**Kafka has no session.** There is no `ReadyForQuery`, no server message meaning *the
+connection is now ready for ordinary work*, so the outcome line names the exchange that
+happened: `Kafka metadata obtained`. That claims an authenticated, authorized API call
+succeeded against **the one broker that answered** — not that the cluster is reachable, usable
+or healthy.
 
 ### What "OK" means
 
 > **An overall status of `OK` means no ERROR or CRITICAL target-side problem was proven. It
-> does not mean a PostgreSQL session was established.**
+> does not mean a PostgreSQL session was established, or that Kafka metadata was obtained.**
 
 That distinction is load-bearing, and the most common way to reach it is running without a
 credential against an endpoint that requires authentication:
@@ -157,14 +249,16 @@ Findings
     to present
 
 Result
-  status     OK               no target-side error was proven
-  session    NOT established
+  status     OK                       no target-side error was proven
+  outcome    session NOT established
   execution  complete
 ```
 
 This exits **0**. It is not an invocation error: svcdoctor was asked to measure an endpoint
 and it did, truthfully reporting that nothing was sent and nothing was refused. Read the
-`session` line, not the exit code, to learn whether a session existed.
+`outcome` line, not the exit code, to learn whether the terminal exchange succeeded. Kafka
+behaves identically, with `KAFKA_CREDENTIAL_NOT_CONFIGURED` and
+`outcome  Kafka metadata NOT obtained`.
 
 ### Stage durations
 
@@ -199,6 +293,43 @@ connect denied.
 For the finding conventions and the full catalog, see [`docs/FINDINGS.md`](docs/FINDINGS.md),
 with worked examples in [`docs/DIAGNOSIS_EXAMPLES.md`](docs/DIAGNOSIS_EXAMPLES.md).
 
+## What Kafka BASIC checks
+
+Kafka BASIC is what svcdoctor can learn *while acting as the Kafka client you asked it to
+be*. It produces and consumes **nothing**.
+
+| Stage | What is measured |
+|---|---|
+| Requested target | the bootstrap host and port the run was asked to diagnose |
+| DNS | resolution from this vantage point, and every address returned |
+| TCP | a connection attempt per resolved address |
+| TLS | handshake, chain verification, identity match, validity window |
+| Kafka API versions | the capability exchange; a broker answers it **before** authentication |
+| SASL mechanism negotiation | whether the endpoint offers the mechanism you named |
+| Authentication | `PLAIN` or `SCRAM-SHA-256`, on exactly one selected path |
+| Kafka metadata | whether an authenticated, authorized API call succeeded |
+| Advertised broker endpoints | DNS, TCP and TLS for every endpoint the cluster named — credential-free |
+
+Representative findings include name not resolved, TCP connection not established, TLS chain
+not trusted, API versions not completed, auth mechanism not offered, authentication
+unsupported by svcdoctor, credential not configured, credential withheld, credentials
+rejected, peer verification failed, metadata not completed, advertised endpoint unreachable
+and advertised endpoint unusable.
+
+**What it is not.** No topic, partition, consumer-group, offset, lag or throughput
+inspection. No cluster, broker or partition health claim. No producing, no consuming, no
+administrative operation. The Metadata request asks for metadata about **no topics**, so none
+of that state is even in the response.
+
+**A credential never leaves the endpoint you named.** Metadata is a question, not a grant: a
+broker the cluster advertises receives DNS, TCP and TLS and nothing else, whatever certificate
+it presents. TLS proves you are talking to that host; nothing in the Kafka protocol proves
+that host belongs to the cluster you asked about.
+
+**`KAFKA_PEER_VERIFICATION_FAILED` is not a rejected credential.** SCRAM verifies the server
+back, and a server whose proof does not verify is reported as exactly that — never as a wrong
+password, which would send you to rotate a credential that is correct.
+
 ## Credentials
 
 There are exactly two credential sources:
@@ -211,9 +342,15 @@ There are exactly two credential sources:
 They are **mutually exclusive** — supplying both is an invocation error rather than a
 precedence rule, so a run can never quietly authenticate with the source you did not mean.
 
+Both commands use them, and both read them the same way.
+
 Supplying neither is valid input. If the endpoint then requires authentication, the run
-reports `POSTGRES_CREDENTIAL_NOT_CONFIGURED` at `WARN` with no session established, and
-nothing is sent.
+reports `POSTGRES_CREDENTIAL_NOT_CONFIGURED` or `KAFKA_CREDENTIAL_NOT_CONFIGURED` at `WARN`
+with no terminal exchange completed, and nothing is sent.
+
+For Kafka, `--user` is required alongside a credential source and refused without one: a Kafka
+run sends an identity only inside the SASL exchange, so `--user` on a credential-free run
+would do nothing, and a flag that is silently ignored is worse than one that is refused.
 
 Reading from a pipe, for example from a secret-provider command:
 
@@ -314,7 +451,9 @@ Precedence is `3 > 2 > 4 > 1 > 0`.
   is reached by cancellation (`SIGINT`/`SIGTERM`) or by an expired local execution budget; a
   partial report is still written to stdout.
 - **A `WARN` finding with overall status `OK` still exits 0.** Do not read exit 0 as "a
-  connection succeeded" — the no-credential run above is the counterexample.
+  connection succeeded" — the no-credential run above is the counterexample. The exit mapping
+  is service-independent: it reads the report's summary status and whether execution finished,
+  and nothing else.
 
 ## Build and install
 
@@ -339,20 +478,27 @@ neither corresponds to a released commit. Release builders can also inject a val
 
 ## Current scope
 
-**PostgreSQL BASIC is complete and feature-frozen.** The PostgreSQL-only v0.1 CLI is
-implemented: one leaf command, `svcdoctor diagnose postgres`, with text and JSON output,
-file and stdin credential input, shareable redaction, and the exit-code contract above.
+**PostgreSQL BASIC is complete and feature-frozen. Kafka BASIC is implemented and exposed.**
+Two leaf commands, `svcdoctor diagnose postgres` and `svcdoctor diagnose kafka`, with text and
+JSON output, file and stdin credential input, shareable redaction, and the exit-code contract
+above.
 
-BASIC is bounded on purpose: it learns what svcdoctor can observe while acting as the
-PostgreSQL client for this run. Inspecting a server's operational state is a separate future
-body of work (PostgreSQL DEEP) and is not part of v0.1.
+BASIC is bounded on purpose: it learns what svcdoctor can observe while acting as the client
+for this run. Inspecting a server's operational state is a separate future body of work
+(PostgreSQL DEEP) and is not part of v0.1.
 
 ### Not in v0.1
 
 These are deliberate boundaries, not defects:
 
-- no Kafka CLI (the Kafka adapter exists internally; no command is exposed)
 - no `inspect` command — the namespace is reserved, its output contract deferred
+- no Kafka SASL mechanism beyond `PLAIN` and `SCRAM-SHA-256`: no `SCRAM-SHA-512`, no
+  `SCRAM-SHA-256-PLUS`, no channel binding, no `OAUTHBEARER`, no `GSSAPI`, no `AWS_MSK_IAM`,
+  no mTLS client-certificate authentication
+- no Kafka topic, partition, consumer-group, lag or throughput inspection, and no cluster,
+  broker or partition health claim
+- no literal IPv4/IPv6 target support — `--host` expects a name that resolves; the graph
+  semantics for a literal are an open design item
 - no PostgreSQL DEEP, no diagnostic SQL of any kind
 - no `pg_stat_*` inspection, connection-pool, blocking-query or replication analysis
 - no table or query latency diagnosis
@@ -441,13 +587,18 @@ cross-package and environment-dependent tests.
 
 ## Roadmap
 
-PostgreSQL-only v0.1 is **release-ready** and not yet tagged or distributed.
+PostgreSQL-only v0.1.0 is tagged. Kafka BASIC is implemented and exposed on `main`, pending
+its own closure and release validation.
 
 Next, in no committed order:
 
+- Kafka BASIC closure and release validation
+- literal IPv4/IPv6 target semantics, for both services
+- a TLS trust and identity policy review — trust replacement versus augmentation, IP SAN
+  verification, client certificates
+- managed-service protocol compatibility: Redpanda, Confluent Cloud, AWS MSK, Azure Event
+  Hubs' Kafka API; RDS, Aurora, Cloud SQL, Azure Database for PostgreSQL
 - Markdown and HTML renderers, derived from the canonical report
-- a Kafka command, once a Kafka composition root exists (the adapter, topology discovery and
-  diagnosis rules are already implemented and validated against a real cluster)
 - the `inspect` namespace, once its output contract is decided
 - PostgreSQL DEEP
 

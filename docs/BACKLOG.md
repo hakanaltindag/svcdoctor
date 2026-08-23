@@ -2564,12 +2564,11 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 - [x] **6.3** Kafka protocol diagnosis ownership — **delivered as 6.1c-P2**; the number is
       retired. Phase 6.2 added the two owners SCRAM made newly reachable, in the same
       change-set as their producer
-- [ ] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka`, and the
-      **duration contract decision**: whether a *measured* zero-length step may render
-      identically to one that was never timed. `domain.Evidence` carries no "was this measured"
-      bit, so the renderer cannot distinguish them today. See the `internal/cli` golden flake
-      note above — it is the symptom, and the fixture is made deterministic *after* the
-      contract is decided
+- [x] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka` and the
+      duration contract — **COMPLETE**. `domain.Elapsed` replaced the bare `time.Duration`,
+      `internal/render/terminal` gained a third tree level and a per-service table, ADR 0057
+      settled mechanism selection, and the inherited golden flake is fixed at the product
+      layer rather than in the fixture. See "Phase 6.4" below
 - [ ] **6.5** Kafka BASIC closure gate, including the per-service ownership closure test
 - [ ] **6.6** Kafka release validation against the real cluster
 
@@ -2855,9 +2854,25 @@ making the stub resolver consume measurable time is a sleep wearing a different 
 normalizing an absent duration to `<duration>` would erase the SKIPPED-versus-measured
 distinction the golden exists to pin.
 
-**Deferred to Phase 6.4** with the renderer contract, which is the phase that owns it. It must
-decide whether a measured zero may render identically to an unmeasured step, and *then* the
-fixture is made deterministic to match the decision — not the other way round.
+**CLOSED in Phase 6.4A, at the product layer.** `domain.Evidence` now carries a
+`domain.Elapsed` — a duration and whether one was taken, with the zero value meaning
+*unmeasured* — so a measured zero and an absent measurement are different values. The
+terminal renderer renders them as `0s` and an empty cell. Nothing was added to the fixture, no
+clock was injected, no sleep was introduced and no test-only special case exists: the golden
+became deterministic because the ambiguity it exposed is gone.
+
+**Measured before and after, in separate processes, because the flake was process-sensitive:**
+
+| | before | after |
+|---|---|---|
+| `TestGoldenTerminalOutput`, targeted | **16 failures / 40 runs** | **0 / 120** |
+| `internal/cli`, whole package | not measured at entry | **0 / 60** |
+
+`schemaVersion` is unchanged and the canonical JSON is byte-identical: `duration` has been a
+required string on every node since Phase 1 and an unmeasured step has always encoded as
+`"0s"`, so the distinction stops at the domain. That is a **v1 limitation**, recorded rather
+than hidden — a JSON consumer cannot tell a step that was never timed from one that measured
+zero. Reopening it means a schema version, not a field.
 
 ### Phase 6.2 — AUTHORIZED by ADR 0056. Gate transition is atomic
 
@@ -3022,6 +3037,99 @@ Constraints already fixed (`docs/ARCHITECTURE.md` §5.8): the shared core must n
 plaintext in errors or retain connection state; plaintext enters only as a short-lived
 argument; `Reveal` stays in wire packages and its call-site count is unchanged by extraction.
 
+### Phase 6.4 — Kafka renderer hierarchy, the duration contract and the Kafka CLI: COMPLETE
+
+Three ordered parts, and the order was a correctness property: the duration contract had to
+be decided before the fixture could be made deterministic, and the renderer had to present a
+discovered broker as a discovered broker before a CLI could show one to anybody.
+
+**6.4A — the duration contract.** `domain.Elapsed`, a duration plus whether one was taken,
+zero value *unmeasured*. Every one of the 35 `EvidenceInput` construction sites was revisited
+by the compiler rather than by search: the field changed type, so there was no way to skip
+one. Ten production sites record a measurement, eight record its absence. `schemaVersion`
+stays 1 and the canonical JSON is byte-identical.
+
+**6.4B — the renderer.** A third tree level, a per-service table, ADR 0052's `outcome` and
+`topology` lines, and sixteen goldens that need **no normalization at all** because nothing in
+them is volatile.
+
+**6.4C — the CLI.** `svcdoctor diagnose kafka`, ADR 0057, and a real-binary integration suite
+against the three-broker cluster.
+
+**Five things this phase found that the plan did not.**
+
+1. **ADR 0052 was wrong twice, in its own Consequences section.** It claimed PostgreSQL output
+   would be byte-identical — it changes on one line per report, because §2 renamed the label
+   `session` to `outcome` and the Consequences sentence read that as being about bytes. And it
+   said the topology count and ADR 0051's completeness rule would share one implementation;
+   depguard denies a renderer the application, so they cannot. Both corrections are recorded in
+   the ADR, and the second is now a test against real composed runs rather than an assumption.
+2. **The advertised journey is a security boundary, not a presentation choice.** Reusing the
+   bootstrap journey beneath an advertisement printed `Authentication  not attempted on this
+   path` under every discovered broker — a row that says svcdoctor *could* have authenticated
+   there and happened not to, when ADR 0050 says it must never. The fix is a second journey in
+   the table, not a filter: a node the journey does not place is still rendered, so an
+   authentication node that somehow appeared would be **visible rather than hidden**.
+3. **Two mutations survived the first pass, and both were real gaps.** A renderer that decided
+   the advertisement boundary by `strings.Contains(id, "advertised")` passed every test,
+   because the production identifiers happen to contain that word. And a renderer that filtered
+   auth rows out of advertised subtrees passed, because the test only asserted their absence.
+   The first is now an AST guard, the second an assertion that a deliberately-planted node is
+   shown.
+4. **`IsMeasured` was reachable by no assertion at all.** Replacing its body with `e.d > 0`
+   survived the whole suite: every test that called it did so on an unmeasured value, where
+   both bodies agree. Found by mutation, closed by a direct unit test of the type.
+5. **A fixture canary that is the tool's own name proves nothing.** The Kafka fixture principal
+   is literally `svcdoctor`, which appears in every report's header, so a shareable-output sweep
+   for it fails on the banner rather than on a leak. The PostgreSQL suite records the same
+   hazard from the other side. The port is also **deliberately preserved** by redaction — it
+   selects a service, it does not identify anyone — and asserting its absence was a test defect,
+   not a leak.
+
+**Deliberately not done in 6.4:** no Markdown or HTML renderer, no colour, no TTY detection, no
+latency finding, no `inspect` namespace, no IP-literal work, no Redpanda, no managed-provider
+compatibility, no server-final strictness change, no new finding code, no new failure class, no
+schema field, no dependency, and no change to `Reveal`'s two production call sites or to any
+SCRAM production file.
+
+**One PostgreSQL change, it is presentation only, and it touches output that v0.1.0 already
+shipped.** The terminal Result block's label is `outcome` rather than `session`. Measured byte
+for byte against `HEAD`:
+
+```diff
+ Result
+-  status     OK           no target-side error was proven
+-  session    established
++  status     OK                   no target-side error was proven
++  outcome    session established
+   execution  complete
+   duration   12.0ms
+```
+
+**Two lines differ, not one**, and the second is worth stating precisely: `status` is unchanged
+in content and shifts only because tabwriter sizes a column from its widest cell, and the value
+column now holds `session established` rather than `established`. Everything else in the
+document — the header, every stage row, every glyph, every absence phrase, every finding, the
+`execution`, `first break` and `duration` rows — is byte-identical.
+
+What did **not** change: the value wording (`session established` / `session NOT established`,
+ADR 0052 §2 preserves it verbatim), the canonical JSON, `schemaVersion`, every finding code and
+severity, `SummaryStatus`, and every exit code. No `outcome` field and no `sessionEstablished`
+field was added to the report model; the line is a presentation restatement of one node's
+state, which ADR 0048 §5 is why it is not serialized.
+
+This is a **presentation compatibility change**, introduced so that two services can share one
+Result block truthfully: Kafka has no session-establishment handshake, so a `session` label
+carrying a metadata value would be a claim the protocol cannot support. ADR 0052 §2 decided the
+label and §3's rejected-alternatives table refuses keeping `session`. A script parsing the
+terminal text for `^  session` breaks; JSON is the canonical automation surface and is
+unaffected.
+
+**A v1 JSON limitation is now recorded rather than latent.** `duration` cannot distinguish a
+step that was never timed from one that measured zero; both encode as `"0s"`. The terminal
+renderer can, because the distinction lives in the domain. Changing the JSON means a schema
+version.
+
 ## Standing design items opened by Phase 6.2 — NOT STARTED
 
 ### SCRAM server-final strictness hardening
@@ -3084,6 +3192,29 @@ Nothing here is implemented, and none of it should be attempted piecemeal:
 
 This overlaps the TLS item below at IP SAN verification, and the two must be sequenced
 together rather than each assuming the other decided.
+
+**Measured in Phase 6.4C, against the real binary, rather than assumed.** A literal target is
+accepted today and produces a run that is useful and partly untrue:
+
+```text
+$ svcdoctor diagnose kafka --host 127.0.0.1 --port 1 --sasl-mechanism PLAIN --tls disable
+
+  ✓ PASS  DNS  51µs                     ← nothing was resolved
+  ...
+  ✗ ERROR  TCP_CONNECTION_NOT_ESTABLISHED  127.0.0.1:1
+    Every address the hostname resolved to was tried and none accepted a connection.
+                     ^^^^^^^^ there was no hostname
+```
+
+`net.Resolver` returns a literal unchanged, so `dns.lookup` records PASS with a measured
+duration for work that did not happen, and the generic TCP finding's prose names a hostname
+that does not exist. IPv6 behaves the same and formats correctly as `[::1]:1`.
+
+So the transport diagnosis below L1 is right, and the L1 claim is not. **This was deliberately
+not patched in the CLI phase** — the fix is the graph-shape decision above, not a special case
+in a command — and Phase 6.4C's README states plainly that `--host` expects a name that
+resolves. That is the honest position until this item is decided: the capability is not
+advertised, and the defect is recorded with its reproduction.
 
 ## Standing security-sensitive design items — NOT STARTED, deliberately separate
 
