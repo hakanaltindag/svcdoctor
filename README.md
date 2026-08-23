@@ -76,29 +76,29 @@ own flag set, help text and validation.
 
 ### `diagnose postgres`
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--host <host>` | *required* | the endpoint to diagnose: a hostname or an IPv4 or IPv6 address literal — see [Address literals](#address-literals) |
-| `--user <role>` | *required* | the role to connect as |
-| `--port <uint>` | `5432` | the port to connect to |
-| `--database <name>` | *empty* | database to select; empty lets the server default it to the role name |
-| `--timeout <duration>` | `30s` | bound on the whole run |
-| `--step-timeout <duration>` | `10s` | bound on each individual exchange |
-| `--output text\|json` | `text` | output form — see [Output modes](#output-modes) |
-| `--shareable` | off | emit the redacted projection — see [Shareable reports](#shareable-reports) |
+| Flag                        | Default    | Meaning                                                                                                             |
+| --------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| `--host <host>`             | _required_ | the endpoint to diagnose: a hostname or an IPv4 or IPv6 address literal — see [Address literals](#address-literals) |
+| `--user <role>`             | _required_ | the role to connect as                                                                                              |
+| `--port <uint>`             | `5432`     | the port to connect to                                                                                              |
+| `--database <name>`         | _empty_    | database to select; empty lets the server default it to the role name                                               |
+| `--timeout <duration>`      | `30s`      | bound on the whole run                                                                                              |
+| `--step-timeout <duration>` | `10s`      | bound on each individual exchange                                                                                   |
+| `--output text\|json`       | `text`     | output form — see [Output modes](#output-modes)                                                                     |
+| `--shareable`               | off        | emit the redacted projection — see [Shareable reports](#shareable-reports)                                          |
 
 ### `diagnose kafka`
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--host <host>` | *required* | the bootstrap endpoint to diagnose: a hostname or an IPv4 or IPv6 address literal — see [Address literals](#address-literals) |
-| `--sasl-mechanism <name>` | *required* | the SASL mechanism to propose, uppercase |
-| `--user <principal>` | *empty* | the principal to authenticate as; required with a credential source and refused without one |
-| `--port <uint>` | `9092` | the port to connect to |
-| `--timeout <duration>` | `30s` | bound on the whole run |
-| `--step-timeout <duration>` | `10s` | bound on each individual exchange |
-| `--output text\|json` | `text` | output form — see [Output modes](#output-modes) |
-| `--shareable` | off | emit the redacted projection — see [Shareable reports](#shareable-reports) |
+| Flag                        | Default    | Meaning                                                                                                                       |
+| --------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `--host <host>`             | _required_ | the bootstrap endpoint to diagnose: a hostname or an IPv4 or IPv6 address literal — see [Address literals](#address-literals) |
+| `--sasl-mechanism <name>`   | _required_ | the SASL mechanism to propose, uppercase                                                                                      |
+| `--user <principal>`        | _empty_    | the principal to authenticate as; required with a credential source and refused without one                                   |
+| `--port <uint>`             | `9092`     | the port to connect to                                                                                                        |
+| `--timeout <duration>`      | `30s`      | bound on the whole run                                                                                                        |
+| `--step-timeout <duration>` | `10s`      | bound on each individual exchange                                                                                             |
+| `--output text\|json`       | `text`     | output form — see [Output modes](#output-modes)                                                                               |
+| `--shareable`               | off        | emit the redacted projection — see [Shareable reports](#shareable-reports)                                                    |
 
 **svcdoctor can perform `PLAIN` and `SCRAM-SHA-256`, and no other Kafka SASL mechanism.**
 Naming any other registered mechanism is allowed and useful: svcdoctor proposes it, records
@@ -225,8 +225,8 @@ for that endpoint completed from this vantage during this run. When svcdoctor's 
 stopped a sweep, the line says so separately — `1 of 3 reached, 1 not measured` — because an
 endpoint nobody measured is not one that refused.
 
-**Kafka has no session.** There is no `ReadyForQuery`, no server message meaning *the
-connection is now ready for ordinary work*, so the outcome line names the exchange that
+**Kafka has no session.** There is no `ReadyForQuery`, no server message meaning _the
+connection is now ready for ordinary work_, so the outcome line names the exchange that
 happened: `Kafka metadata obtained`. That claims an authenticated, authorized API call
 succeeded against **the one broker that answered** — not that the cluster is reachable, usable
 or healthy.
@@ -271,19 +271,19 @@ baselines or comparisons to them. No finding is derived from a duration.
 
 ## What PostgreSQL BASIC checks
 
-PostgreSQL BASIC is what svcdoctor can learn *while acting as the PostgreSQL client you asked
-it to be*. It issues **no SQL**.
+PostgreSQL BASIC is what svcdoctor can learn _while acting as the PostgreSQL client you asked
+it to be_. It issues **no SQL**.
 
-| Stage | What is measured |
-|---|---|
-| Requested target | the host and port the run was asked to diagnose |
-| DNS | resolution from this vantage point, and every address returned |
-| TCP | a connection attempt per resolved address |
-| SSLRequest | PostgreSQL's in-band negotiation of an encrypted channel |
-| TLS | handshake, chain verification, identity match, validity window |
-| Startup | the startup exchange and the authentication the endpoint requests |
-| Authentication | mechanism negotiation and the outcome of SCRAM-SHA-256 |
-| Session | whether the session reached `ReadyForQuery` |
+| Stage            | What is measured                                                  |
+| ---------------- | ----------------------------------------------------------------- |
+| Requested target | the host and port the run was asked to diagnose                   |
+| DNS              | resolution from this vantage point, and every address returned    |
+| TCP              | a connection attempt per resolved address                         |
+| SSLRequest       | PostgreSQL's in-band negotiation of an encrypted channel          |
+| TLS              | handshake, chain verification, identity match, validity window    |
+| Startup          | the startup exchange and the authentication the endpoint requests |
+| Authentication   | mechanism negotiation and the outcome of SCRAM-SHA-256            |
+| Session          | whether the session reached `ReadyForQuery`                       |
 
 Representative findings include name not resolved, TCP connection not established, TLS
 declined, SSL negotiation failed, TLS chain not trusted, TLS identity mismatch, credential
@@ -295,19 +295,19 @@ with worked examples in [`docs/DIAGNOSIS_EXAMPLES.md`](docs/DIAGNOSIS_EXAMPLES.m
 
 ## What Kafka BASIC checks
 
-Kafka BASIC is what svcdoctor can learn *while acting as the Kafka client you asked it to
-be*. It produces and consumes **nothing**.
+Kafka BASIC is what svcdoctor can learn _while acting as the Kafka client you asked it to
+be_. It produces and consumes **nothing**.
 
-| Stage | What is measured |
-|---|---|
-| Requested target | the bootstrap host and port the run was asked to diagnose |
-| DNS | resolution from this vantage point, and every address returned |
-| TCP | a connection attempt per resolved address |
-| TLS | handshake, chain verification, identity match, validity window |
-| Kafka API versions | the capability exchange; a broker answers it **before** authentication |
-| SASL mechanism negotiation | whether the endpoint offers the mechanism you named |
-| Authentication | `PLAIN` or `SCRAM-SHA-256`, on exactly one selected path |
-| Kafka metadata | whether an authenticated, authorized API call succeeded |
+| Stage                       | What is measured                                                        |
+| --------------------------- | ----------------------------------------------------------------------- |
+| Requested target            | the bootstrap host and port the run was asked to diagnose               |
+| DNS                         | resolution from this vantage point, and every address returned          |
+| TCP                         | a connection attempt per resolved address                               |
+| TLS                         | handshake, chain verification, identity match, validity window          |
+| Kafka API versions          | the capability exchange; a broker answers it **before** authentication  |
+| SASL mechanism negotiation  | whether the endpoint offers the mechanism you named                     |
+| Authentication              | `PLAIN` or `SCRAM-SHA-256`, on exactly one selected path                |
+| Kafka metadata              | whether an authenticated, authorized API call succeeded                 |
 | Advertised broker endpoints | DNS, TCP and TLS for every endpoint the cluster named — credential-free |
 
 Representative findings include name not resolved, TCP connection not established, TLS chain
@@ -334,10 +334,10 @@ password, which would send you to rotate a credential that is correct.
 
 There are exactly two credential sources:
 
-| Flag | Reads the credential from |
-|---|---|
-| `--password-file <path>` | a file |
-| `--password-stdin` | standard input |
+| Flag                     | Reads the credential from |
+| ------------------------ | ------------------------- |
+| `--password-file <path>` | a file                    |
+| `--password-stdin`       | standard input            |
 
 They are **mutually exclusive** — supplying both is an invocation error rather than a
 precedence rule, so a run can never quietly authenticate with the source you did not mean.
@@ -370,12 +370,12 @@ Credential material is not part of the report, in either output mode.
 TLS is required by default and the endpoint's identity is verified by default. The full
 policy is [ADR 0058](docs/decisions/0058-tls-trust-and-peer-identity-authority.md).
 
-| Flag | Meaning |
-|---|---|
-| `--tls require\|disable` | negotiate an encrypted channel, or do not (default `require`) |
-| `--tls-ca-file <path>` | PEM trust source. **It replaces the system trust store** — see below |
-| `--tls-server-name <name>` | identity to verify and send in SNI; empty uses `--host` |
-| `--tls-insecure` | do not verify the endpoint's identity |
+| Flag                       | Meaning                                                              |
+| -------------------------- | -------------------------------------------------------------------- |
+| `--tls require\|disable`   | negotiate an encrypted channel, or do not (default `require`)        |
+| `--tls-ca-file <path>`     | PEM trust source. **It replaces the system trust store** — see below |
+| `--tls-server-name <name>` | identity to verify and send in SNI; empty uses `--host`              |
+| `--tls-insecure`           | do not verify the endpoint's identity                                |
 
 There is no automatic fallback: a failed TLS negotiation is reported, never retried in
 plaintext. libpq's `sslmode` vocabulary is deliberately not reproduced.
@@ -503,10 +503,10 @@ ignored them; see [ADR 0060](docs/decisions/0060-tls-option-validity-and-verific
 
 ## Output modes
 
-| `--output` | Result |
-|---|---|
-| `text` | human-readable terminal report (**default**) |
-| `json` | the canonical Report document |
+| `--output` | Result                                       |
+| ---------- | -------------------------------------------- |
+| `text`     | human-readable terminal report (**default**) |
+| `json`     | the canonical Report document                |
 
 JSON is the canonical representation and the one to use for automation; the terminal form is
 derived from the same report. Markdown and HTML renderers are planned but **not implemented**
@@ -551,13 +551,13 @@ own disclosure requirements.
 
 ## Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | a report was produced, execution completed, and no ERROR/CRITICAL target-side finding exists |
-| 1 | a report was produced, execution completed, and an ERROR/CRITICAL target-side finding exists |
-| 2 | svcdoctor was invoked with something it cannot act on; no report |
-| 3 | svcdoctor itself failed and produced no usable report |
-| 4 | a report was produced, but svcdoctor's own execution did not finish |
+| Code | Meaning                                                                                      |
+| ---- | -------------------------------------------------------------------------------------------- |
+| 0    | a report was produced, execution completed, and no ERROR/CRITICAL target-side finding exists |
+| 1    | a report was produced, execution completed, and an ERROR/CRITICAL target-side finding exists |
+| 2    | svcdoctor was invoked with something it cannot act on; no report                             |
+| 3    | svcdoctor itself failed and produced no usable report                                        |
+| 4    | a report was produced, but svcdoctor's own execution did not finish                          |
 
 Precedence is `3 > 2 > 4 > 1 > 0`.
 
@@ -585,7 +585,7 @@ The binary is statically linkable and builds with `CGO_ENABLED=0`. It needs no s
 no configuration file and no runtime data directory.
 
 There are currently no Homebrew, Docker, apt, RPM or prebuilt-binary distributions.
-
+Prebuilt release archives are available from GitHub Releases.
 `svcdoctor --version` reports the release the binary was built as, and the same value is
 recorded in every report. A binary installed from a tagged module —
 `go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.1.0` — reports that tag. A
@@ -744,9 +744,9 @@ Next, in no committed order:
 The authoritative phase numbering and checklist live in
 [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
-| | |
-|---|---|
-| Repository | `github.com/hakanaltindag/svcdoctor` |
+|                |                                      |
+| -------------- | ------------------------------------ |
+| Repository     | `github.com/hakanaltindag/svcdoctor` |
 | Go module path | `github.com/hakanaltindag/svcdoctor` |
-| Go version | 1.26 |
-| License | Apache-2.0 |
+| Go version     | 1.26                                 |
+| License        | Apache-2.0                           |
