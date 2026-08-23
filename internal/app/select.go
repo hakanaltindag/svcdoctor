@@ -91,9 +91,23 @@ func selectPath[T any](candidates []candidate[T], wantAuthRequired bool) int {
 // canonicalFirst returns the canonically smallest address within one class, or
 // -1 when the class is empty.
 func canonicalFirst[T any](candidates []candidate[T], authRequired bool) int {
+	return canonicalMinimum(candidates, func(c candidate[T]) bool {
+		return c.authRequired == authRequired
+	})
+}
+
+// canonicalMinimum returns the index of the canonically smallest address among
+// the candidates the filter admits, or -1 when it admits none.
+//
+// It is the one place the comparison is written. Two selectors read it — the
+// PostgreSQL class partition above and Kafka's unpartitioned tie-break — and a
+// second copy of `Compare` would be a second chance for them to disagree about
+// what "canonically smallest" means, which is the drift ADR 0041 section 9's
+// determinism argument rests on not happening.
+func canonicalMinimum[T any](candidates []candidate[T], include func(candidate[T]) bool) int {
 	best := -1
 	for i := range candidates {
-		if candidates[i].authRequired != authRequired {
+		if !include(candidates[i]) {
 			continue
 		}
 		if best == -1 || candidates[i].address.Compare(candidates[best].address) < 0 {

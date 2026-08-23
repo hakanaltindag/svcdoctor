@@ -49,8 +49,16 @@ func parse(t *testing.T, name string) *ast.File {
 //     diagnosis has run on truthful evidence (ADR 0018, ADR 0041 section 18). If
 //     this package could redact, "diagnosis sees unredacted evidence" would
 //     become a convention rather than a structure.
-//   - **internal/adapter/postgres/wire.** Protocol framing belongs to the
-//     adapter. Orchestration sequences steps; it does not speak the protocol.
+//   - **internal/adapter/postgres/wire** and **internal/adapter/kafka/wire.**
+//     Protocol framing belongs to the adapter, and a wire package additionally
+//     holds the only authorized security.Reveal. Orchestration sequences steps;
+//     it does not speak the protocol and it cannot reveal a secret.
+//
+// The Kafka entries arrived in Phase 6.1c, and each is one of the four things a
+// second service adds: its adapter, its diagnosis rules, its shared vocabulary,
+// and nothing else. The list is per-package rather than per-prefix precisely so
+// that `internal/adapter/kafka/wire` is still denied while
+// `internal/adapter/kafka` is allowed.
 func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 	allowed := map[string]bool{
 		"github.com/hakanaltindag/svcdoctor/internal/domain":              true,
@@ -59,11 +67,14 @@ func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 		"github.com/hakanaltindag/svcdoctor/internal/probe/tcp":           true,
 		"github.com/hakanaltindag/svcdoctor/internal/probe/transport":     true,
 		"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres":    true,
+		"github.com/hakanaltindag/svcdoctor/internal/adapter/kafka":       true,
 		"github.com/hakanaltindag/svcdoctor/internal/diagnosis":           true,
 		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/postgres":  true,
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/kafka":     true,
 		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/transport": true,
 		"github.com/hakanaltindag/svcdoctor/internal/security":            true,
 		"github.com/hakanaltindag/svcdoctor/internal/vocabulary":          true,
+		"github.com/hakanaltindag/svcdoctor/internal/service/kafka":       true,
 	}
 
 	for _, name := range productionFiles(t) {
@@ -210,6 +221,23 @@ func TestTheRunNeverParsesAnEvidenceIdentifier(t *testing.T) {
 func mentionsEvidence(n ast.Node) bool {
 	found := false
 	ast.Inspect(n, func(node ast.Node) bool {
+		// `.ID()` counts, and it was the hole. This guard originally matched
+		// only names containing "evidence", which covers `x.Evidence()` and the
+		// `domain.EvidenceID` conversion but misses the spelling a graph walk
+		// actually uses:
+		//
+		//	strings.HasPrefix(string(node.ID()), "kafka.broker_advertised")
+		//
+		// Neither `node` nor `ID` contains the word, so topology inference by
+		// identifier prefix — which ADR 0019 forbids and ADR 0051 section 4
+		// rules out — passed this test. Found by mutating the composition, not
+		// by reading it, which is the argument for running the mutation at all.
+		//
+		// `ID` is matched as a selector name rather than as a substring, so a
+		// field called `identity` does not trip it.
+		if sel, ok := node.(*ast.SelectorExpr); ok && sel.Sel.Name == "ID" {
+			found = true
+		}
 		if ident, ok := node.(*ast.Ident); ok {
 			if strings.Contains(strings.ToLower(ident.Name), "evidence") {
 				found = true
