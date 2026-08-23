@@ -1008,6 +1008,27 @@ escaping is core-owned, because it is pure RFC grammar.
 The gate transition is atomic: `TestNoSharedSCRAMPackageExists` is deleted in the *same* commit
 that introduces the package, the depguard allowlist and the positive guards — never before.
 
+**Phase 6.2 implemented all of it.** `internal/sasl/scram` is a leaf importing six standard
+library packages and nothing else, enforced by a depguard allowlist and by the package's own
+AST guards. PostgreSQL was migrated onto it with no semantic change — three sentinels became
+aliases so `errors.Is` identity and every `FailureClass` survived untouched, and the two
+framing sentinels were deliberately translated rather than aliased so that "this postgres
+frame could not be decoded" and "this SCRAM attribute list could not be decoded" stay distinct.
+Kafka SASL/SCRAM-SHA-256 followed, validated against the real three-broker cluster including a
+principal whose name requires `=2C`/`=3D` escaping.
+
+**`security.Reveal` still has exactly two production call sites**, and keeping it there took a
+correction: giving PLAIN and SCRAM an exported exchange each — the obvious structure — gave
+each its own reveal and silently made three. `kafka/wire.Authenticate` reveals once and
+dispatches on the plaintext, and a repository-wide AST guard now pins the count rather than
+leaving it to lint plus memory.
+
+Adding SCRAM made two outcomes newly reachable at `kafka.sasl_authenticate`, and ADR 0054
+required their owners in the same change-set: `AUTH_PEER_VERIFICATION_FAILED`, because SCRAM
+authenticates **both** parties and "the broker did not prove it knows the credential" is the
+opposite claim from "the broker refused what svcdoctor presented", and `UNKNOWN` +
+`EXEC_UNSUPPORTED_BY_SVCDOCTOR` for credentials outside the printable-ASCII range.
+
 ### 5.9 Kafka application composition: one journey, one credential, one selected socket
 
 **Implemented in Phase 6.1c.** `internal/app.DiagnoseKafka` is the second composition

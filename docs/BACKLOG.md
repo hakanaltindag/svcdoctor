@@ -2544,7 +2544,7 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 | **6.1a** | Kafka authentication mechanism guard | `Authenticate` reads `Mechanism()` nowhere and calls `ExchangePLAIN` unconditionally. The guard must precede `SecretFor`, `Reveal` and any credential-bearing wire output |
 | **6.1b** | Generic requested-target TLS diagnosis (ADR 0053) | The owner must exist before 6.1c makes the producer reachable, or `tls.handshake` FAIL lands with `findings: []` and `status: OK` |
 | **6.1c** | `DiagnoseKafka` application composition | Anchor, bootstrap sweep, ApiVersions, handshake, one authenticated path, Metadata, advertised sweep, ADR 0051's predicate. Existing rules wired; no new findings |
-| **6.2** | Shared SCRAM core extraction + Kafka SCRAM-SHA-256 | 6.2a is Accepted and rejected Model A; ADR 0055 adopts Model D. Implementation waits on 6.2a-R2 |
+| **6.2** | Shared SCRAM core extraction + Kafka SCRAM-SHA-256 | **Complete.** ADR 0055 rejected Model A; ADR 0056 is the contract it was built to |
 | **6.3** | Kafka protocol diagnosis ownership | ApiVersions, SASL handshake, authentication, Metadata. Closes the reachable outcomes Phase 5.6 enumerated as unowned |
 | **6.4** | Kafka renderer hierarchy + Kafka CLI | `collectPaths` promotes every `tcp.connect` to a top-level path, which conflates bootstrap and advertised sweeps; the tree needs a third level |
 | **6.5** | Kafka BASIC closure | Includes the ADR 0054 §5 closure test |
@@ -2557,8 +2557,10 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
       ADR 0050 structurally enforced, closure guard turned positive — **COMPLETE**
 - [x] **6.2a** shared SCRAM core security review — **COMPLETE**, ADR 0055: Model A
       **rejected**, Model D adopted, seventeen implementation conditions recorded
-- [ ] **6.2a-R2** confirm Model D against a written core API, then delete the gate test
-- [ ] **6.2** extraction under ADR 0055, `saslname` escaping, and Kafka SCRAM-SHA-256
+- [x] **6.2a-R2** Model D API and security contract — **COMPLETE**, ADR 0056: exact API,
+      callback contract, eight bounds, SASLprep refused, atomic gate transition
+- [x] **6.2** extraction under ADR 0056 — `internal/sasl/scram`, SASLname escaping, Kafka
+      SCRAM-SHA-256, the two new `Reveal` guards, the atomic guard swap — **COMPLETE**
 - [ ] **6.3** Kafka protocol diagnosis ownership
 - [ ] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka`
 - [ ] **6.5** Kafka BASIC closure gate, including the per-service ownership closure test
@@ -2790,12 +2792,161 @@ have, and it is not in Kafka BASIC's scope.
 line, no SCRAM, no new `FindingCode`, no new `FailureClass`, no schema field, no
 dependency, and no change to `Reveal`'s two production call sites.
 
-**Open, not forgotten.** Phase 6.1c observed one unexplained one-off `internal/cli` test
-failure under load. It did not reproduce across subsequent full/race runs. Reopen if it
-recurs. It did not reproduce in the Phase 6.2a baseline either — `go test ./...`,
-`go test -count=1 -race ./...`, `make check` and both integration suites all passed.
+**REOPENED in the Phase 6.2 closure pass, and no longer unexplained.**
 
-### Phase 6.2 — BLOCKED. 6.2a is Accepted and rejected Model A
+Phase 6.1c observed one one-off `internal/cli` test failure under load, which did not
+reproduce across subsequent full/race runs or in the Phase 6.2a and 6.2 baselines. **It
+reproduced during the Phase 6.2 closure baseline**, in `go test ./...`, while
+`go test -race` and `make check` passed in the same sweep.
+
+**The failing case is `TestGoldenTerminalOutput/local_budget_exhausted`, and the mechanism is
+now known.** The golden output differed by one token:
+
+```text
+want   ✓ PASS  DNS  <duration>
+got    ✓ PASS  DNS
+```
+
+`resultOKIncomplete` in `internal/cli/cli_test.go` builds its fixture with `runReal` over a
+`stubResolver`, so the DNS step measures **real wall-clock elapsed time** for a resolver that
+returns a slice. On a fast enough machine that measurement is `0`, and
+`internal/render/terminal/duration.go`'s `formatDuration` renders `d <= 0` as the empty
+string — deliberately, so that a SKIPPED node or the requested-target anchor does not print
+`0s` and invite a reader to think something was measured and took no time.
+
+So the test is nondeterministic by construction: a genuinely measured near-zero duration is
+rendered identically to a step that was never timed.
+
+**It is not "one-off", and that part of the original note was wrong.** Measured during the
+closure pass: **6 failures in 25 runs** of `TestGoldenTerminalOutput` on the Phase 6.2 working
+tree. It looked like a one-off in Phase 6.1c because a ~25% per-run failure rate on one
+subtest disappears for several consecutive full-suite runs often enough to look settled.
+
+**This is not a Phase 6.2 regression, and that was measured rather than assumed.** The same
+test was run 20 times in a clean worktree at `fdc2c3a` — the commit before any Phase 6.2
+change — and failed **3 times**. Same rate, same subtest, none of this phase's code present.
+The fixture is PostgreSQL, the renderer is the terminal one, and the step is DNS; Phase 6.2
+touched none of them.
+
+**It is deliberately not fixed in the closure pass, because there are two legitimate fixes and
+they mean different things:**
+
+1. *Test-only* — give the fixture a deterministic clock, or a resolver whose measured step
+   cannot be zero. Cheap, and it makes the flake go away.
+2. *Product semantics* — decide whether a **measured** zero-length step may render the same as
+   an **unmeasured** one. ADR 0052 already fixed the principle that `not measured` must never
+   be collapsed into another outcome, and rendering a measured `0` as blank is arguably the
+   same collapse one layer down. `formatDuration`'s comment states the current choice and its
+   reason, so changing it is a decision rather than a patch.
+
+Option 2 is a renderer-contract question and belongs to **Phase 6.4**, which owns the renderer
+hierarchy. Reopen it there, decide, and then fix the fixture to match the decision rather than
+the other way round.
+
+### Phase 6.2 — AUTHORIZED by ADR 0056. Gate transition is atomic
+
+**Phase 6.2a-R2 is complete and its outcome is ADR 0056, the Model D implementation
+contract. Phase 6.2 implementation is authorized.**
+
+What R2 settled beyond ADR 0055's outline:
+
+- **The core is `internal/sasl/scram`**, a leaf importing nothing internal, and
+  `internal/sasl` may contain nothing but `scram/` — a family directory is how a generic
+  SASL framework would begin, and this phase is SCRAM-SHA-256 only.
+- **The core generates the nonce.** ADR 0055 sketched `Begin(username, nonce)`; that puts
+  entropy authority in two wire packages, where a short or `math/rand` nonce becomes a
+  caller's mistake to make.
+- **SASLprep is refused, and that is a correctness decision, not a shortcut.** PostgreSQL
+  applies SASLprep on both sides; Apache Kafka does not (`KAFKA-6272`, open since 1.0.0,
+  `ScramFormatter.normalize()` only UTF-8 encodes). **The two services require opposite
+  behaviour for non-ASCII input**, so no shared implementation is correct for both. Over
+  printable ASCII SASLprep is provably the identity, so restricting to U+0020–U+007E is the
+  only choice correct against both — and it needs no Unicode dependency. SASLname escaping
+  (`,`→`=2C`, `=`→`=3D`) *is* core-owned, because it is pure RFC grammar.
+- **Eight core-owned bounds**, with the encoded-salt length checked *before* the base64
+  decode — today's parser decodes the salt before applying the iteration ceiling.
+- **A three-step state machine**, so a second `Continue` or a `Verify` before `Continue` is
+  an error rather than a silent wrong answer.
+- **Two new `Reveal` guards.** Kafka has no count guard today, and nothing asserts the
+  repository-wide total of two.
+- **The gate transition is atomic (ADR 0056 §13), superseding ADR 0055.** The negative guard
+  is **not** deleted by the R2 commit. It is deleted in the same commit that introduces the
+  package and its positive guards. There must never be a commit where neither holds.
+
+Three residual risks are recorded rather than argued away: a password could be passed as the
+`Username` (caught by review, vectors and integration, not by construction); the derivation
+callback closes over wire scope the core cannot inspect, so the core performs no I/O *of its
+own*; and the SaltedPassword is not harmless — Model D removes password-reuse transfer, not
+the whole class.
+
+### Phase 6.2 — shared SCRAM core and Kafka SCRAM-SHA-256: COMPLETE
+
+`internal/sasl/scram` holds the RFC 5802 semantics for both services and **cannot observe a
+password**: no function it exposes accepts one. Each wire package reveals its own secret,
+performs PBKDF2 itself, and hands the core a callback the core invokes exactly once, after ten
+validation steps. What crosses the boundary is a SaltedPassword — one principal, one target,
+one salt — rather than the operator's reusable credential.
+
+- [x] `internal/sasl/scram`: `Begin`/`Continue`/`Verify` over a pointer `State` with a
+      three-step machine, six standard-library imports, no `fmt`, no `strings`
+- [x] Depguard **allowlist** plus the package's own AST guards, both mutation-tested
+- [x] The atomic gate swap: `TestNoSharedSCRAMPackageExists` deleted in the same change-set
+      that introduced the package and its positive guards. The reciprocal guard in
+      `kafka_composition_test.go` **caught the deletion** and had to be updated to name the
+      successors — the mutual-reference mechanism working as designed
+- [x] PostgreSQL migrated with no semantic change; three sentinels aliased, two deliberately
+      translated instead so framing and SCRAM meanings stay distinct
+- [x] Kafka SASL/SCRAM-SHA-256, with `wire.Authenticate` as the single reveal boundary
+- [x] RFC 7677 vectors pinning every intermediate, plus the message-construction vectors the
+      PostgreSQL test could never reach because it passed a literal client-first-bare in
+- [x] Five fuzz targets, 20s each, green
+- [x] 14 core mutations, 4 Kafka mutations, 2 PostgreSQL mutations — all caught
+- [x] Real-cluster integration including an escaped principal, a wrong credential, non-ASCII
+      refusals and redaction
+
+**Four things this phase found that the reviews did not.**
+
+1. **PLAIN and SCRAM each having an exported exchange took `Reveal` from two sites to three.**
+   The obvious structure — one exported function per mechanism, each opening its own secret —
+   is a perfectly ordinary Go design and it broke an invariant every ADR since 0027 states.
+   Caught by the new repository-wide guard, which is exactly the gap Phase 6.2a identified and
+   which nothing had enforced before.
+2. **SCRAM made two outcomes newly reachable with no diagnosis owner**, which ADR 0054 forbids
+   landing. `KAFKA_PEER_VERIFICATION_FAILED` was added — mirroring the PostgreSQL concept, not
+   inventing one — and the capability refusals reuse the existing unsupported-by-svcdoctor code.
+   Owners landed in the same change-set as the producer. **This is the first new `FindingCode`
+   since Phase 6.1b: 40 → 41.**
+3. **A nonce narrowing was made on a false premise, measured, and reverted.** The theory was
+   that Kafka's client-first regex rejects base64's `+` and `/`. Kafka 4.0.0 accepts both and
+   completes the exchange. Reverted rather than kept, because a change defended by a wrong
+   reason teaches the next reader something untrue.
+4. **Three fixture defects masqueraded as product defects, and each cost real time.** Every one
+   of them presented as "SCRAM is broken" while SCRAM was correct.
+   - The broker could not construct a SCRAM `SaslServer` at all, because `jaas.conf` declared
+     only `PlainLoginModule`. Kafka answers that by **closing the connection**, which reaches a
+     client as a bare EOF — indistinguishable from a network fault.
+   - `integration-kafka` chains up/test/down, so a failing test aborts before teardown; the next
+     `kafka-up` then regenerated certificates against still-running brokers, producing
+     `TLS_UNKNOWN_AUTHORITY` while the mounted CA file looked perfectly correct. `kafka-up` now
+     force-recreates.
+   - **`compose-sasl.yaml` has no named volume for the KRaft data directory**, so
+     `up -d --force-recreate` — which `restore()` and `reconfigure()` both use — discards the
+     metadata log and every SCRAM credential with it. PLAIN never noticed because its
+     credentials live in the `jaas.conf` bind mount. The SCRAM readiness helper re-provisions
+     the principals rather than a volume being added, because every other test in the suite
+     depends on `kafka-up` starting from an empty cluster.
+
+**Deliberately not done in 6.2:** no SCRAM-SHA-512, no SCRAM-SHA-256-PLUS, no channel binding,
+no OAUTHBEARER, no GSSAPI, no IAM, no fallback in either direction, no CLI, no renderer, no
+schema field, no dependency, and no change to PostgreSQL semantics.
+
+**A readiness condition worth remembering.** SCRAM verifiers live in the KRaft metadata log and
+each broker's `ScramPublisher` warms its credential cache *asynchronously after startup*, so a
+broker can be registered, bound and answering ApiVersions while SCRAM still fails — and the
+failure is indistinguishable from a wrong password. `kafka-configs --describe` returns earlier
+than that. The suite's readiness condition is therefore a real SCRAM authentication.
+
+### Phase 6.2a — Model A rejected (history)
 
 **Phase 6.2a is complete and its outcome is ADR 0055: Model A rejected, Model D adopted.**
 The shared core must accept **no password in any type**; it receives a derivation callback
@@ -2854,6 +3005,45 @@ Constraints already fixed (`docs/ARCHITECTURE.md` §5.8): the shared core must n
 `internal/security` or `net`, must not call `security.Reveal`, perform I/O, log plaintext, put
 plaintext in errors or retain connection state; plaintext enters only as a short-lived
 argument; `Reveal` stays in wire packages and its call-site count is unchanged by extraction.
+
+## Standing security-sensitive design items — NOT STARTED, deliberately separate
+
+Both were identified during the Phase 6.2a and 6.2a-R2 SCRAM reviews and both were kept out
+of them on purpose. Neither is a SCRAM question, and folding either into a secret-authority
+record would produce one document answering neither well.
+
+### TLS Trust & Identity Policy Review
+
+svcdoctor decides what to trust and whose identity to check, and today that decision is
+implicit. A dedicated review must settle, at minimum:
+
+- [ ] system trust store versus an explicitly supplied CA
+- [ ] internal AD / private PKI trust, including container and Kubernetes CA injection
+- [ ] `--tls-ca-file`: trust **replacement** versus **augmentation** — the two have different
+      failure modes and only one can be the default
+- [ ] hostname verification, and an explicit `ServerName` override
+- [ ] bootstrap `ServerName` versus advertised-endpoint `ServerName` semantics
+- [ ] client certificates / mTLS, and where that credential's authority lives
+- [ ] managed-service CA bundles
+
+This is separate from SCRAM secret authority (ADR 0055, ADR 0056) and must stay separate.
+
+### Managed-service protocol compatibility
+
+Later, and about **protocol** compatibility — not about adding cloud-provider SDK authority.
+Kafka SCRAM against Apache Kafka alone proves less than it appears to.
+
+- [ ] Kafka: Apache Kafka, Redpanda self-hosted, Redpanda Cloud, Confluent Cloud,
+      AWS MSK SCRAM, AWS MSK IAM, Azure Event Hubs' Kafka API
+- [ ] PostgreSQL: AWS RDS, Aurora PostgreSQL, Cloud SQL PostgreSQL, Azure Database for
+      PostgreSQL
+
+Redpanda is the most valuable single addition, because it tests the Kafka protocol against a
+non-Apache implementation rather than against the same codebase the fixture already runs.
+AWS MSK IAM stays detect-and-explain only unless scope changes explicitly.
+
+**Not Phase 6.2.** Phase 6.2 is the shared core plus Kafka SCRAM-SHA-256 against the existing
+fixture cluster, and nothing else.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 

@@ -11,14 +11,52 @@ the exact bounds, the exact ownership rules and the exact guards.
 
 **Phase 6.2 implementation is authorized**, subject to §14's prerequisites.
 
+**Implemented in Phase 6.2.** `internal/sasl/scram` exists, PostgreSQL was migrated onto it
+with no semantic change, and Kafka SASL/SCRAM-SHA-256 is validated against the real
+three-broker KRaft cluster. `security.Reveal` still has exactly two production call sites.
+
+Five things the implementation had to settle that this record did not, each recorded here
+rather than left in a commit message:
+
+1. **`GS2Header` is exported**, which §2 did not list. §2 asked `Begin` to return the
+   client-first-*bare* while also claiming the core and its callers could not drift on the
+   header — and those are only both true if there is one definition. A wire package holding
+   its own `"n,,"` could drift from the header the core signs into the AuthMessage, and the
+   symptom would be a signature mismatch rather than a visible disagreement.
+2. **Two sentinels beyond §8's nine**: `ErrNoDerivation` for a nil callback, reported rather
+   than panicking so the fuzz targets' never-panic property is total, and
+   `ErrDerivationFailed`. The second is a security decision §8 left open: a callback's error
+   is **discarded, never wrapped**, because the callback runs in a wire package with the
+   plaintext in scope and any error it produces could carry credential material.
+3. **The single Kafka reveal boundary.** The first implementation gave PLAIN and SCRAM an
+   exported exchange each, and each revealed its own secret — an ordinary structure that
+   quietly took the repository from two production reveal sites to **three**. `wire.Authenticate`
+   now reveals once and dispatches on the plaintext, which also puts the framing choice in the
+   package that owns framing.
+4. **Two new reachable outcomes needed owners before the producer could land** (ADR 0054).
+   SCRAM authenticates both parties, so `AUTH_PEER_VERIFICATION_FAILED` became reachable at
+   `kafka.sasl_authenticate` and required a new code, `KAFKA_PEER_VERIFICATION_FAILED` —
+   mirroring `POSTGRES_PEER_VERIFICATION_FAILED`, not inventing a concept. The
+   printable-ASCII and local-derivation refusals made `UNKNOWN` +
+   `EXEC_UNSUPPORTED_BY_SVCDOCTOR` reachable, and that reuses the existing
+   `KAFKA_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR` rather than dividing one operator-facing
+   fact in two. **Both owners landed in the same change-set as the producer.**
+5. **A nonce change was made, measured, and reverted.** The implementation narrowed the client
+   nonce to an alphanumeric alphabet on the theory that Kafka's `ClientFirstMessage` regex
+   constrains it to `[a-zA-Z0-9-]` and would reject base64's `+` and `/`. Tested against
+   Kafka 4.0.0: **both characters are accepted and the exchange completes.** The change was
+   reverted rather than kept as a harmless extra, because a narrower alphabet defended by a
+   false reason is worse than no change — the next reader would have believed the reason.
+
 **This record supersedes one sentence of ADR 0055.** That record said
 `TestNoSharedSCRAMPackageExists` "is to be deleted in the commit that records *that*
 acceptance" — this one. That is wrong, and §13 replaces it: deleting the negative guard now
 would leave every commit between this record and Phase 6.2's first implementation commit
 unguarded. The guard stays until it is replaced atomically.
 
-No production Go changed in this phase. `security.Reveal` retains exactly two production call
-sites, both in wire packages.
+No production Go changed in **Phase 6.2a-R2**, the review this record came from; the
+implementation notes above describe Phase 6.2, which followed it. `security.Reveal` retains
+exactly two production call sites in both phases, and both are in wire packages.
 
 ## Problem
 
