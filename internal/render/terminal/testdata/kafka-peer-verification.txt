@@ -1,0 +1,25 @@
+svcdoctor · kafka · kafka.internal:9093
+
+  ✓ PASS  DNS  2.0ms
+
+  Path 198.51.100.10:9093 · continued
+    ✓ PASS  TCP                         190µs
+    ✓ PASS  TLS                         1.7ms
+    ✓ PASS  Kafka API versions          155µs
+    ✓ PASS  SASL mechanism negotiation  88µs
+    ✗ FAIL  Authentication              130µs  AUTH_PEER_VERIFICATION_FAILED
+    ·       Kafka metadata                     not reached
+
+Findings
+  ✗ ERROR  KAFKA_PEER_VERIFICATION_FAILED  198.51.100.10:9093
+    A one-line summary
+    A detail line.
+    → Check the thing the finding names
+    evidence: 1
+
+Result
+  status       PROBLEMS FOUND
+  outcome      Kafka metadata NOT obtained
+  execution    complete
+  first break  L5                           auth
+  duration     12.0ms

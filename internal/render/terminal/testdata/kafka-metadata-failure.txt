@@ -1,0 +1,25 @@
+svcdoctor · kafka · kafka.internal:9093
+
+  ✓ PASS  DNS  2.0ms
+
+  Path 198.51.100.10:9093 · continued
+    ✓ PASS  TCP                         190µs
+    ✓ PASS  TLS                         1.7ms
+    ✓ PASS  Kafka API versions          155µs
+    ✓ PASS  SASL mechanism negotiation  88µs
+    ✓ PASS  Authentication              94µs
+    ✗ FAIL  Kafka metadata              60µs   PROTOCOL_MALFORMED_RESPONSE
+
+Findings
+  ✗ ERROR  KAFKA_METADATA_NOT_COMPLETED  198.51.100.10:9093
+    A one-line summary
+    A detail line.
+    → Check the thing the finding names
+    evidence: 1
+
+Result
+  status       PROBLEMS FOUND
+  outcome      Kafka metadata NOT obtained
+  execution    complete
+  first break  L6                           topology
+  duration     12.0ms

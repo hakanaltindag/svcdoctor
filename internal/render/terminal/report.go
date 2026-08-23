@@ -59,11 +59,13 @@ func Write(w io.Writer, in render.Input) error {
 		return fmt.Errorf("writing the report: no writer")
 	}
 
+	view := viewFor(in.Report)
+
 	var out bytes.Buffer
 	writeHeader(&out, in.Report)
-	writeStages(&out, in.Report)
+	writeStages(&out, in.Report, view)
 	writeFindings(&out, in.Report)
-	writeResult(&out, in)
+	writeResult(&out, in, view)
 
 	if _, err := w.Write(trimTrailingSpace(out.Bytes())); err != nil {
 		return fmt.Errorf("writing the report: %w", err)
@@ -102,41 +104,132 @@ func writeHeader(out *bytes.Buffer, report domain.Report) {
 	_, _ = fmt.Fprintln(out)
 }
 
-// writeStages renders the logical target's stages, then each concrete path.
-func writeStages(out *bytes.Buffer, report domain.Report) {
+// writeStages renders the logical target, its bootstrap paths, and then the
+// topology those paths discovered.
+//
+// # Three levels, and the third is what Kafka needed
+//
+//	target        the requested name and its resolution
+//	  path        one concrete address the operator's endpoint resolved to
+//	    stage     what was measured over it
+//	advertised    one endpoint the cluster named
+//	  path        one concrete address that name resolved to
+//	    stage     what was measured over it
+//
+// The two `path` levels look alike and mean different things, and that is
+// exactly why they are rendered apart rather than as siblings. A bootstrap path
+// is an address for the endpoint the operator asked about; an advertised path is
+// an address for an endpoint a peer named, which svcdoctor measures at transport
+// and never authenticates (ADR 0050). Presenting them in one list would say the
+// operator asked about a broker they have never heard of.
+//
+// A service with no advertisement step renders the first two levels and nothing
+// else, byte for byte as before.
+func writeStages(out *bytes.Buffer, report domain.Report, view serviceView) {
 	graph := report.Graph()
 
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	for _, node := range targetStages(graph) {
+	for _, node := range targetStages(graph, view) {
 		writeStageRow(tw, "  ", stageLine{
 			state:    stateGlyph(node.State()),
 			label:    stepLabel(node.Step()),
 			note:     failureNote(node),
-			duration: formatDuration(node.Duration()),
+			duration: formatElapsed(node.Elapsed()),
 		})
 	}
 	_ = tw.Flush()
 
-	paths := collectPaths(graph)
-	if len(paths) == 0 {
+	paths := collectPaths(graph, view)
+	advertisements := collectAdvertisements(graph, view)
+
+	if len(paths) == 0 && len(advertisements) == 0 {
 		_, _ = fmt.Fprintln(out)
 		return
 	}
 
 	for _, p := range paths {
-		marker := ""
-		if p.continued {
-			marker = " · continued"
-		}
-		_, _ = fmt.Fprintf(out, "\n  Path %s%s\n", p.subject.Ref(), marker)
+		writePath(out, p, view, "  ")
+	}
+	writeAdvertisements(out, advertisements, view)
+	_, _ = fmt.Fprintln(out)
+}
+
+// writePath renders one concrete attempt and its stages.
+func writePath(out *bytes.Buffer, p path, view serviceView, indent string) {
+	marker := ""
+	if p.continued {
+		marker = " · continued"
+	}
+	_, _ = fmt.Fprintf(out, "\n%sPath %s%s\n", indent, p.subject.Ref(), marker)
+
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	for _, line := range stageLines(p, view) {
+		writeStageRow(tw, indent+"  ", line)
+	}
+	_ = tw.Flush()
+}
+
+// writeAdvertisements renders the topology the run discovered.
+//
+// # Each advertisement carries enough context to correlate, and no more
+//
+// The heading names the service's own identifier for the peer — Kafka's broker
+// node id — beside the endpoint subject. Both survive redaction: the node id
+// names a position in a cluster rather than a host, and the subject is a
+// pseudonym in a shareable report. **No EvidenceID is printed**, here or
+// anywhere: identifiers are the machine surface and belong to the JSON.
+//
+// # What never appears beneath one
+//
+// An authentication row. A discovered endpoint receives credential-free DNS, TCP
+// and TLS and nothing else (ADR 0050), so a credential or authentication stage
+// under an advertisement would mean the sweep had grown a second hop. This
+// renderer does not filter such a row out — it renders what the graph holds, and
+// a test asserts the graph never holds one, because hiding it would conceal the
+// security failure instead of reporting it.
+func writeAdvertisements(out *bytes.Buffer, advertisements []advertisement, view serviceView) {
+	for _, a := range advertisements {
+		_, _ = fmt.Fprintf(out, "\n  %s\n", advertisementHeading(a, view))
 
 		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-		for _, line := range stageLines(p) {
-			writeStageRow(tw, "    ", line)
+		writeStageRow(tw, "    ", stageLine{
+			state:    stateGlyph(a.node.State()),
+			label:    stepLabel(a.node.Step()),
+			note:     failureNote(a.node),
+			duration: formatElapsed(a.node.Elapsed()),
+		})
+		if a.resolved {
+			writeStageRow(tw, "    ", stageLine{
+				state:    stateGlyph(a.lookup.State()),
+				label:    stepLabel(a.lookup.Step()),
+				note:     failureNote(a.lookup),
+				duration: formatElapsed(a.lookup.Elapsed()),
+			})
 		}
 		_ = tw.Flush()
+
+		for _, p := range a.paths {
+			writePath(out, p, advertisedView(view), "    ")
+		}
 	}
-	_, _ = fmt.Fprintln(out)
+}
+
+// advertisementHeading names one discovered endpoint.
+//
+// The identifier is included only when the advertisement actually carries it. An
+// advertisement the cluster stated unusably may have no identity to show, and
+// inventing a placeholder would make an absent fact look like a present one.
+func advertisementHeading(a advertisement, view serviceView) string {
+	heading := view.advertisementLabel
+	if heading == "" {
+		heading = stepLabel(a.node.Step())
+	}
+	if view.advertisementIdentity != "" {
+		if value, ok := a.node.Attribute(view.advertisementIdentity); ok {
+			heading += " " + value.String()
+		}
+	}
+	return heading + " · " + a.node.Subject().Ref()
 }
 
 // writeStageRow emits one aligned row. Empty columns stay empty rather than
@@ -146,22 +239,48 @@ func writeStageRow(tw *tabwriter.Writer, indent string, line stageLine) {
 		indent, line.state, line.label, line.duration, line.note)
 }
 
-// writeResult renders the three facts, separately, always.
+// writeResult renders the four axes, separately, always.
+//
+// # Four facts, and collapsing any two of them publishes something false
+//
+//	status      what target-side findings were proven
+//	outcome     whether the service's terminal exchange succeeded
+//	topology    what discovery measured, when the run discovered anything
+//	execution   whether svcdoctor finished measuring
+//
+// ADR 0052 section 6 fixes them as independent, and every combination a reader
+// might think impossible is reachable. `OK` beside `Kafka metadata NOT obtained`
+// is a run with no credential against an endpoint that demands one. `PROBLEMS
+// FOUND` beside `Kafka metadata obtained` is a healthy bootstrap broker
+// advertising an endpoint nothing can reach. `OK` beside `INCOMPLETE` is
+// svcdoctor's own budget expiring with nothing proven wrong.
 //
 // # `OK` never appears alone
 //
 // It always carries "no target-side error was proven", because `OK` on its own
 // reads as "everything worked" and means something much narrower: no finding
 // reached ERROR or CRITICAL. A reader who takes it for success on a run that
-// established no session has been misled by the output rather than by the
+// obtained no metadata has been misled by the output rather than by the
 // diagnosis (ADR 0048 section 9).
 //
-// # Session and execution are never omitted
+// # `outcome` replaced `session`, and the label is the claim
 //
-// Not when a session was established, not when the run completed, not when there
+// Kafka has no session establishment: no ReadyForQuery, no server message
+// meaning *"the connection is now ready for ordinary work"*. A `session` label
+// carrying a metadata value would be worse than either word alone, which is why
+// ADR 0052 section 2 generalized the label rather than varying only its value.
+// PostgreSQL's phrasing is unchanged; its label is not.
+//
+// # `outcome` and `execution` are never omitted
+//
+// Not when the outcome was reached, not when the run completed, not when there
 // are no findings. A section that printed them only sometimes would make their
 // absence meaningful, and a reader would have to know which absence meant what.
-func writeResult(out *bytes.Buffer, in render.Input) {
+// `topology` is the one line that *is* conditional, and its condition is
+// structural: a run that recorded no advertisements has no topology to count,
+// and printing `0 of 0` would invite a reader to think discovery found nothing
+// when discovery may never have run.
+func writeResult(out *bytes.Buffer, in render.Input, view serviceView) {
 	report := in.Report
 	summary := report.Summary()
 
@@ -179,11 +298,17 @@ func writeResult(out *bytes.Buffer, in render.Input) {
 	}
 	_, _ = fmt.Fprintf(tw, "  status\t%s\t%s\t\n", status, gloss)
 
-	session := "NOT established"
-	if sessionEstablished(report.Graph()) {
-		session = "established"
+	if view.outcomeStep != "" {
+		outcome := view.outcomeNotReached
+		if outcomeReached(report.Graph(), view) {
+			outcome = view.outcomeReached
+		}
+		_, _ = fmt.Fprintf(tw, "  outcome\t%s\t\t\n", outcome)
 	}
-	_, _ = fmt.Fprintf(tw, "  session\t%s\t\t\n", session)
+
+	if line, ok := topologyLine(report.Graph(), view); ok {
+		_, _ = fmt.Fprintf(tw, "  topology\t%s\t\t\n", line)
+	}
 
 	execution, executionGloss := "complete", ""
 	if in.Incomplete {

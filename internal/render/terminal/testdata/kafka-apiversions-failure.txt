@@ -1,0 +1,25 @@
+svcdoctor · kafka · kafka.internal:9093
+
+  ✓ PASS  DNS  2.0ms
+
+  Path 198.51.100.10:9093
+    ✓ PASS  TCP                         190µs
+    ✓ PASS  TLS                         1.7ms
+    ✗ FAIL  Kafka API versions          40µs   PROTOCOL_PEER_CLOSED
+    ·       SASL mechanism negotiation         not reached
+    ·       Authentication                     not reached
+    ·       Kafka metadata                     not reached
+
+Findings
+  ✗ ERROR  KAFKA_API_VERSIONS_NOT_COMPLETED  198.51.100.10:9093
+    A one-line summary
+    A detail line.
+    → Check the thing the finding names
+    evidence: 1
+
+Result
+  status       PROBLEMS FOUND
+  outcome      Kafka metadata NOT obtained
+  execution    complete
+  first break  L4                           protocol
+  duration     12.0ms

@@ -1,0 +1,37 @@
+svcdoctor · kafka · kafka.internal:9093
+
+  ✓ PASS  DNS  2.0ms
+
+  Path 198.51.100.10:9093 · continued
+    ✓ PASS  TCP                         190µs
+    ✓ PASS  TLS                         1.7ms
+    ✓ PASS  Kafka API versions          155µs
+    ✓ PASS  SASL mechanism negotiation  88µs
+    ✓ PASS  Authentication              94µs
+    ✓ PASS  Kafka metadata              90µs
+
+  Advertised broker 1 · broker-1.internal:9093
+    ✓ PASS  Broker advertisement
+    ✓ PASS  DNS                   160µs
+
+    Path 198.51.100.21:9093
+      ✓ PASS  TCP  130µs
+      ✓ PASS  TLS  709µs
+
+  Advertised broker 2 · broker-2.internal:9093
+    ✓ PASS  Broker advertisement
+    ✓ PASS  DNS                   150µs
+
+    Path 198.51.100.22:9093
+      ? UNKNOWN  TCP  80.0ms  EXEC_LOCAL_TIMEOUT
+      ·          TLS          not reached
+
+Findings
+  none
+
+Result
+  status     OK                                                          no target-side error was proven
+  outcome    Kafka metadata obtained
+  topology   1 of 2 advertised broker endpoints reached, 1 not measured
+  execution  INCOMPLETE                                                  svcdoctor did not finish the intended measurement
+  duration   12.0ms

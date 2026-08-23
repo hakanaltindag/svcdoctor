@@ -1,0 +1,48 @@
+svcdoctor · kafka · kafka.internal:9093
+
+  ✓ PASS  DNS  2.0ms
+
+  Path 198.51.100.10:9093 · continued
+    ✓ PASS  TCP                         190µs
+    ✓ PASS  TLS                         1.7ms
+    ✓ PASS  Kafka API versions          155µs
+    ✓ PASS  SASL mechanism negotiation  88µs
+    ✓ PASS  Authentication              94µs
+    ✓ PASS  Kafka metadata              90µs
+
+  Advertised broker 1 · broker-1.internal:9093
+    ✓ PASS  Broker advertisement
+    ✓ PASS  DNS                   160µs
+
+    Path 198.51.100.21:9093
+      ✗ FAIL  TCP  210µs  TCP_CONNECTION_REFUSED
+      ·       TLS         not reached
+
+  Advertised broker 2 · broker-2.internal:9093
+    ✓ PASS  Broker advertisement
+    ✓ PASS  DNS                   160µs
+
+    Path 198.51.100.22:9093
+      ✗ FAIL  TCP  210µs  TCP_CONNECTION_REFUSED
+      ·       TLS         not reached
+
+Findings
+  ✗ ERROR  KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE  broker-1.internal:9093
+    A one-line summary
+    A detail line.
+    → Check the thing the finding names
+    evidence: 1
+
+  ✗ ERROR  KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE  broker-2.internal:9093
+    A one-line summary
+    A detail line.
+    → Check the thing the finding names
+    evidence: 1
+
+Result
+  status       PROBLEMS FOUND
+  outcome      Kafka metadata obtained
+  topology     0 of 2 advertised broker endpoints reached
+  execution    complete
+  first break  L2                                          tcp
+  duration     12.0ms

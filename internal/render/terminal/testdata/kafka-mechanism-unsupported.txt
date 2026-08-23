@@ -1,0 +1,24 @@
+svcdoctor · kafka · kafka.internal:9093
+
+  ✓ PASS  DNS  2.0ms
+
+  Path 198.51.100.10:9093 · continued
+    ✓ PASS     TCP                         190µs
+    ✓ PASS     TLS                         1.7ms
+    ✓ PASS     Kafka API versions          155µs
+    ✓ PASS     SASL mechanism negotiation  88µs
+    ? UNKNOWN  Authentication                     AUTH_MECHANISM_UNSUPPORTED
+    ·          Kafka metadata                     not reached
+
+Findings
+  · INFO  KAFKA_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR  198.51.100.10:9093
+    A one-line summary
+    A detail line.
+    → Check the thing the finding names
+    evidence: 1
+
+Result
+  status     OK                           no target-side error was proven
+  outcome    Kafka metadata NOT obtained
+  execution  complete
+  duration   12.0ms
