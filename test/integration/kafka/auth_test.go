@@ -38,9 +38,14 @@ func TestPlainAuthenticationSucceeds(t *testing.T) {
 	if !ok {
 		t.Fatal("handshake records no offered mechanisms")
 	}
+	// Both, since Phase 6.2 enabled SCRAM-SHA-256 on the same listener rather
+	// than trading PLAIN coverage away for it. The set is pinned rather than
+	// merely checked for membership, because a mechanism appearing here that the
+	// fixture did not configure would mean the handshake is reporting something
+	// other than what this broker offers.
 	list, _ := offered.StringList()
-	if len(list) != 1 || list[0] != "PLAIN" {
-		t.Errorf("offered mechanisms = %v, want exactly [PLAIN] as the broker is configured", list)
+	if len(list) != 2 || list[0] != "PLAIN" || list[1] != "SCRAM-SHA-256" {
+		t.Errorf("offered mechanisms = %v, want exactly [PLAIN SCRAM-SHA-256] as the broker is configured", list)
 	}
 	t.Logf("broker offers %v", list)
 

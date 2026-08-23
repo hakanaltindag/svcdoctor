@@ -294,7 +294,7 @@ func TestARealRunWithNoCredentialSaysSoAndStaysOK(t *testing.T) {
 //
 // # What this cluster can and cannot exercise
 //
-// The listener offers **PLAIN only**, so asking for SCRAM-SHA-256 is refused at
+// The listener offers PLAIN and SCRAM-SHA-256, so asking for SCRAM-SHA-512 is refused at
 // the handshake with `UNSUPPORTED_SASL_MECHANISM` and no session survives.
 // Authentication is therefore never entered, and there is no
 // `kafka.sasl_authenticate` node at all.
@@ -304,7 +304,12 @@ func TestARealRunWithNoCredentialSaysSoAndStaysOK(t *testing.T) {
 // a mechanism svcdoctor cannot perform — UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`
 // — which needs a listener advertising SCRAM. This fixture has none, so that
 // branch is covered where it can be: `TestAnUnsupportedMechanismSendsNothing` in
-// test/security, against a peer configured to offer SCRAM-SHA-256 and accept it.
+// test/security, against a peer configured to offer the mechanism and accept it.
+//
+// The mechanism was SCRAM-SHA-256 until Phase 6.2, which made the cluster offer
+// it and svcdoctor perform it. SCRAM-SHA-512 replaced it here because this test
+// needs a mechanism the broker genuinely does not have — not one svcdoctor
+// merely cannot do, which is a different outcome with a different class.
 //
 // What this test does prove, on real sockets, is the half the cluster can reach:
 // a mechanism the endpoint does not offer stops the journey at L5, is owned by a
@@ -312,7 +317,7 @@ func TestARealRunWithNoCredentialSaysSoAndStaysOK(t *testing.T) {
 // the run complete rather than incomplete.
 func TestARealMechanismTheClusterDoesNotOfferStopsAtTheHandshake(t *testing.T) {
 	o := composed(t)
-	o.mechanism = "SCRAM-SHA-256"
+	o.mechanism = "SCRAM-SHA-512"
 
 	result := diagnose(t, o)
 

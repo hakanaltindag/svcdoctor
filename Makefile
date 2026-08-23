@@ -81,11 +81,22 @@ clean: ## Remove build output
 KAFKA_ENV := test/integration/kafka/env
 KAFKA_COMPOSE := docker compose -f $(KAFKA_ENV)/compose-sasl.yaml
 
-.PHONY: kafka-up kafka-down kafka-test integration-kafka
+.PHONY: kafka-up kafka-down kafka-test kafka-scram-users integration-kafka
 
 kafka-up: ## Start the 3-broker Kafka validation cluster
 	@$(KAFKA_ENV)/gen-certs.sh
-	@$(KAFKA_COMPOSE) up -d
+	# --force-recreate, because gen-certs.sh above rewrote the CA and the broker
+	# keystore. Kafka reads its keystore once at JVM start, so a broker left
+	# running from an earlier attempt keeps serving a certificate the freshly
+	# generated CA did not sign — and every handshake fails with
+	# TLS_UNKNOWN_AUTHORITY while the mounted CA file looks perfectly correct.
+	#
+	# It is easy to reach: `integration-kafka` chains up, test and down, so a
+	# failing test aborts the chain before `kafka-down` runs and leaves the old
+	# brokers up for the next attempt. That produced an afternoon of "SCRAM is
+	# broken" during Phase 6.2 when SCRAM was fine. The composition suite already
+	# carried a comment about this exact hazard; this removes it instead.
+	@$(KAFKA_COMPOSE) up -d --force-recreate
 	@printf 'waiting for three registered brokers'
 	@for i in $$(seq 1 60); do \
 		n=$$(docker exec svcd-sasl-1 /opt/kafka/bin/kafka-broker-api-versions.sh \
@@ -93,6 +104,59 @@ kafka-up: ## Start the 3-broker Kafka validation cluster
 		if [ "$$n" = "3" ]; then printf ' ready\n'; exit 0; fi; \
 		printf '.'; sleep 1; \
 	done; printf '\ncluster did not become ready\n'; exit 1
+	@$(MAKE) --no-print-directory kafka-scram-users
+
+# SCRAM credentials cannot live in jaas.conf: KRaft keeps SCRAM verifiers in the
+# metadata log, so they are created after the quorum is up. The INTERNAL
+# PLAINTEXT listener is used because it needs no credential to reach — which is
+# the point, since these commands are creating the first one.
+#
+# Creation is followed by a propagation wait, and that is not defensive padding.
+# kafka-configs returns as soon as the record is committed to the metadata log,
+# but each broker's ScramPublisher applies it asynchronously — so a suite that
+# starts immediately authenticates against a broker that has not yet loaded the
+# verifier and gets a failure indistinguishable from a wrong password. Measured:
+# the SCRAM tests passed when run by hand seconds later and failed under
+# `make integration-kafka`, which has no such gap.
+#
+# The second principal deliberately contains a comma and an equals sign. RFC 5802
+# requires them to be sent as =2C and =3D, PostgreSQL never needed that escaping
+# because it sends an empty username, and Phase 6.2a found the code did not
+# exist. This is the fixture that proves it works against a real broker rather
+# than only against a vector.
+kafka-scram-users: ## Create the SCRAM-SHA-256 principals the suite authenticates as
+	@for user in 'svcdoctor-scram:svcdoctor-scram-canary' 'a,b=c:escaped-name-canary'; do \
+		name=$${user%%:*}; pass=$${user##*:}; \
+		docker exec svcd-sasl-1 /opt/kafka/bin/kafka-configs.sh \
+			--bootstrap-server broker-1:9094 \
+			--alter --add-config "SCRAM-SHA-256=[iterations=4096,password=$$pass]" \
+			--entity-type users --entity-name "$$name" >/dev/null \
+			|| { printf 'could not create SCRAM user %s\n' "$$name"; exit 1; }; \
+	done
+	@printf 'waiting for scram credentials on every broker'
+	@for i in $$(seq 1 60); do \
+		ok=1; \
+		for b in 1 2 3; do \
+			docker exec svcd-sasl-$$b /opt/kafka/bin/kafka-configs.sh \
+				--bootstrap-server broker-$$b:9094 --describe --entity-type users \
+				--entity-name svcdoctor-scram 2>/dev/null | grep -q 'SCRAM-SHA-256' || ok=0; \
+		done; \
+		if [ "$$ok" = "1" ]; then printf ' ready\n'; exit 0; fi; \
+		printf '.'; sleep 1; \
+	done; printf '\nscram credentials did not propagate\n'; exit 1
+	# The describe above proves the record reached every broker's config view.
+	# It does **not** prove the SASL server can use it: each broker's
+	# ScramPublisher applies the record to its credential cache asynchronously,
+	# and there is no supported command that reports when that has happened.
+	#
+	# A settle is therefore the honest mechanism, and it is bounded by
+	# measurement rather than by taste: the window from kafka-up returning to the
+	# first successful SCRAM authentication was measured at 2 seconds, and this
+	# waits 10. Without it the suite authenticates against a broker that has the
+	# credential written but not yet loaded, and the failure is indistinguishable
+	# from a wrong password — which is precisely how it presented.
+	@sleep 10
+	@printf 'scram credentials ready\n'
 
 kafka-down: ## Stop the validation cluster and delete its volumes
 	@$(KAFKA_COMPOSE) down -v --remove-orphans

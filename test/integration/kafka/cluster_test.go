@@ -3,10 +3,19 @@
 package kafka
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hakanaltindag/svcdoctor/internal/app"
+	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
+	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
+	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
+	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
 
 // Cluster reconfiguration, so every scenario is repeatable with one command
@@ -102,4 +111,138 @@ func registeredBrokers(t *testing.T) int {
 		return 0
 	}
 	return strings.Count(string(out), "id: ")
+}
+
+// waitSCRAMReady blocks until a recreated broker can actually authenticate a
+// SCRAM principal, which is a later moment than being registered.
+//
+// It is called by the SCRAM tests rather than from waitReady, deliberately. The
+// advertised-failure scenarios call waitReady against a cluster they have just
+// broken on purpose, and probing SCRAM there would run a full diagnosis — sweep
+// included — against unreachable advertised addresses once a second. That turned
+// four scenarios from seconds into minutes. Readiness belongs where the
+// dependency is.
+//
+// # Why registration is not the readiness condition
+//
+// SCRAM verifiers live in the KRaft metadata log, and each broker's
+// ScramPublisher applies them to its credential cache **asynchronously after
+// startup**. A broker therefore registers with the quorum, binds its listener
+// and answers ApiVersions and SaslHandshake — all while its SCRAM cache is still
+// cold. Authentication against it fails, and the failure is a broker-side
+// rejection that is indistinguishable from a wrong password.
+//
+// That is exactly how it presented during Phase 6.2: the SCRAM tests passed when
+// run on their own and failed under `make integration-kafka`, because the suite
+// force-recreates brokers in cluster_test.go and scram_test.go runs afterwards.
+// It read as "SCRAM is broken" for an afternoon while SCRAM was correct.
+//
+// There is no supported command that reports when the cache has warmed —
+// kafka-configs --describe returns as soon as the record is in the config view,
+// which is earlier — so the readiness condition is the operation the scenario
+// depends on: a real SCRAM authentication over the real listener.
+func waitSCRAMReady(t *testing.T) {
+	t.Helper()
+
+	ensureSCRAMPrincipals(t)
+
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if scramAuthenticates(t) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no broker accepted the SCRAM principal within the readiness window; " +
+				"the credential exists in the config view, so this is the ScramPublisher " +
+				"cache rather than a missing user")
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// ensureSCRAMPrincipals re-creates the SCRAM users, idempotently.
+//
+// # Why this is needed at all, which is not obvious
+//
+// compose-sasl.yaml mounts only ./certs and ./jaas.conf. **There is no named
+// volume for the KRaft data directory**, so a broker's metadata log lives in its
+// container's writable layer — and `up -d --force-recreate`, which restore() and
+// reconfigure() both use, discards it. The cluster reformats, and every SCRAM
+// credential created by the Makefile's kafka-scram-users step is gone.
+//
+// Nothing before Phase 6.2 noticed, because PLAIN credentials live in jaas.conf
+// which is a bind mount and survives. SCRAM verifiers live in the metadata log,
+// which does not.
+//
+// Adding a volume would fix it in one line and change what every other test
+// depends on: those tests assume each `kafka-up` starts from an empty cluster,
+// and `kafka-down -v` exists to guarantee it. Re-provisioning here is the
+// narrower change — it makes the SCRAM tests independent of how many recreates
+// ran before them, and it touches nothing else.
+//
+// kafka-configs is idempotent for this: adding a SCRAM config that already
+// exists overwrites it with the same value.
+func ensureSCRAMPrincipals(t *testing.T) {
+	t.Helper()
+
+	for _, principal := range []struct{ name, password string }{
+		{scramIdentity, scramSecret},
+		{scramEscapedIdentity, scramEscapedSecret},
+	} {
+		cmd := exec.Command("docker", "exec", "svcd-sasl-1",
+			"/opt/kafka/bin/kafka-configs.sh",
+			"--bootstrap-server", "broker-1:9094",
+			"--alter", "--add-config",
+			"SCRAM-SHA-256=[iterations=4096,password="+principal.password+"]",
+			"--entity-type", "users", "--entity-name", principal.name)
+		cmd.Env = environ()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("creating SCRAM principal %q: %v\n%s", principal.name, err, out)
+		}
+	}
+}
+
+// scramAuthenticates reports whether the SCRAM principal can authenticate right
+// now, using the same wire path the suite exercises.
+func scramAuthenticates(t *testing.T) bool {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	endpoint, err := security.NewEndpoint(bootstrapHost, bootstrapPort)
+	if err != nil {
+		t.Fatalf("security.NewEndpoint: %v", err)
+	}
+	credential, err := security.NewCredential(
+		endpoint, scramIdentity, security.NewSecret(scramSecret))
+	if err != nil {
+		t.Fatalf("security.NewCredential: %v", err)
+	}
+
+	vantage, err := domain.NewLocalVantage("validation-host.svcdoctor.test")
+	if err != nil {
+		t.Fatalf("NewLocalVantage: %v", err)
+	}
+
+	result, err := app.DiagnoseKafka(ctx, app.KafkaParams{
+		Host: bootstrapHost, Port: bootstrapPort,
+		Mechanism:   scramMechanism,
+		Credential:  credential,
+		Resolver:    dns.SystemResolver{},
+		Dialer:      tcp.SystemDialer{},
+		TLS:         &transport.TLSOptions{RootCAs: caPool(t)},
+		StepTimeout: 5 * time.Second,
+		Vantage:     vantage,
+		Version:     "0.0.0-readiness",
+	})
+	if err != nil {
+		return false
+	}
+	for _, node := range result.Report().Graph().Nodes() {
+		if node.Step() == servicekafka.StepSASLAuthenticate {
+			return node.State() == domain.StatePass
+		}
+	}
+	return false
 }

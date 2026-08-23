@@ -6,7 +6,7 @@
 # verified TLS, so this is the only listener shape that reaches topology
 # discovery at all. See internal/adapter/kafka/metadata.go and ADR 0031.
 #
-#   EXTERNAL    localhost:N9092  SASL_SSL/PLAIN, what svcdoctor connects to
+#   EXTERNAL    localhost:N9092  SASL_SSL/PLAIN+SCRAM-SHA-256, what svcdoctor connects to
 #   INTERNAL    broker-N:9094    PLAINTEXT, inter-broker only
 #   CONTROLLER  broker-N:9093    PLAINTEXT, KRaft quorum
 #
@@ -27,8 +27,13 @@ x-broker: &broker
     KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:SASL_SSL,CONTROLLER:PLAINTEXT
     KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
     KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-    KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
-    KAFKA_LISTENER_NAME_EXTERNAL_SASL_ENABLED_MECHANISMS: PLAIN
+    # Both mechanisms on the one listener, so the SaslHandshake step has a real
+    # choice to negotiate and PLAIN coverage is not traded away for SCRAM
+    # coverage. Phase 6.2 added SCRAM-SHA-256; the credentials for it are not
+    # here, because KRaft stores SCRAM verifiers in the metadata log rather than
+    # in JAAS — see the scram-users step in the Makefile.
+    KAFKA_SASL_ENABLED_MECHANISMS: PLAIN,SCRAM-SHA-256
+    KAFKA_LISTENER_NAME_EXTERNAL_SASL_ENABLED_MECHANISMS: PLAIN,SCRAM-SHA-256
     KAFKA_SSL_KEYSTORE_TYPE: PKCS12
     KAFKA_SSL_TRUSTSTORE_TYPE: PKCS12
     KAFKA_SSL_KEYSTORE_LOCATION: /certs/broker.p12
