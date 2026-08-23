@@ -2,6 +2,39 @@
 
 ## Status
 
+**Accepted and implemented in Phase 6.4B.**
+
+`internal/render/terminal` carries the `outcome` and `topology` lines, the
+three-level tree §5 named as a design task, and the per-service table §5
+proposed. `schemaVersion` is unchanged, no Report field was added, and no
+`SummaryStatus` value was added.
+
+**Two things §5's "PostgreSQL output is byte-identical" got wrong**, and they are
+recorded here rather than quietly absorbed:
+
+1. **PostgreSQL's terminal output changes, on two lines per report.** The label
+   is `outcome`, not `session`. §2 decided exactly that — it generalized the
+   label and preserved the *wording* of the value — and the Consequences
+   section's "byte-identical" was about the wording, read as though it were about
+   the bytes. The second changed line is `status`, whose content is unchanged and
+   whose padding shifts because tabwriter sizes a column from its widest cell and
+   the value column now holds `session established` rather than `established`.
+   Every stage row, glyph, absence phrase, finding and other Result row is
+   unchanged, as is the canonical JSON. Measured against the released tree rather
+   than reasoned about.
+2. **The `reached` predicate could not be shared, and now has two
+   implementations.** This record says the count and ADR 0051's completeness rule
+   "share one implementation — `transportPath.reachedTransport` in
+   `internal/app/kafkacompleteness.go`". They cannot: depguard denies a renderer
+   the application, for reasons unrelated to this. `internal/render/terminal/topology.go`
+   carries the second, and the agreement between them is proven by test against
+   real composed runs in `test/security/kafka_render_correspondence_test.go`
+   rather than guaranteed by construction. **That test is load-bearing**: without
+   it the Result block could say `3 of 3 reached` on a run it also calls
+   INCOMPLETE.
+
+The original status line is preserved below.
+
 **Accepted. Not implemented — this is renderer vocabulary, and the Kafka renderer
 is Phase 6.4.**
 

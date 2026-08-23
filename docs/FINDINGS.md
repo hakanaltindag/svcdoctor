@@ -207,6 +207,26 @@ These rules exist to keep svcdoctor from producing confident, wrong answers.
 The shared theme: **"I could not measure it" and "it is broken" are different claims.**
 Collapsing them is the fastest way to make a diagnostic tool untrustworthy.
 
+### 4.1 The same discipline applies to presentation
+
+A renderer produces no findings, and it can still publish a claim nobody made. Three ways it
+has been caught trying, all now under test:
+
+- **An endpoint svcdoctor's own budget never measured is not one that refused.** The Kafka
+  `topology` line counts them separately — `2 of 3 advertised broker endpoints reached, 1 not
+  measured` — because without the second clause the first asserts a failure nobody observed.
+- **A step that was never timed is not one that took no time.** `domain.Elapsed` carries
+  whether a measurement was taken, and the terminal renderer renders an absence as an empty
+  cell and a measured zero as `0s`. Before it existed, both were the same blank column.
+- **A failed peer verification is not a rejected credential.** `AUTH_PEER_VERIFICATION_FAILED`
+  and `KAFKA_PEER_VERIFICATION_FAILED` are rendered as themselves. Translating either into
+  "wrong password" would send an operator to rotate a credential that is correct.
+
+A renderer also never *hides* a claim it did not expect. A node the service's journey does not
+place is rendered anyway — including beneath an advertised broker, where an authentication row
+would mean ADR 0050 had been broken upstream. Concealing that in the one output an operator
+reads is worse than reporting it.
+
 ## 5. First-broken-layer behavior
 
 The report must make the earliest evidenced failing layer obvious.

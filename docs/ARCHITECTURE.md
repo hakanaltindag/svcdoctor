@@ -1264,6 +1264,75 @@ Renderers do not:
 - discover secrets
 - interpret protocol semantics
 
+### 7.1 Elapsed time is a measurement or an absence, never a zero that means both
+
+`domain.Evidence` carries a `domain.Elapsed`, not a `time.Duration`. The type holds a
+duration and whether one was taken, and the zero value is *unmeasured*.
+
+Two different facts used to write zero into the same field. A step that never ran — a
+SKIPPED node, the requested-target anchor, an authentication svcdoctor declined to attempt —
+has no elapsed time. And a step that *was* timed can genuinely measure zero: a monotonic
+clock has a tick, and an operation completing inside one returns a zero interval. Measured
+on Apple Silicon, whose tick is about 41.67ns, a DNS lookup against an in-memory resolver
+returns zero often enough to make rendered output nondeterministic — which is exactly how
+the defect was found, as an `internal/cli` golden failing about one run in three.
+
+The terminal renderer distinguishes all three: a number, `0s`, and an empty cell. It is the
+same discipline ADR 0052 applies to outcomes — `not measured` is never collapsed into
+another outcome — one layer below the outcome vocabulary.
+
+**`schemaVersion` 1 does not carry the distinction, and that is deliberate.** `duration` has
+been a required string on every node since Phase 1, and an unmeasured step has always
+encoded as `"0s"`. Carrying the presence bit into the canonical JSON would mean omitting the
+field or adding a second one, and both change what a released v0.1 consumer reads. The
+distinction is a domain fact consumed by renderers; the bytes are unchanged.
+
+### 7.2 The tree has three levels, and the third one is a security boundary
+
+```text
+target        the requested name and its resolution
+  path        one concrete address the operator's endpoint resolved to
+    stage     what was measured over it
+advertised    one endpoint the cluster named
+  path        one concrete address that name resolved to
+    stage     what was measured over it
+```
+
+The two `path` levels look alike and mean different things. A bootstrap path is an address
+for the endpoint the operator asked about; an advertised path is an address for an endpoint
+a peer named, which svcdoctor measures at transport and never authenticates (ADR 0050).
+Rendering them as siblings — which a renderer that promotes every `tcp.connect` does —
+presents a broker the operator has never heard of as one they asked about, and simultaneously
+pulls the same subtree into a bootstrap path's descendants so one measured endpoint appears
+twice in two different meanings.
+
+The grouping is structural: parent edges the producers wrote, never an identifier parse. An
+AST guard in `internal/render/terminal/boundary_test.go` enforces that, because the advertised
+sweep's identifiers happen to contain the word "advertised" and a substring test would work
+until an identifier scheme changed.
+
+An advertised path renders a **transport-only** journey. That is not a filter over rendered
+rows: a node the journey does not place is still shown, so an authentication node appearing
+beneath an advertisement would be visible rather than hidden. Concealing a security failure
+in the one output an operator reads is worse than reporting one.
+
+### 7.3 Service vocabulary is a table, not a branch
+
+`internal/render/terminal/service.go` maps a `domain.ServiceID` onto a journey, an advertised
+journey, the steps only the continued path can hold, the outcome step and its two phrasings,
+and the advertisement vocabulary. Everything else in the package is service-neutral.
+
+A `ServiceID` with no row gets the zero view, and every consumer of it is total on that: an
+empty journey renders whatever nodes a path holds, an empty outcome step renders no outcome
+line, and an empty advertisement step means the graph has no topology level. A service
+arriving before its table renders slightly ugly and completely truthful output rather than
+none.
+
+The Result block's four lines — `status`, `outcome`, `topology`, `execution` — are
+independent axes and none is derived from another (ADR 0052 §6). `outcome` generalized the
+label `session` so that Kafka's terminal fact has somewhere truthful to go; PostgreSQL's
+*value* is unchanged.
+
 ## 8. Service extensibility
 
 New services are registered explicitly at a single composition root. There is no central

@@ -50,6 +50,28 @@ policy having one everywhere.
 It is service-neutral and applies to PostgreSQL, Kafka and every service after
 them.
 
+## Enforcement status after Phase 6.4C
+
+**Kafka became product-visible in Phase 6.4C, and the gate was re-run before the
+route was added rather than after.**
+
+At the point `svcdoctor diagnose kafka` was wired:
+
+- reachable unowned Kafka FAIL outcomes: **0**
+- `TestTheAuthorizedTableIsExactlyTheProducedOutcomes` (`internal/diagnosis/kafka`): passing
+- `TestExactlyOneProductionPackageReachesTheKafkaAdapter`: `internal/app` only
+- `TestTheCompositionWiresEveryOwnerOfWhatItCanProduce`: passing
+- `TestAtMostOneAuthenticationCallSiteExists`: passing
+- `TestRevealHasExactlyTwoProductionCallSites`: passing
+
+**The CLI does not import the adapter**, so exposing the command did not widen
+the set of packages from which a Kafka outcome is reachable. It builds
+`app.KafkaParams` and calls one function. The `cli-composes-and-does-not-conclude`
+depguard rule still denies `internal/adapter/kafka` from `internal/cli`; its
+*reason* changed in Phase 6.4C — from "no Kafka composition exists" to "a
+mechanism name is a string on the wire, and reaching for the adapter's constant
+would put the protocol in the CLI" — and the denial did not.
+
 ## Problem
 
 PostgreSQL BASIC needed several closure phases, and the failures they closed were
