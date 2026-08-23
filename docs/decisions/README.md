@@ -502,6 +502,25 @@ A deferral is a decision too, and each names the condition that should reopen it
   exit 0 is the only way to ask what a broker offers. `--user` is required with a credential
   source and refused without one, because Kafka's identity travels only inside SASL.
 
+- **[0058](0058-tls-trust-and-peer-identity-authority.md) — Trust answers "whose certificate
+  is this"; identity answers "is it the peer I meant".** Both must hold, and a trusted chain
+  with the wrong identity is never a verified peer. A supplied `--tls-ca-file` **replaces** the
+  system trust store, because augmentation cannot express "only this issuer is acceptable here"
+  and still passes a run configured with the wrong CA. Identity is `--host` unless
+  `--tls-server-name` overrides it, and **DNS resolution never changes it** — the identity
+  analogue of 0028's credential rule. The override drives verification *and* SNI, because in Go
+  they are one field, and it applies to the requested target only: Kafka brokers learned from
+  Metadata are verified against **their own advertised names**, since one name cannot truthfully
+  be the expected identity for both a bootstrap load balancer and three brokers with their own
+  certificates. So **discovery creates identity context and never credential authority** — an
+  advertised endpoint may present a perfectly valid certificate and still receives zero
+  credential bytes. IP SANs already verify with no flag and Go sends no SNI for an IP literal;
+  `CN` is never an identity and no exception will be added for one. `--tls-insecure` disables
+  identity verification and nothing else — notably not the credential policy, so it makes
+  authentication *not* happen. Go's version defaults are kept deliberately, so the evidence
+  describes the target rather than svcdoctor. A decision record: no production Go changed, and
+  three product gaps are recorded in §14 rather than repaired here.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention
