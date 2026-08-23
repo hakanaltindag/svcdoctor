@@ -14,27 +14,24 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
+	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
 
 // StepAPIVersions names the operation this adapter performs.
 //
-// It is exported because it is part of the report contract: the same string
-// appears in every report and will be matched by automation.
-const StepAPIVersions domain.Step = "kafka.api_versions"
+// Defined in the leaf vocabulary package and re-exported here, so every existing
+// reference, evidence identifier and serialized report is unchanged. It moved in
+// Phase 6.1c-P2, when internal/diagnosis/kafka became the second reader.
+const StepAPIVersions = servicekafka.StepAPIVersions
 
 // The attributes this adapter records.
 //
 // # Where these keys live
 //
-// They live here, with the code that produces them, and that is deliberate. A
-// future rule in internal/diagnosis/kafka will need them and cannot import this
-// package — depguard forbids diagnosis importing an adapter — so the keys will
-// have to move to a leaf both can import, most likely internal/service/kafka.
-//
-// That package is not created yet because it would have exactly one consumer
-// today, and a shared vocabulary invented before its second consumer exists is a
-// guess about what the second consumer needs. The move is mechanical when the
-// first Kafka rule is written. See docs/BACKLOG.md.
+// A key stays here, with the code that produces it, until something outside this
+// package reads it. Phase 6.1c-P2 made internal/diagnosis/kafka that reader for
+// two of them, so those two moved to the leaf vocabulary package and are
+// re-exported below; the rest have one consumer still and have not moved.
 const (
 	// AttrAPIVersions lists what the broker advertised, one API key per entry,
 	// formatted "<key>:<min>-<max>" and sorted by key.
@@ -51,12 +48,12 @@ const (
 
 	// AttrErrorCode is the broker's own error code for the exchange, always
 	// recorded, because zero is a statement rather than an absence.
-	AttrErrorCode domain.AttributeKey = "kafka.error_code"
+	AttrErrorCode = servicekafka.AttrErrorCode
 
 	// AttrRequestAPIVersion is the version of ApiVersions svcdoctor asked for.
 	// Without it an error code cannot be interpreted: the request is half of
 	// what produced the answer.
-	AttrRequestAPIVersion domain.AttributeKey = "kafka.request_api_version"
+	AttrRequestAPIVersion = servicekafka.AttrRequestAPIVersion
 )
 
 // errorCodeUnsupportedVersion is Kafka's UNSUPPORTED_VERSION.

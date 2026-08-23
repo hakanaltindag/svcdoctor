@@ -12,13 +12,14 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
+	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
 
 // StepSASLAuthenticate names the operation this step performs.
 //
 // It is exported for the reason the two steps before it are: the string appears
 // in every report and will be matched by automation.
-const StepSASLAuthenticate domain.Step = "kafka.sasl_authenticate"
+const StepSASLAuthenticate = servicekafka.StepSASLAuthenticate
 
 // The attributes authentication records. They live here for the reason given on
 // the ApiVersions keys, and they will move with those when the first Kafka
@@ -31,7 +32,7 @@ const (
 	// settled: it is the one the broker agreed to, carried on the session, and
 	// it is what an error code on this node has to be read against. One key,
 	// one meaning.
-	AttrSASLMechanism domain.AttributeKey = "kafka.sasl.mechanism"
+	AttrSASLMechanism = servicekafka.AttrSASLMechanism
 
 	// AttrSASLSessionLifetimeMs is how long the broker considers this
 	// authentication valid, in milliseconds, as the broker stated it.

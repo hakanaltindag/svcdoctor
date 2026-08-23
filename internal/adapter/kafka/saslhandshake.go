@@ -11,13 +11,14 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/kafka/wire"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe"
+	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
 
 // StepSASLHandshake names the operation this step performs.
 //
 // It is exported for the same reason StepAPIVersions is: the string appears in
 // every report and will be matched by automation.
-const StepSASLHandshake domain.Step = "kafka.sasl_handshake"
+const StepSASLHandshake = servicekafka.StepSASLHandshake
 
 // The attributes the handshake records. They live here for the reason given on
 // the ApiVersions keys, and they will move with those when the first Kafka
