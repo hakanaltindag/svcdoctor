@@ -454,6 +454,23 @@ A deferral is a decision too, and each names the condition that should reopen it
   **enforcement deferred**: the per-service closure test it specifies does not exist yet, and a
   static lint cannot do the job because reachability is not decidable from imports.
 
+- **[0055](0055-shared-scram-core-never-receives-plaintext.md) — The shared SCRAM core never
+  receives plaintext.** The Phase 6.2a security review, and it **rejected** the model
+  `docs/ARCHITECTURE.md` §5.8 had fixed in advance. Model A — plaintext as a short-lived
+  argument into a shared core — is survivable, adds zero copies, and was still refused: it
+  raises the number of packages that can observe a password from two to three, and every
+  guarantee it offers has the shape *"the core must not …"*, maintained by lint and review
+  forever. The adopted Model D gives the core a derivation callback instead, so it has no API
+  that could accept a password; the wire package keeps the plaintext and the `crypto/pbkdf2`
+  call, and only the SaltedPassword crosses — one principal on one target, not the operator's
+  reusable password. The core invokes the callback *after* validating the peer's iteration
+  count, which preserves ADR 0038 §16's adjacency across the new boundary. Cost measured
+  rather than asserted: about ten trivial lines per service, no duplicated cryptographic
+  construction. The review also found three things the plan lacked — `saslname` escaping is
+  new unvectored code because Kafka reads the username from `n=` where PostgreSQL sends it
+  empty, the two wire packages bound peer payloads eight times apart so the core must bound
+  itself, and Kafka has no `Reveal`-count guard. Implementation waits on Phase 6.2a-R2.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention
