@@ -325,13 +325,29 @@ func importsUnder(t *testing.T, root string) map[string][]string {
 	return out
 }
 
-// TestTheCompositionRootIsPostgreSQLOnly pins the scope ADR 0041 authorized.
+// TestTheCompositionRootKeepsItsServicesInSeparateFiles is what the
+// PostgreSQL-only guard became when Kafka composition landed.
 //
-// Phase 4.8b builds one concrete PostgreSQL run. It does not build a service
-// registry, a generic adapter interface or a Kafka composition — those are
-// Phase 5, and ADR 0009 declines the abstraction until two services prove a
-// shared contract rather than merely existing.
-func TestTheCompositionRootIsPostgreSQLOnly(t *testing.T) {
+// # Why the original assertion is gone, and what replaced it
+//
+// It asserted that no file in `internal/app` imports `adapter/kafka` or
+// `diagnosis/kafka`, because in Phase 4.8b Kafka composition did not exist and
+// ADR 0009 declines a service abstraction until two services prove a shared
+// contract. Phase 6.1c added `DiagnoseKafka`, so the literal assertion is now
+// false by design — and deleting it outright would have thrown away the
+// architecture property it was really protecting.
+//
+// **That property is separation, not absence.** ADR 0009 forbids central
+// service-conditional sprawl: what must never appear is a file that branches on
+// which service is being diagnosed, or a registry that dispatches between them.
+// Two concrete composition roots, one per service, in their own files, is
+// exactly the shape that record authorizes.
+//
+// So this now asserts the two things that still matter: PostgreSQL's files may
+// not reach Kafka's layers or the reverse, and neither may import the other's
+// service vocabulary. `select.go` and `target.go` are shared by both and hold
+// no service import at all, which the allowlist below encodes.
+func TestTheCompositionRootKeepsItsServicesInSeparateFiles(t *testing.T) {
 	root := filepath.Join(repoRoot(t), "internal", "app")
 
 	entries, err := os.ReadDir(root)
@@ -339,14 +355,31 @@ func TestTheCompositionRootIsPostgreSQLOnly(t *testing.T) {
 		t.Fatalf("reading the composition root: %v", err)
 	}
 
+	// Which service each production file is allowed to reach. A file absent from
+	// this map may reach neither, which is how the shared helpers stay shared.
+	owner := map[string]string{
+		"postgres.go":          "postgres",
+		"kafka.go":             "kafka",
+		"kafkacompleteness.go": "kafka",
+	}
+
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
 		}
+		allowed := owner[e.Name()]
 		for _, imported := range parseFile(t, filepath.Join(root, e.Name())).Imports {
 			path := strings.Trim(imported.Path.Value, `"`)
-			if strings.Contains(path, "adapter/kafka") || strings.Contains(path, "diagnosis/kafka") {
-				t.Errorf("%s imports %s; Kafka composition is not this phase", e.Name(), path)
+			for _, service := range []string{"kafka", "postgres"} {
+				serviceImport := strings.Contains(path, "adapter/"+service) ||
+					strings.Contains(path, "diagnosis/"+service) ||
+					strings.Contains(path, "service/"+service)
+				if serviceImport && service != allowed {
+					t.Errorf("%s imports %s.\n\n"+
+						"Each service is composed in its own file. A file that reached "+
+						"both would be where a service switch grows, which ADR 0009 "+
+						"refuses; a shared helper reaches neither.", e.Name(), path)
+				}
 			}
 		}
 	}
