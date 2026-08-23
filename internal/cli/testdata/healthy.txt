@@ -15,6 +15,6 @@ Findings
 
 Result
   status  OK  no target-side error was proven
-  session  established
+  outcome  session established
   execution  complete
   duration  <duration>

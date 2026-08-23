@@ -21,7 +21,7 @@ Findings
 
 Result
   status  PROBLEMS FOUND
-  session  NOT established
+  outcome  session NOT established
   execution  complete
   first break  L3  tls
   duration  <duration>

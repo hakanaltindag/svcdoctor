@@ -27,7 +27,7 @@ Findings
 
 Result
   status  PROBLEMS FOUND
-  session  established
+  outcome  session established
   execution  complete
   first break  L4  protocol
   duration  <duration>

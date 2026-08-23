@@ -42,7 +42,7 @@ func report(t *testing.T) domain.Report {
 		Step:      "dns.lookup",
 		State:     domain.StatePass,
 		StartedAt: time.Unix(0, 0).UTC(),
-		Duration:  time.Millisecond,
+		Elapsed:   domain.Measured(time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence: %v", err)

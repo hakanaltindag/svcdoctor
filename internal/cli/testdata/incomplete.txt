@@ -15,6 +15,6 @@ Findings
 
 Result
   status  OK  no target-side error was proven
-  session  NOT established
+  outcome  session NOT established
   execution  INCOMPLETE  svcdoctor did not finish the intended measurement
   duration  <duration>

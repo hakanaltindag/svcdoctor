@@ -2,29 +2,10 @@ package terminal
 
 import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
-
-// journey is the order a reader expects the stages in.
-//
-// It is the client journey, not the graph's own shape: a person reading a
-// diagnosis follows *what svcdoctor tried to do*, and the graph's parent edges
-// happen to agree because the run really did proceed in this order. The TLS
-// handshake sits after the negotiation that caused it, which is the edge
-// internal/adapter/postgres records and the reason ADR 0044 owns that node.
-//
-// The list contains only the per-path stages. `target.requested` is the header
-// and `dns.lookup` belongs to the logical target, so both are rendered above the
-// paths rather than inside one.
-var journey = []domain.Step{
-	vocabulary.StepTCPConnect,
-	servicepostgres.StepSSLRequest,
-	vocabulary.StepTLSHandshake,
-	servicepostgres.StepStartup,
-	servicepostgres.StepAuthentication,
-	servicepostgres.StepSession,
-}
 
 // labels maps a canonical step onto the words a person reads.
 //
@@ -54,6 +35,27 @@ var labels = map[domain.Step]string{
 	servicepostgres.StepStartup:        "Startup",
 	servicepostgres.StepAuthentication: "Authentication",
 	servicepostgres.StepSession:        "Session",
+
+	// Kafka, per ADR 0052 section 5. Each names the exchange that happened and
+	// claims nothing beyond it.
+	//
+	// "Kafka API versions" rather than "capabilities": the exchange returns the
+	// broker's supported API key ranges, and a broker answers it *before*
+	// authentication by design, so it proves that something here speaks the
+	// Kafka protocol and nothing about who svcdoctor is.
+	//
+	// "SASL mechanism negotiation" rather than "SASL handshake": the request
+	// proposes one mechanism and the answer says whether the endpoint offers it.
+	// It carries no identity and no secret, and calling it a handshake invites a
+	// reader to think authentication began.
+	//
+	// "Kafka metadata" rather than "Cluster metadata" or "Topology": the request
+	// is Metadata v1 with `Topics = []`.
+	servicekafka.StepAPIVersions:      "Kafka API versions",
+	servicekafka.StepSASLHandshake:    "SASL mechanism negotiation",
+	servicekafka.StepSASLAuthenticate: "Authentication",
+	servicekafka.StepMetadata:         "Kafka metadata",
+	servicekafka.StepBrokerAdvertised: "Broker advertisement",
 }
 
 // stepLabel returns the human label for a step, or the step itself.
