@@ -124,8 +124,12 @@ func TestAppHealthyRun(t *testing.T) {
 	result := runApp(t, runParams(t, scramRole, scramPassword, database))
 	report := result.Report()
 
+	// `dns.lookup` is deliberately absent: pgHost is an address literal, so this
+	// run resolved nothing and records nothing about resolution (ADR 0059). The
+	// resolving shape is covered by TestAppResolvesAHostname below, and the
+	// absence is asserted rather than assumed by TestAppSkipsResolutionForALiteral.
 	for _, step := range []domain.Step{
-		"dns.lookup", "tcp.connect", servicepostgres.StepSSLRequest, "tls.handshake",
+		"tcp.connect", servicepostgres.StepSSLRequest, "tls.handshake",
 		servicepostgres.StepStartup, servicepostgres.StepAuthentication,
 		servicepostgres.StepSession,
 	} {
@@ -829,15 +833,27 @@ func TestAppRecordsTheRequestedTargetAnchor(t *testing.T) {
 	}
 
 	// The requested sweep declares its cause.
-	lookups := nodesAt(report, vocabulary.StepDNSLookup)
-	if len(lookups) != 1 {
-		t.Fatalf("got %d lookups, want 1", len(lookups))
+	//
+	// pgHost is an address literal, so the sweep has no L1 node and the
+	// connection carries the derivation edge instead (ADR 0059). The property
+	// under test is the edge, not which node holds it, so the root is read off
+	// the anchor rather than searched for by step.
+	roots := graph.Children(anchor.ID())
+	if len(roots) != 1 {
+		t.Fatalf("anchor children = %v, want exactly one sweep root", roots)
 	}
-	parents := graph.Parents(lookups[0].ID())
-	if len(parents) != 1 || parents[0] != anchor.ID() {
-		t.Fatalf("lookup parents = %v, want exactly [%s]", parents, anchor.ID())
+	root, ok := graph.Node(roots[0])
+	if !ok {
+		t.Fatalf("the graph does not hold %s", roots[0])
 	}
-	t.Logf("requested sweep = %s, parent = %s", lookups[0].ID(), parents[0])
+	if root.Step() != vocabulary.StepTCPConnect {
+		t.Fatalf("the sweep root is %s, want %s for a literal target",
+			root.Step(), vocabulary.StepTCPConnect)
+	}
+	if lookups := nodesAt(report, vocabulary.StepDNSLookup); len(lookups) != 0 {
+		t.Fatalf("a literal target produced %d lookups, want 0", len(lookups))
+	}
+	t.Logf("requested sweep = %s, parent = %s", root.ID(), anchor.ID())
 
 	// The concrete path count is what was actually measured, not what the anchor
 	// suggests: one anchor, N paths.
@@ -848,8 +864,8 @@ func TestAppRecordsTheRequestedTargetAnchor(t *testing.T) {
 	}
 	for _, c := range connects {
 		cp := graph.Parents(c.ID())
-		if len(cp) != 1 || cp[0] != lookups[0].ID() {
-			t.Errorf("connect %s parents = %v, want the requested lookup", c.ID(), cp)
+		if len(cp) != 1 || cp[0] != anchor.ID() {
+			t.Errorf("connect %s parents = %v, want the anchor %s", c.ID(), cp, anchor.ID())
 		}
 	}
 

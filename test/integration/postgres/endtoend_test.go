@@ -56,7 +56,11 @@ func TestEndToEndHealthySession(t *testing.T) {
 	o := run(t, healthy())
 
 	// The real chain, by step and state.
-	o.requireState(t, "dns.lookup", domain.StatePass, domain.FailureNone)
+	//
+	// No `dns.lookup`: pgHost is an address literal and this run resolved
+	// nothing (ADR 0059). TestEndToEndResolvesAHostname covers the other shape
+	// against the same server.
+	o.requireAbsent(t, "dns.lookup")
 	o.requireState(t, "tcp.connect", domain.StatePass, domain.FailureNone)
 	o.requireState(t, servicepostgres.StepSSLRequest, domain.StatePass, domain.FailureNone)
 	o.requireState(t, "tls.handshake", domain.StatePass, domain.FailureNone)
@@ -71,8 +75,10 @@ func TestEndToEndHealthySession(t *testing.T) {
 	}
 
 	// The topology, walked structurally rather than by parsing identifiers.
+	// The chain starts at the connection: this run's target is an address, so no
+	// L1 node exists to start from (ADR 0059).
 	o.requireParentChain(t, []domain.Step{
-		"dns.lookup", "tcp.connect", servicepostgres.StepSSLRequest, "tls.handshake",
+		"tcp.connect", servicepostgres.StepSSLRequest, "tls.handshake",
 		servicepostgres.StepStartup, servicepostgres.StepAuthentication,
 		servicepostgres.StepSession,
 	})
