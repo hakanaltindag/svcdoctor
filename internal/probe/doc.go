@@ -7,8 +7,18 @@
 //
 // # What belongs here
 //
-// A rule that would be wrong if two probes implemented it differently. Today that
-// is exactly one thing: how an evidence identifier is built (ADR 0019).
+// A rule that would be wrong if two probes implemented it differently, or if a
+// probe and the layer that feeds it disagreed about the same input. Today that is
+// two things:
+//
+//   - how an evidence identifier is built (ADR 0019);
+//   - what an operator's host string *is* — a name to resolve or an address
+//     literal already in hand — and what its canonical spelling is (ADR 0059).
+//
+// The second is here for the same reason as the first. Input normalization, the
+// transport chain and the credential binding key each need that answer, and three
+// implementations of "is this an IP" produce a report whose anchor, connection
+// subject and credential endpoint name three different things. See Host.
 //
 // # What must never be put here
 //
