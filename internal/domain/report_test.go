@@ -65,7 +65,7 @@ func fixtureGraph(t *testing.T) Graph {
 			State:        state,
 			FailureClass: failure,
 			StartedAt:    testStart,
-			Duration:     12 * time.Millisecond,
+			Elapsed:      Measured(12 * time.Millisecond),
 		})
 		if err != nil {
 			t.Fatalf("NewEvidence(%q): %v", id, err)

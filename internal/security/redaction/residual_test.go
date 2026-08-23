@@ -67,7 +67,7 @@ func plantedReport(t *testing.T, subjectRef, attrHost, prose string, id domain.E
 	evidence, err := domain.NewEvidence(domain.EvidenceInput{
 		ID: id, Subject: mustEndpointSubject(t, subjectRef),
 		Layer: domain.LayerTCP, Step: mustStep(t, "probe.step"), State: domain.StatePass,
-		Attributes: attrs, StartedAt: testStart, Duration: time.Millisecond,
+		Attributes: attrs, StartedAt: testStart, Elapsed: domain.Measured(time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence: %v", err)

@@ -269,8 +269,10 @@ func TestTLSIsSkippedAfterTCPFailure(t *testing.T) {
 	if skipped.AttributeCount() != 0 {
 		t.Error("a step that never ran must not carry observations")
 	}
-	if skipped.Duration() != 0 {
-		t.Errorf("duration = %s, want 0 for a step that never ran", skipped.Duration())
+	// Not "zero", which is a measurement a real step can produce. A step that
+	// never ran timed nothing at all, and domain.Elapsed keeps the two apart.
+	if skipped.Elapsed().IsMeasured() {
+		t.Error("a step that never ran carries a measurement")
 	}
 }
 

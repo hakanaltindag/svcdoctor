@@ -149,7 +149,7 @@ func Startup(
 		FailureClass: failure,
 		Attributes:   startupAttributes(params, auth, fields, err == nil),
 		StartedAt:    startedAt,
-		Duration:     duration,
+		Elapsed:      domain.Measured(duration),
 	})
 	if buildErr != nil {
 		_ = conn.Close()
@@ -373,7 +373,7 @@ func recordSkippedStartup(
 			AttrRole: domain.IdentityAttr(params.User),
 		},
 		StartedAt: time.Now(),
-		Duration:  0,
+		Elapsed:   domain.Unmeasured(),
 	})
 	if err != nil {
 		return fmt.Errorf("building skipped %s evidence: %w", StepStartup, err)

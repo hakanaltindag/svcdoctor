@@ -117,8 +117,12 @@ func TestVerifiedHandshake(t *testing.T) {
 	if e.StartedAt().Before(before.UTC().Add(-time.Second)) {
 		t.Errorf("startedAt = %s, want at or after %s", e.StartedAt(), before)
 	}
-	if e.Duration() < 0 {
-		t.Errorf("duration = %s, want non-negative", e.Duration())
+	d, measured := e.Elapsed().Duration()
+	if !measured {
+		t.Error("a handshake that ran recorded no measurement")
+	}
+	if d < 0 {
+		t.Errorf("duration = %s, want non-negative", d)
 	}
 	if !r.Connected() {
 		t.Error("a successful handshake produced no transferable connection")

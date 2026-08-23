@@ -452,7 +452,7 @@ func unsupportedMechanismEvidence(session *HandshakeSession) (domain.Evidence, e
 			AttrSASLMechanism: domain.StringAttr(session.Mechanism()),
 		},
 		StartedAt: time.Now(),
-		Duration:  0,
+		Elapsed:   domain.Unmeasured(),
 	})
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf(
@@ -552,7 +552,7 @@ func missingInputEvidence(session *HandshakeSession) (domain.Evidence, error) {
 			AttrSASLMechanism: domain.StringAttr(session.Mechanism()),
 		},
 		StartedAt: time.Now(),
-		Duration:  0,
+		Elapsed:   domain.Unmeasured(),
 	})
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf(
@@ -634,7 +634,7 @@ func refusalEvidence(session *HandshakeSession) (domain.Evidence, error) {
 			AttrSASLMechanism: domain.StringAttr(session.Mechanism()),
 		},
 		StartedAt: time.Now(),
-		Duration:  0,
+		Elapsed:   domain.Unmeasured(),
 	})
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf("building skipped %s evidence: %w", StepSASLAuthenticate, err)
@@ -725,7 +725,7 @@ func (o authObservation) evidence(session *HandshakeSession) (domain.Evidence, e
 		FailureClass: failureClass,
 		Attributes:   o.attributes(session.Mechanism()),
 		StartedAt:    o.startedAt,
-		Duration:     o.duration,
+		Elapsed:      domain.Measured(o.duration),
 	})
 }
 

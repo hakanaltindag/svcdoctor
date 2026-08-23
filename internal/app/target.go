@@ -116,9 +116,11 @@ func recordRequestedTarget(
 		FailureClass: domain.FailureNone,
 		StartedAt:    at,
 		// The run has not measured anything yet, so there is no elapsed time to
-		// report. Zero is the truthful duration of accepting an input, not a
-		// missing value.
-		Duration: 0,
+		// report. This is the anchor's whole point: it records what was asked
+		// for, and asking is not an operation with a duration. Before the
+		// Elapsed type it wrote a zero that a reader could not tell from an
+		// instantaneous measurement.
+		Elapsed: domain.Unmeasured(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("building %s evidence: %w", vocabulary.StepTargetRequested, err)

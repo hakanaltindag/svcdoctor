@@ -19,7 +19,7 @@ func evidenceAt(t *testing.T, id string, state State) Evidence {
 		Step:      mustStep(t, "dns.lookup"),
 		State:     state,
 		StartedAt: testStart,
-		Duration:  time.Millisecond,
+		Elapsed:   Measured(time.Millisecond),
 	}
 	switch state {
 	case StateFail:

@@ -161,8 +161,10 @@ func TestRefusalRecordsOnlyWhatIsTrueWhenNothingWasSent(t *testing.T) {
 			t.Errorf("a refusal records %s, which asserts a request was made and answered", key)
 		}
 	}
-	if got := evidence.Duration(); got != 0 {
-		t.Errorf("duration = %s, want 0: nothing ran", got)
+	// Not "zero": a zero-length measurement is something a real exchange can
+	// produce. Nothing ran here, so nothing was timed at all.
+	if evidence.Elapsed().IsMeasured() {
+		t.Error("nothing ran, yet the node carries a measurement")
 	}
 }
 

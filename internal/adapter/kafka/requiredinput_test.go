@@ -136,8 +136,10 @@ func TestMissingInputEvidenceShape(t *testing.T) {
 	if got := evidence.Layer(); got != domain.LayerAuth {
 		t.Errorf("layer = %s, want auth", got)
 	}
-	if got := evidence.Duration(); got != 0 {
-		t.Errorf("duration = %s, want 0: nothing was attempted", got)
+	// Not "zero": a zero-length measurement is something a real exchange can
+	// produce. Nothing ran here, so nothing was timed at all.
+	if evidence.Elapsed().IsMeasured() {
+		t.Error("nothing was attempted, yet the node carries a measurement")
 	}
 	if got := evidence.Subject().Ref(); got != "10.0.0.1:9092" {
 		t.Errorf("subject = %q, want the concrete peer the session ran against", got)

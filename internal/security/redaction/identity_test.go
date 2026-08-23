@@ -718,7 +718,7 @@ func replaceNodeAttributes(
 		FailureClass: node.FailureClass(),
 		Attributes:   attrs,
 		StartedAt:    node.StartedAt(),
-		Duration:     node.Duration(),
+		Elapsed:      node.Elapsed(),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence: %v", err)

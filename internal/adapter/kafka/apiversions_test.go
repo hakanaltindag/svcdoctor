@@ -57,8 +57,8 @@ func TestApiVersionsEvidenceContract(t *testing.T) {
 	if evidence.StartedAt().Before(before.UTC().Add(-time.Second)) {
 		t.Errorf("startedAt = %s, want at or after %s", evidence.StartedAt(), before)
 	}
-	if evidence.Duration() < 0 {
-		t.Errorf("duration = %s, want non-negative", evidence.Duration())
+	if d, measured := evidence.Elapsed().Duration(); !measured || d < 0 {
+		t.Errorf("elapsed = (%s, %t), want a non-negative measurement", d, measured)
 	}
 	if len(result.Sessions()) != 1 {
 		t.Errorf("sessions = %d, want 1", len(result.Sessions()))

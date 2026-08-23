@@ -485,7 +485,7 @@ func (o metadataObservation) evidence(
 		FailureClass: failureClass,
 		Attributes:   o.attributes(advertisements, unrepresentable),
 		StartedAt:    o.startedAt,
-		Duration:     o.duration,
+		Elapsed:      domain.Measured(o.duration),
 	})
 }
 
@@ -653,6 +653,6 @@ func (a advertisement) evidence(
 			AttrBrokerAdvertisedPort: domain.IntAttr(int64(a.rawPort)),
 		},
 		StartedAt: observedAt,
-		Duration:  0,
+		Elapsed:   domain.Unmeasured(),
 	})
 }

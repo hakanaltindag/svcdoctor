@@ -73,7 +73,7 @@ func (g *graphOf) add(
 	evidence, err := domain.NewEvidence(domain.EvidenceInput{
 		ID: id, Subject: subject, Layer: layer, Step: step,
 		State: state, FailureClass: class,
-		StartedAt: time.Now(), Duration: 0,
+		StartedAt: time.Now(), Elapsed: domain.Unmeasured(),
 	})
 	if err != nil {
 		g.t.Fatalf("NewEvidence(%s, %s, %s): %v", step, state, class, err)

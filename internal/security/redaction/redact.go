@@ -280,7 +280,10 @@ func redactEvidence(t *table, e domain.Evidence) (domain.Evidence, error) {
 		FailureClass: e.FailureClass(),
 		Attributes:   attributes,
 		StartedAt:    e.StartedAt(),
-		Duration:     e.Duration(),
+		// Carried through verbatim. Redaction removes identity; it does not
+		// re-time anything, and turning a measured step into an unmeasured one
+		// would be a shareable report making a weaker claim than the run did.
+		Elapsed: e.Elapsed(),
 	})
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf("%w: rebuilding evidence: %w", ErrRedaction, err)

@@ -162,8 +162,12 @@ func TestConnectEvidenceContract(t *testing.T) {
 	if e.StartedAt().Location() != time.UTC {
 		t.Errorf("startedAt location = %s, want UTC", e.StartedAt().Location())
 	}
-	if e.Duration() < 0 {
-		t.Errorf("duration = %s, want non-negative", e.Duration())
+	d, measured := e.Elapsed().Duration()
+	if !measured {
+		t.Error("a connection attempt that ran recorded no measurement")
+	}
+	if d < 0 {
+		t.Errorf("duration = %s, want non-negative", d)
 	}
 }
 

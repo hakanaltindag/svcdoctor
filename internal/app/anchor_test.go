@@ -181,6 +181,13 @@ func TestTheAnchorHasTheShapeADR0042Fixed(t *testing.T) {
 	if blockers := graph.BlockedBy(anchor.ID()); len(blockers) != 0 {
 		t.Errorf("anchor is blocked by %v, want nothing", blockers)
 	}
+	// **It is the only node in a graph that is not a measurement** (ADR 0042
+	// section 1), and domain.Elapsed is where that stops being a comment. A
+	// measured zero here would claim svcdoctor timed the act of accepting an
+	// input, which is not an operation with a duration.
+	if anchor.Elapsed().IsMeasured() {
+		t.Error("the anchor carries a measurement: accepting an input is not a timed step")
+	}
 }
 
 // TestTheRequestedSweepIsADirectChildOfTheAnchor is the invariant a future

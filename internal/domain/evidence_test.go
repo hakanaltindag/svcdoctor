@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -21,7 +22,7 @@ func validInput(t *testing.T) EvidenceInput {
 		Step:      mustStep(t, "dns.lookup"),
 		State:     StatePass,
 		StartedAt: testStart,
-		Duration:  12 * time.Millisecond,
+		Elapsed:   Measured(12 * time.Millisecond),
 	}
 }
 
@@ -58,8 +59,8 @@ func TestNewEvidenceAccessors(t *testing.T) {
 	if !e.StartedAt().Equal(testStart) {
 		t.Errorf("StartedAt() = %s, want %s", e.StartedAt(), testStart)
 	}
-	if e.Duration() != 12*time.Millisecond {
-		t.Errorf("Duration() = %s, want 12ms", e.Duration())
+	if d, measured := e.Elapsed().Duration(); !measured || d != 12*time.Millisecond {
+		t.Errorf("Elapsed() = (%s, %t), want (12ms, true)", d, measured)
 	}
 	if e.AttributeCount() != 2 {
 		t.Errorf("AttributeCount() = %d, want 2", e.AttributeCount())
@@ -98,7 +99,7 @@ func TestNewEvidenceRejectsInvalidFields(t *testing.T) {
 			in.FailureClass = FailureClass(200)
 		}},
 		{"zero start time", func(in *EvidenceInput) { in.StartedAt = time.Time{} }},
-		{"negative duration", func(in *EvidenceInput) { in.Duration = -time.Second }},
+		{"negative duration", func(in *EvidenceInput) { in.Elapsed = Measured(-time.Second) }},
 		{"invalid attribute key", func(in *EvidenceInput) {
 			in.Attributes = map[AttributeKey]AttrValue{"DNS.RCode": StringAttr("NOERROR")}
 		}},
@@ -293,12 +294,50 @@ func TestEvidenceDropsMonotonicReading(t *testing.T) {
 	}
 }
 
-func TestZeroDurationIsAccepted(t *testing.T) {
-	in := validInput(t)
-	in.Duration = 0
+// TestBothZeroElapsedFormsAreAccepted pins that a measured zero and an absent
+// measurement are each valid, and are each preserved as themselves.
+//
+// This is the whole reason Elapsed exists. A monotonic clock has a tick, and an
+// operation completing inside one measures zero — a real result. A step that
+// never ran measures nothing. Before Elapsed both wrote zero into a bare
+// time.Duration and no consumer could separate them.
+func TestBothZeroElapsedFormsAreAccepted(t *testing.T) {
+	tests := []struct {
+		name         string
+		elapsed      Elapsed
+		wantMeasured bool
+	}{
+		{"measured zero", Measured(0), true},
+		{"unmeasured", Unmeasured(), false},
+		{"the zero Elapsed is unmeasured", Elapsed{}, false},
+	}
 
-	if _, err := NewEvidence(in); err != nil {
-		t.Fatalf("a zero duration should be accepted: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := validInput(t)
+			in.Elapsed = tt.elapsed
+
+			e, err := NewEvidence(in)
+			if err != nil {
+				t.Fatalf("NewEvidence: %v", err)
+			}
+			d, measured := e.Elapsed().Duration()
+			if measured != tt.wantMeasured {
+				t.Errorf("measured = %t, want %t", measured, tt.wantMeasured)
+			}
+			if d != 0 {
+				t.Errorf("duration = %s, want 0", d)
+			}
+			// schemaVersion 1 encodes both as "0s". That is the released
+			// contract and the reason the distinction stops at the domain.
+			encoded, err := e.MarshalJSON()
+			if err != nil {
+				t.Fatalf("MarshalJSON: %v", err)
+			}
+			if !bytes.Contains(encoded, []byte(`"duration":"0s"`)) {
+				t.Errorf("canonical JSON changed: %s", encoded)
+			}
+		})
 	}
 }
 
@@ -363,7 +402,7 @@ func TestEvidenceJSONFailing(t *testing.T) {
 	in.Subject = mustEndpointSubject(t, "broker-2.internal:9092")
 	in.State = StateFail
 	in.FailureClass = FailureDNSNXDomain
-	in.Duration = 250 * time.Millisecond
+	in.Elapsed = Measured(250 * time.Millisecond)
 
 	e, err := NewEvidence(in)
 	if err != nil {

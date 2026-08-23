@@ -254,7 +254,7 @@ func (o handshakeObservation) evidence(
 		FailureClass: failureClass,
 		Attributes:   o.attributes(mechanism),
 		StartedAt:    o.startedAt,
-		Duration:     o.duration,
+		Elapsed:      domain.Measured(o.duration),
 	})
 }
 

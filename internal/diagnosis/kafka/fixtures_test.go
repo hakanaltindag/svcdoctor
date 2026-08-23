@@ -66,7 +66,7 @@ func (b *builder) node(
 		FailureClass: class,
 		Attributes:   attributes,
 		StartedAt:    origin.Add(time.Duration(b.seq) * time.Millisecond),
-		Duration:     time.Millisecond,
+		Elapsed:      domain.Measured(time.Millisecond),
 	})
 	if err != nil {
 		b.t.Fatalf("evidence %q: %v", id, err)

@@ -77,7 +77,7 @@ func mustEvidence(t *testing.T, s nodeSpec) domain.Evidence {
 		FailureClass: s.failure,
 		Attributes:   s.attrs,
 		StartedAt:    testStart,
-		Duration:     12 * time.Millisecond,
+		Elapsed:      domain.Measured(12 * time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence(%q): %v", s.id, err)
@@ -679,7 +679,7 @@ func TestDiagnosticSemanticsAreUnchanged(t *testing.T) {
 		if ln[i].Step() != sn[i].Step() {
 			t.Errorf("node %d step changed: %s -> %s", i, ln[i].Step(), sn[i].Step())
 		}
-		if !ln[i].StartedAt().Equal(sn[i].StartedAt()) || ln[i].Duration() != sn[i].Duration() {
+		if !ln[i].StartedAt().Equal(sn[i].StartedAt()) || ln[i].Elapsed() != sn[i].Elapsed() {
 			t.Errorf("node %d timing changed", i)
 		}
 		if ln[i].AttributeCount() != sn[i].AttributeCount() {

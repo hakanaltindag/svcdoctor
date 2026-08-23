@@ -338,7 +338,7 @@ func (o sessionObservation) evidence(session *AuthenticatedSession) (domain.Evid
 		FailureClass: failure,
 		Attributes:   o.attributes(),
 		StartedAt:    o.startedAt,
-		Duration:     o.duration,
+		Elapsed:      domain.Measured(o.duration),
 	})
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf("building %s evidence: %w", StepSession, err)

@@ -45,7 +45,7 @@ func mustEvidence(t *testing.T, id string, layer domain.Layer, state domain.Stat
 		State:        state,
 		FailureClass: failure,
 		StartedAt:    testStart,
-		Duration:     time.Millisecond,
+		Elapsed:      domain.Measured(time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence(%q): %v", id, err)

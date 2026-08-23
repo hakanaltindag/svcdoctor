@@ -215,7 +215,7 @@ func (o observation) evidence() (domain.Evidence, error) {
 		FailureClass: failureClass,
 		Attributes:   o.attributes(),
 		StartedAt:    o.startedAt,
-		Duration:     o.duration,
+		Elapsed:      domain.Measured(o.duration),
 	})
 }
 

@@ -349,7 +349,8 @@ func skippedEvidence(
 		State:        domain.StateSkipped,
 		FailureClass: failure,
 		StartedAt:    time.Now(),
-		Duration:     0,
+		// Nothing ran, so nothing was timed. Not a zero-length measurement.
+		Elapsed: domain.Unmeasured(),
 	})
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf("building skipped %s evidence: %w", step, err)

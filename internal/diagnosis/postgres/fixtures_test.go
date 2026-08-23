@@ -63,7 +63,7 @@ func (b *builder) add(spec nodeSpec) domain.EvidenceID {
 		FailureClass: spec.class,
 		Attributes:   spec.attrs,
 		StartedAt:    b.at,
-		Duration:     time.Millisecond,
+		Elapsed:      domain.Measured(time.Millisecond),
 	})
 	if err != nil {
 		b.t.Fatalf("evidence %q: %v", spec.id, err)

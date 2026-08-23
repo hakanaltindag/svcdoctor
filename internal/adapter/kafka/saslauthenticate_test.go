@@ -40,8 +40,8 @@ func TestAuthenticateEvidenceContract(t *testing.T) {
 	if evidence.StartedAt().Before(before.Add(-time.Second)) {
 		t.Errorf("startedAt = %s, want a time from this run", evidence.StartedAt())
 	}
-	if evidence.Duration() < 0 {
-		t.Errorf("duration = %s, want a non-negative measurement", evidence.Duration())
+	if d, measured := evidence.Elapsed().Duration(); !measured || d < 0 {
+		t.Errorf("elapsed = (%s, %t), want a non-negative measurement", d, measured)
 	}
 	if got := result.Evidence(); got != evidence.ID() {
 		t.Errorf("result names %s, want the node it recorded %s", got, evidence.ID())

@@ -1295,8 +1295,10 @@ func TestAZeroCredentialIsRecordedRatherThanRefused(t *testing.T) {
 	if got := node.AttributeCount(); got != 0 {
 		t.Errorf("node carries %d attributes, want 0", got)
 	}
-	if got := node.Duration(); got != 0 {
-		t.Errorf("duration = %s, want 0: no exchange ran", got)
+	// Not "zero": a zero-length measurement is something a real exchange can
+	// produce. No exchange ran here, so nothing was timed at all.
+	if node.Elapsed().IsMeasured() {
+		t.Error("a node for an exchange that never ran carries a measurement")
 	}
 }
 

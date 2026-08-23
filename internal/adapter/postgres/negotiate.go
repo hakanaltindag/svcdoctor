@@ -134,7 +134,7 @@ func negotiateSkipped(
 			AttrTLSPlan: domain.StringAttr(params.TLS.String()),
 		},
 		StartedAt: time.Now(),
-		Duration:  0,
+		Elapsed:   domain.Unmeasured(),
 	})
 	if err != nil {
 		_ = conn.Close()
@@ -192,7 +192,7 @@ func negotiateTLS(
 		FailureClass: failure,
 		Attributes:   attributes,
 		StartedAt:    startedAt,
-		Duration:     duration,
+		Elapsed:      domain.Measured(duration),
 	})
 	if buildErr != nil {
 		_ = conn.Close()
@@ -352,7 +352,7 @@ func recordSkippedTLS(builder *domain.GraphBuilder, t target, blocker domain.Evi
 		State:        domain.StateSkipped,
 		FailureClass: domain.FailureExecSkippedPrerequisiteFailed,
 		StartedAt:    time.Now(),
-		Duration:     0,
+		Elapsed:      domain.Unmeasured(),
 	})
 	if err != nil {
 		return fmt.Errorf("building skipped %s evidence: %w", probetls.StepHandshake, err)

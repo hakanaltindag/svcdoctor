@@ -410,7 +410,7 @@ func (o authObservation) evidence(result *StartupResult) (domain.Evidence, error
 		FailureClass: failure,
 		Attributes:   o.attributes(),
 		StartedAt:    o.startedAt,
-		Duration:     o.duration,
+		Elapsed:      domain.Measured(o.duration),
 	})
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf("building %s evidence: %w", StepAuthentication, err)
@@ -724,7 +724,7 @@ func refusalEvidence(
 		FailureClass: failure,
 		Attributes:   attributes,
 		StartedAt:    time.Now(),
-		Duration:     0,
+		Elapsed:      domain.Unmeasured(),
 	})
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf(

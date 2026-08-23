@@ -43,8 +43,12 @@ type EvidenceInput struct {
 	// StartedAt is when the step began. Required, and normalized to UTC.
 	StartedAt time.Time
 
-	// Duration is how long the step took. Must not be negative.
-	Duration time.Duration
+	// Elapsed is how long the step took, or the recorded fact that nothing was
+	// timed. A measured duration must not be negative.
+	//
+	// The zero value is Unmeasured, so a producer that records no measurement
+	// says so rather than claiming an instantaneous step. See Elapsed.
+	Elapsed Elapsed
 }
 
 // Evidence is one normalized, service-neutral diagnostic fact.
@@ -83,7 +87,7 @@ type Evidence struct {
 	failureClass FailureClass
 	attributes   map[AttributeKey]AttrValue
 	startedAt    time.Time
-	duration     time.Duration
+	elapsed      Elapsed
 }
 
 // NewEvidence validates in and returns the resulting Evidence.
@@ -135,8 +139,8 @@ func NewEvidence(in EvidenceInput) (Evidence, error) {
 	if in.StartedAt.IsZero() {
 		return Evidence{}, fmt.Errorf("%w: evidence requires a start time", ErrInvalidValue)
 	}
-	if in.Duration < 0 {
-		return Evidence{}, fmt.Errorf("%w: duration %s must not be negative", ErrInvalidValue, in.Duration)
+	if d, measured := in.Elapsed.Duration(); measured && d < 0 {
+		return Evidence{}, fmt.Errorf("%w: duration %s must not be negative", ErrInvalidValue, d)
 	}
 
 	attributes, err := copyAttributes(in.Attributes)
@@ -156,7 +160,7 @@ func NewEvidence(in EvidenceInput) (Evidence, error) {
 		// encodes identically wherever it was produced, and drops the monotonic
 		// reading, which is meaningless once serialized.
 		startedAt: in.StartedAt.UTC(),
-		duration:  in.Duration,
+		elapsed:   in.Elapsed,
 	}, nil
 }
 
@@ -177,6 +181,15 @@ func copyAttributes(in map[AttributeKey]AttrValue) (map[AttributeKey]AttrValue, 
 		out[key] = value
 	}
 	return out, nil
+}
+
+// elapsedForJSON renders the duration schemaVersion 1 requires.
+//
+// An unmeasured step yields the zero duration, which is what every SKIPPED node
+// has encoded since the schema was written. See MarshalJSON.
+func (e Evidence) elapsedForJSON() string {
+	d, _ := e.elapsed.Duration()
+	return d.String()
 }
 
 // ID returns the identifier of this node.
@@ -201,8 +214,13 @@ func (e Evidence) FailureClass() FailureClass { return e.failureClass }
 // StartedAt returns when the step began, in UTC.
 func (e Evidence) StartedAt() time.Time { return e.startedAt }
 
-// Duration returns how long the step took.
-func (e Evidence) Duration() time.Duration { return e.duration }
+// Elapsed returns how long the step took, or the fact that nothing was timed.
+//
+// It replaced a bare Duration accessor deliberately. A caller reading a plain
+// time.Duration could not tell an instantaneous step from one that never ran,
+// and every consumer silently picked one meaning; the comma-ok shape on
+// Elapsed.Duration makes the question unavoidable.
+func (e Evidence) Elapsed() Elapsed { return e.elapsed }
 
 // IsZero reports whether e is the invalid zero Evidence.
 func (e Evidence) IsZero() bool { return e.id == "" && e.subject.IsZero() }
@@ -280,6 +298,17 @@ type evidenceJSON struct {
 //
 // Durations use Go duration syntax such as "12ms", matching DurationAttr, so
 // that the same quantity is written the same way everywhere in a report.
+//
+// # An unmeasured step encodes as "0s", and that is schemaVersion 1's contract
+//
+// `duration` has been a required string on every node since Phase 1, and a node
+// that timed nothing has always written "0s" into it. Adding the measured/
+// unmeasured distinction to the canonical JSON would mean either omitting the
+// field or adding a second one, and both change what a released v0.1 consumer
+// reads. So the distinction is carried by the domain and consumed by renderers,
+// and the bytes here are unchanged. The limitation is recorded in
+// docs/REPORT_SCHEMA.md as a v1 property rather than left for someone to
+// rediscover.
 func (e Evidence) MarshalJSON() ([]byte, error) {
 	if e.IsZero() {
 		return nil, fmt.Errorf("%w: zero Evidence", ErrInvalidValue)
@@ -293,7 +322,7 @@ func (e Evidence) MarshalJSON() ([]byte, error) {
 		State:      e.state,
 		Attributes: e.attributes,
 		StartedAt:  e.startedAt.Format(time.RFC3339Nano),
-		Duration:   e.duration.String(),
+		Duration:   e.elapsedForJSON(),
 	}
 	if e.failureClass != FailureNone {
 		out.FailureClass = &e.failureClass

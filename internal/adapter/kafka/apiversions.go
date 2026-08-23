@@ -268,7 +268,7 @@ func (o observation) evidence(path *transport.Continuation) (domain.Evidence, er
 		FailureClass: failureClass,
 		Attributes:   o.attributes(),
 		StartedAt:    o.startedAt,
-		Duration:     o.duration,
+		Elapsed:      domain.Measured(o.duration),
 	})
 }
 

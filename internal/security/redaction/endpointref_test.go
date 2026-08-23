@@ -41,7 +41,7 @@ func refReport(t *testing.T, ref string, declaredHost string) domain.Report {
 		FailureClass: domain.FailureTCPConnectionRefused,
 		Attributes:   attrs,
 		StartedAt:    testStart,
-		Duration:     time.Millisecond,
+		Elapsed:      domain.Measured(time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence: %v", err)
@@ -266,7 +266,7 @@ func TestUndeclaredStringsStillNeedAUsablePort(t *testing.T) {
 	evidence, err := domain.NewEvidence(domain.EvidenceInput{
 		ID: mustID(t, "probe.step/plain"), Subject: mustEndpointSubject(t, "host.example.internal:9092"),
 		Layer: domain.LayerTCP, Step: mustStep(t, "probe.step"), State: domain.StatePass,
-		Attributes: attrs, StartedAt: testStart, Duration: time.Millisecond,
+		Attributes: attrs, StartedAt: testStart, Elapsed: domain.Measured(time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence: %v", err)

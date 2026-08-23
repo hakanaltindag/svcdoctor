@@ -506,9 +506,13 @@ func TestLocalTimeoutKeepsItsMeasuredDuration(t *testing.T) {
 	report := result.Report()
 
 	node := nodeAt(t, report, servicepostgres.StepSSLRequest)
-	if node.Duration() <= 0 {
+	d, measured := node.Elapsed().Duration()
+	if !measured {
+		t.Error("an interrupted step recorded no measurement at all")
+	}
+	if d <= 0 {
 		t.Errorf("duration = %s; an interrupted step still measured how long it "+
-			"waited", node.Duration())
+			"waited", d)
 	}
 	if node.StartedAt().IsZero() {
 		t.Error("StartedAt is zero on a step that ran")

@@ -199,7 +199,7 @@ func (o observation) evidence(
 		State:        state,
 		FailureClass: failureClass,
 		StartedAt:    o.startedAt,
-		Duration:     o.duration,
+		Elapsed:      domain.Measured(o.duration),
 	})
 }
 
