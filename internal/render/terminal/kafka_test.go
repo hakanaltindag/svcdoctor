@@ -78,6 +78,10 @@ type stage struct {
 	state   domain.State
 	class   domain.FailureClass
 	elapsed domain.Elapsed
+
+	// attrs are the node's attributes. Only a TLS handshake needs any: the row
+	// it produces depends on tls.verified as well as on state.
+	attrs map[domain.AttributeKey]domain.AttrValue
 }
 
 func measured(us int) domain.Elapsed {
@@ -85,7 +89,36 @@ func measured(us int) domain.Elapsed {
 }
 
 func passed(step domain.Step, us int) stage {
-	return stage{step: step, state: domain.StatePass, elapsed: measured(us)}
+	return stage{
+		step: step, state: domain.StatePass, elapsed: measured(us),
+		attrs: verifiedAttrs(step, true),
+	}
+}
+
+// unverified is a handshake that completed without identifying the peer.
+//
+// It is what `--tls-insecure` produces: PASS, because the handshake really did
+// complete and the channel really is encrypted, with tls.verified false because
+// nobody checked who answered.
+func unverified(step domain.Step, us int) stage {
+	return stage{
+		step: step, state: domain.StatePass, elapsed: measured(us),
+		attrs: verifiedAttrs(step, false),
+	}
+}
+
+// verifiedAttrs records tls.verified on handshake nodes and on nothing else.
+//
+// Attaching it to every node would make the renderer's "no such attribute means
+// this is not a handshake" branch untested, and that branch is what keeps a TCP
+// row from ever growing a TLS annotation.
+func verifiedAttrs(step domain.Step, verified bool) map[domain.AttributeKey]domain.AttrValue {
+	if step != vocabulary.StepTLSHandshake {
+		return nil
+	}
+	return map[domain.AttributeKey]domain.AttrValue{
+		vocabulary.AttrTLSVerified: domain.BoolAttr(verified),
+	}
 }
 
 func failed(step domain.Step, class domain.FailureClass, us int) stage {
@@ -133,8 +166,8 @@ func (g *kafkaGraph) chain(
 	for _, s := range stages {
 		g.seq++
 		id := domain.EvidenceID(string(s.step) + "/" + address + "/" + itoa(g.seq))
-		last = g.node(string(id), s.step, g.layerOf(s.step), address,
-			s.state, s.class, s.elapsed, last)
+		last = g.b.addUnderWith(string(id), s.step, g.layerOf(s.step), address,
+			s.state, s.class, s.elapsed, last, s.attrs)
 		if s.step == servicekafka.StepMetadata {
 			g.metadata = last
 		}

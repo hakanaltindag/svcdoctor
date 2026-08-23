@@ -41,6 +41,13 @@ type builder struct {
 	// default, which is what every fixture predating IP literals expects.
 	requested string
 
+	// tlsVerificationDisabled is the run-level security fact the header reads.
+	// It is deliberately separate from any node's tls.verified attribute: the
+	// header and the rows are read from different places so that a fixture can
+	// make them disagree, which is how the guard against a renderer inventing
+	// either from the other is written.
+	tlsVerificationDisabled bool
+
 	// inputs and edges are held until report(), so a fixture can describe a
 	// graph in whatever order reads best and the builder still adds every node
 	// before any parent edge that names it.
@@ -65,6 +72,20 @@ func (b *builder) addUnder(
 	parent domain.EvidenceID,
 ) domain.EvidenceID {
 	b.t.Helper()
+	return b.addUnderWith(id, step, layer, subject, state, failure, elapsed, parent, nil)
+}
+
+// addUnderWith is addUnder with the node's attributes.
+//
+// Most fixtures need none: a terminal row is built from state, step, class and
+// duration. The exception is a TLS handshake, whose row also depends on
+// tls.verified — which is exactly the fact Phase 6.8A made the renderer read.
+func (b *builder) addUnderWith(
+	id string, step domain.Step, layer domain.Layer, subject string,
+	state domain.State, failure domain.FailureClass, elapsed domain.Elapsed,
+	parent domain.EvidenceID, attrs map[domain.AttributeKey]domain.AttrValue,
+) domain.EvidenceID {
+	b.t.Helper()
 
 	subj, err := domain.NewEndpointSubject(subject)
 	if err != nil {
@@ -72,7 +93,7 @@ func (b *builder) addUnder(
 	}
 	b.record(domain.EvidenceInput{
 		ID: domain.EvidenceID(id), Subject: subj, Layer: layer, Step: step,
-		State: state, FailureClass: failure,
+		State: state, FailureClass: failure, Attributes: attrs,
 		StartedAt: time.Unix(0, 0).UTC(), Elapsed: elapsed,
 	}, parent)
 	return domain.EvidenceID(id)
@@ -213,7 +234,8 @@ func (b *builder) report(findings ...domain.Finding) domain.Report {
 	// constructor refuses the mode outright — which is the invariant, not an
 	// inconvenience. A fixture that wants the shareable projection derives it
 	// the way redaction does, from a LOCAL_FULL value.
-	security, err := domain.NewReportSecurity(domain.OutputModeLocalFull, false, false)
+	security, err := domain.NewReportSecurity(
+		domain.OutputModeLocalFull, b.tlsVerificationDisabled, false)
 	if err != nil {
 		b.t.Fatalf("NewReportSecurity: %v", err)
 	}

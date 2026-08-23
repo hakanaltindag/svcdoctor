@@ -1,0 +1,30 @@
+svcdoctor · kafka · kafka.internal:9093
+Peer verification disabled · TLS proves the channel is encrypted, not who answered
+
+  ✓ PASS  DNS  2.0ms
+
+  Path 198.51.100.10:9093 · continued
+    ✓ PASS  TCP                         190µs
+    ✓ PASS  TLS                         1.7ms  peer verification disabled
+    ✓ PASS  Kafka API versions          155µs
+    ✓ PASS  SASL mechanism negotiation  88µs
+    ✓ PASS  Authentication              94µs
+    ✓ PASS  Kafka metadata              90µs
+
+  Advertised broker 1 · broker-1.internal:9093
+    ✓ PASS  Broker advertisement
+    ✓ PASS  DNS                   160µs
+
+    Path 198.51.100.21:9093
+      ✓ PASS  TCP  130µs
+      ✓ PASS  TLS  709µs  peer verification disabled
+
+Findings
+  none
+
+Result
+  status     OK                                          no target-side error was proven
+  outcome    Kafka metadata obtained
+  topology   1 of 1 advertised broker endpoints reached
+  execution  complete
+  duration   12.0ms

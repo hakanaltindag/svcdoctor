@@ -88,18 +88,43 @@ func trimTrailingSpace(document []byte) []byte {
 	return bytes.Join(lines, []byte("\n"))
 }
 
-// writeHeader names the run and, when it applies, says the report is shareable.
+// writeHeader names the run and states the security facts that qualify all of it.
 //
-// The shareable indicator comes from the report's own security metadata, never
-// from noticing that the target looks like a pseudonym. A renderer that guessed
-// from the text would label a real host named `host-001` as redacted, and would
-// stay silent if redaction ever changed its pseudonym scheme.
+// # Both indicators come from the report's own security metadata
+//
+// Never from noticing that the target looks like a pseudonym, and never from a
+// flag: a renderer that guessed from the text would label a real host named
+// `host-001` as redacted, and would stay silent if redaction ever changed its
+// pseudonym scheme. `security` is the one authority, which is also what makes
+// the text and the canonical JSON incapable of disagreeing.
+//
+// # Why disabled verification belongs in the header
+//
+// It qualifies every row below it, so it cannot sit beside any one of them.
+// Before Phase 6.8A the terminal said nothing at all, and two runs — one that
+// verified the peer's certificate against a supplied CA, one that verified
+// nothing — rendered byte-for-byte identically down to `✓ PASS  TLS`. Nothing in
+// that document was false and the impression it left was, which is the same
+// failure ADR 0048 section 9 fixed for a bare `OK`.
+//
+// **It is not a finding and not a failure.** The operator asked for this, the
+// endpoint did nothing wrong, the status stays `OK` and the exit code is
+// unchanged. What it says is what an unverified handshake actually proves: the
+// channel is encrypted, and nobody established who is on the other end of it.
+// ADR 0060 section 6 records why an ERROR finding was declined.
 func writeHeader(out *bytes.Buffer, report domain.Report) {
 	_, _ = fmt.Fprintf(out, "svcdoctor · %s · %s\n",
 		report.Run().Service(), report.Target().Requested())
 
 	if report.Security().OutputMode() == domain.OutputModeShareableRedacted {
 		_, _ = fmt.Fprint(out, "Shareable report · identities redacted\n")
+	}
+	// After the shareable banner, and on its own line. A shared report keeps it:
+	// the fact qualifies the diagnosis, and a reader who was not at the terminal
+	// is exactly the reader who cannot otherwise know.
+	if report.Security().TLSVerificationDisabled() {
+		_, _ = fmt.Fprint(out,
+			"Peer verification disabled · TLS proves the channel is encrypted, not who answered\n")
 	}
 	_, _ = fmt.Fprintln(out)
 }

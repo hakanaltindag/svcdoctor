@@ -392,10 +392,62 @@ func unplacedStages(p path, view serviceView) []domain.Evidence {
 
 // failureNote returns the recorded class, or empty on a passing node.
 func failureNote(node domain.Evidence) string {
+	if note := unverifiedNote(node); note != "" {
+		return note
+	}
 	if node.State() == domain.StatePass || node.FailureClass() == domain.FailureNone {
 		return ""
 	}
 	return node.FailureClass().String()
+}
+
+// unverifiedPeer is the note a passing handshake that identified nobody carries.
+//
+// It is deliberately not the word "insecure". `--tls-insecure` is the flag, and
+// what it actually did is disable peer verification — the channel is still
+// encrypted, and saying "insecure TLS" would overstate in the other direction.
+const unverifiedPeer = "peer verification disabled"
+
+// unverifiedNote annotates a handshake that completed without identifying the
+// peer.
+//
+// # Only on a PASS node, and that is what makes the wording exact
+//
+// `tls.verified` is false for a failed handshake *and* for a disabled one, so
+// the attribute alone does not distinguish them. The state does: a handshake
+// that failed verification is a FAIL node carrying `TLS_UNKNOWN_AUTHORITY` or
+// `TLS_IDENTITY_MISMATCH`, and its failure class is the more important fact and
+// keeps the column. A **passing** handshake with `tls.verified: false` can have
+// arisen one way only — verification was switched off before it ran — so the
+// note states that and nothing broader.
+//
+// # Per handshake, not per run
+//
+// The header states the run-level fact from `security.tlsVerificationDisabled`.
+// This reads each node's own attribute, so every row is true of the handshake it
+// sits on, including the advertised-broker sweeps beneath a Kafka topology. The
+// two agree because the same option produced both, and they are read from
+// different places so that a future per-endpoint plan would make the rows
+// diverge correctly rather than make the header quietly wrong.
+//
+// # A node with no such attribute is not annotated
+//
+// `Attribute` reports absence, and absence means this is not a handshake node.
+// The renderer states what the evidence holds and infers nothing from a missing
+// field.
+func unverifiedNote(node domain.Evidence) string {
+	if node.State() != domain.StatePass {
+		return ""
+	}
+	value, ok := node.Attribute(vocabulary.AttrTLSVerified)
+	if !ok {
+		return ""
+	}
+	verified, ok := value.Bool()
+	if !ok || verified {
+		return ""
+	}
+	return unverifiedPeer
 }
 
 // absenceNote explains a stage with no evidence, structurally.
