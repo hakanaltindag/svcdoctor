@@ -1735,6 +1735,25 @@ registry, the probe chain contract, the diagnosis `Rule` contract, and CLI orche
 not decided beyond the architecture principles already locked. Concrete structs first;
 interfaces only at real boundaries.
 
+**Defensive bound selection — settled in Phase 7.0, and the rule is now general.** A bound on
+peer-controlled input must be justified by a **measured resource cost** and a stated headroom
+multiple over the largest value any real implementation is known to produce. *"N times the
+largest value in common use"* is not a justification: it was the stated reason for the SCRAM
+salt bound, and a mainstream implementation falsified it two bytes past the limit (ADR 0061).
+
+The corollary binds every layer, not just SCRAM. **A value svcdoctor refuses because of its own
+policy is not a defect in the peer**, and must not be classified as one — §12's claim discipline
+already said an unsupported capability is `UNKNOWN` rather than `FAIL`, and a ceiling on a legal
+value is exactly that. Phase 7.0b found both adapters reporting a legal SCRAM message as
+`PROTOCOL_MALFORMED_RESPONSE` and moved it to `EXEC_UNSUPPORTED_BY_SVCDOCTOR`, which each
+already used for the iteration ceiling.
+
+Two things that made the defect invisible are worth carrying forward. Every bound test was
+written *relative to its constant*, so the whole suite passed unchanged under four different
+bound policies — **a defensive constant needs a test that states its value**. And one finding
+code covered two causes with one sentence, so widening the causes quietly made the sentence
+false; sharing a code is fine, sharing prose is not.
+
 ## 19. MCP and other frontends
 
 MCP is not part of the core. Once the canonical JSON schema and reusable application service are stable, MCP can become another frontend/adapter:
