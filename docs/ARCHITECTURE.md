@@ -962,15 +962,32 @@ carrying no service prefix and none mirroring a `FailureClass`. Kafka bootstrap 
 is its first production producer, which is why it is sequenced before that composition
 (§12.1).
 
-**SCRAM's shared core is constrained in advance (Phase 6.2).** The RFC 5802 derivation is
+**SCRAM's shared core never receives plaintext (ADR 0055).** The RFC 5802 derivation is
 already implemented for PostgreSQL in `internal/adapter/postgres/wire/scram.go` using the
-standard library only, so completing Kafka SCRAM adds **no module dependency**. Extracting
-it into a shared package is acceptable in principle and subject to a dedicated security
-review before implementation. The shared core must not import `internal/security` or `net`,
-must not call `security.Reveal`, perform I/O, log plaintext, put plaintext in errors or
-retain connection state; it accepts plaintext only as a short-lived argument and returns
-derived protocol material. `Reveal` stays in wire packages and its call-site count is
-unchanged by extraction unless a separate security record authorizes otherwise.
+standard library only, so completing Kafka SCRAM adds **no module dependency**. The security
+review this section previously deferred to is complete — it is Phase 6.2a — and it
+**rejected** the model stated here before it: a shared core taking plaintext as a short-lived
+argument.
+
+The adopted model is ADR 0055's Model D. The core exposes **no API that accepts a password in
+any type**. It parses and validates everything the peer chose — nonce extension, salt,
+attribute grammar, the iteration ceiling — and *then* invokes a derivation callback the wire
+package supplied, which closes over the plaintext and calls `crypto/pbkdf2` inside the wire
+package. What crosses the package boundary is the SaltedPassword: credential-derived and
+sensitive, but scoped to one principal on one target rather than being the operator's reusable
+password.
+
+This keeps the property ADR 0038 §16 calls "the whole point" — no PBKDF2 runs before the peer's
+demand has been bounded — while making a plaintext leak from the shared package structurally
+impossible rather than lint-enforced. The core still must not import `internal/security` or
+`net`, call `security.Reveal`, perform I/O, log, use `fmt`, put peer bytes in errors, know an
+endpoint, know service framing or retain connection state. It owns its own size and iteration
+bounds, because the two wire packages bound peer payloads eight times apart. `Reveal` stays in
+wire packages and its production call-site count remains **exactly two**.
+
+Extraction is not purely extraction: Kafka reads the username from the SCRAM `n=` field, so
+RFC 5802 §5.1 `saslname` escaping is new, unvectored code. Phase 6.2 implementation waits on
+Phase 6.2a-R2 confirming Model D against a written API.
 
 ### 5.9 Kafka application composition: one journey, one credential, one selected socket
 
