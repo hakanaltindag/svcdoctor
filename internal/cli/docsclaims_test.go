@@ -49,7 +49,7 @@ var managedProviders = []string{
 // misses it — which is how the first version of this guard failed on truthful
 // prose.
 var denials = map[string]bool{
-	"not": true, "no": true, "never": true,
+	"not": true, "no": true, "never": true, "none": true,
 	"deferred": true, "unproven": true, "without": true,
 }
 
@@ -250,4 +250,436 @@ func denies(line string) bool {
 		}
 	}
 	return false
+}
+
+// --- insecure-mode claim discipline -----------------------------------------
+
+// The `--tls-insecure` entry is audited for the same reason the provider names
+// are: it is a sentence an operator reads *before* running anything, and getting
+// it wrong changes what they believe a passing run proved.
+//
+// Phase 6.8A's mutation matrix planted a shortened entry — `--tls-insecure  skip
+// TLS verification` — and nothing failed. It is true and it is not enough: it
+// leaves an operator to infer what a passing TLS row then means, and the
+// available inference is the wrong one.
+
+// insecureEntryMustState are the facts the flag's own help entry has to carry.
+//
+// Structural, not prose: each is one lowercase substring, so ordinary rewording
+// is free and dropping a fact is not.
+var insecureEntryMustState = []struct {
+	fact, substring string
+}{
+	{"what the handshake still proves", "encrypted"},
+	{"that identity is not established", "who answered"},
+	{"that no chain was validated", "no chain was validated"},
+	{"the credential consequence", "withheld"},
+	{"that it is never automatic", "never automatic"},
+}
+
+// TestBothHelpTextsExplainInsecureSemantics closes the surviving mutation.
+//
+// The two services share the entry verbatim, and both are checked, because the
+// defect ADR 0060 closed was one contract held in two places that disagreed.
+func TestBothHelpTextsExplainInsecureSemantics(t *testing.T) {
+	for _, service := range []string{"postgres", "kafka"} {
+		t.Run(service, func(t *testing.T) {
+			entry := insecureHelpEntry(t, service)
+			for _, want := range insecureEntryMustState {
+				if !strings.Contains(entry, want.substring) {
+					t.Errorf("the --tls-insecure entry does not state %s "+
+						"(looked for %q).\n\nAn operator reads this before deciding to "+
+						"disable verification. An entry that says only what the flag "+
+						"switches off leaves them to infer what a passing TLS row then "+
+						"proves, and the available inference is the wrong one "+
+						"(ADR 0060 section 7).\n\nentry:\n%s",
+						want.fact, want.substring, entry)
+				}
+			}
+		})
+	}
+}
+
+// TestNoDocumentSaysInsecureTLSIsVerified is the overclaim direction.
+//
+// These are the phrasings that would collapse *encrypted* into *authenticated
+// peer*, which is the one thing `--tls-insecure` must never be described as.
+func TestNoDocumentSaysInsecureTLSIsVerified(t *testing.T) {
+	forbidden := []string{
+		"verified but insecure", "insecure but verified",
+		"still verifies", "verification still",
+		"securely connected", "authenticated peer",
+		"tls verified", "peer verified",
+	}
+
+	documents := map[string]string{"README.md": readRepoFile(t, "README.md")}
+	for _, service := range []string{"postgres", "kafka"} {
+		documents[service+" --help"] = helpText(t, service)
+	}
+
+	for name, text := range documents {
+		lower := strings.Join(strings.Fields(strings.ToLower(text)), " ")
+		for _, phrase := range forbidden {
+			if strings.Contains(lower, phrase) {
+				t.Errorf("%s contains %q; an unverified handshake proves the channel "+
+					"is encrypted and nothing about who answered (ADR 0060 section 7)",
+					name, phrase)
+			}
+		}
+	}
+}
+
+// TestTheInsecureClaimGuardCanFail proves the guard above is not vacuous.
+func TestTheInsecureClaimGuardCanFail(t *testing.T) {
+	if strings.Contains("  --tls-insecure            skip TLS verification",
+		"who answered") {
+		t.Fatal("the fixture is not the shortened entry the mutation planted")
+	}
+	for _, want := range insecureEntryMustState {
+		if want.substring == "" {
+			t.Error("an empty substring would match everything")
+		}
+	}
+}
+
+// insecureHelpEntry returns the `--tls-insecure` block of one service's help,
+// lowercased, from the flag name to the start of the next flag or section.
+func insecureHelpEntry(t *testing.T, service string) string {
+	t.Helper()
+
+	var entry []string
+	collecting := false
+	for _, line := range strings.Split(helpText(t, service), "\n") {
+		switch {
+		case strings.HasPrefix(strings.TrimSpace(line), "--tls-insecure"):
+			collecting = true
+		case collecting && (strings.TrimSpace(line) == "" ||
+			strings.HasPrefix(strings.TrimSpace(line), "--")):
+			collecting = false
+		}
+		if collecting {
+			entry = append(entry, strings.TrimSpace(line))
+		}
+	}
+	if len(entry) == 0 {
+		t.Fatalf("%s --help has no --tls-insecure entry at all", service)
+	}
+	return strings.ToLower(strings.Join(entry, " "))
+}
+
+// helpText captures one service's help exactly as an operator sees it.
+func helpText(t *testing.T, service string) string {
+	t.Helper()
+	h := newHarness(app.Result{}, nil)
+	if code := h.run("diagnose", service, "--help"); code != ExitOK {
+		t.Fatalf("%s --help exited %d", service, code)
+	}
+	return h.stdout.String()
+}
+
+// --- the compatibility document ---------------------------------------------
+
+// docs/COMPATIBILITY.md is the one document where provider names legitimately
+// appear beside a verdict, so it is the one document where an overclaim is both
+// easiest to write and hardest to notice. These guard the two ways it can lie.
+
+// realTestedPlatforms is the complete set of platforms svcdoctor has actually
+// been run against.
+//
+// **Adding a row here is a claim that someone ran the tool against the thing.**
+// It is deliberately a hand-maintained list rather than something derived: the
+// point is that a person has to state it, and a reviewer can check it against
+// docs/validation/.
+var realTestedPlatforms = map[string]bool{
+	"Apache Kafka":           true,
+	"PostgreSQL self-hosted": true,
+	"Redpanda self-hosted":   true,
+}
+
+// TestOnlyRealTestedPlatformsClaimLevelTwoOrThree is the central guard.
+//
+// A platform reaches Level 2 by svcdoctor completing the BASIC journey against a
+// real instance, and Level 3 by that plus a repeatable test. Neither is reachable
+// by reading documentation, so a row claiming either for an untested platform is
+// the exact defect this file exists to catch — one sentence, entirely plausible,
+// invisible to every other test.
+func TestOnlyRealTestedPlatformsClaimLevelTwoOrThree(t *testing.T) {
+	for _, row := range compatibilityRows(t) {
+		if !claimsRealEvidence(row) {
+			continue
+		}
+		platform := compatibilityPlatform(row)
+		if !realTestedPlatforms[platform] {
+			t.Errorf("docs/COMPATIBILITY.md claims Level 2 or 3 for %q, which is not in "+
+				"realTestedPlatforms.\n\nLevel 2 means svcdoctor completed the BASIC "+
+				"journey against a real instance. If that happened, add the platform to "+
+				"realTestedPlatforms in this test and point at the validation document "+
+				"that records it. If it did not, the row is a documentation inference "+
+				"wearing a test result's clothes.\n\nrow: %s", platform, row)
+		}
+	}
+}
+
+// TestEveryRealTestedPlatformSaysSo is the other direction.
+//
+// A platform that *was* tested and is recorded at Level 0 or 1 understates, which
+// is safer but still wrong, and it usually means a row was edited and the list
+// below was not.
+func TestEveryRealTestedPlatformSaysSo(t *testing.T) {
+	seen := map[string]bool{}
+	for _, row := range compatibilityRows(t) {
+		platform := compatibilityPlatform(row)
+		if realTestedPlatforms[platform] && claimsRealEvidence(row) {
+			seen[platform] = true
+		}
+	}
+	for platform := range realTestedPlatforms {
+		if !seen[platform] {
+			t.Errorf("%q is recorded as really tested but docs/COMPATIBILITY.md gives it "+
+				"no Level 2 or 3 row", platform)
+		}
+	}
+}
+
+// unimplementedMechanisms are the authentication mechanisms and connection
+// modes svcdoctor does not implement.
+//
+// Every one of them is standard somewhere, which is exactly why naming one
+// beside the word "supported" is so easy to do by accident.
+var unimplementedMechanisms = []string{
+	"aws_msk_iam", "iam db auth", "iam database authentication",
+	"oauthbearer", "gssapi", "kerberos", "scram-sha-512",
+	"mtls", "microsoft entra", "auth proxy", "language connectors",
+}
+
+// TestNoDocumentClaimsAnUnimplementedMechanism catches the looser phrasing, the
+// one a release-note author reaches for.
+//
+// # Structural, not a phrase list
+//
+// A first version of this guard listed the exact sentences it expected — "MSK is
+// supported", "supports IAM" — and a mutation writing *"IAM DB auth is
+// supported"* walked straight past it. Enumerating the ways to say something is
+// a losing game. The rule is instead: **any claim unit naming a mechanism
+// svcdoctor does not implement must be recording its absence.**
+//
+// # The unit is a table cell or a sentence, and the distinction matters
+//
+// Block granularity is too coarse for a table: a compatibility row carries seven
+// independent statements, and a denial in the TLS column would exempt a false
+// claim in the auth column. Line granularity is too fine for prose, because
+// Markdown wraps a sentence across lines and the denial lands on the next one.
+// So prose is joined and split into sentences, and a table row is split into
+// cells.
+func TestNoDocumentClaimsAnUnimplementedMechanism(t *testing.T) {
+	for _, name := range operatorFacingDocuments {
+		t.Run(name, func(t *testing.T) {
+			for _, unit := range claimUnits(readRepoFile(t, name)) {
+				lower := strings.ToLower(unit)
+				for _, mechanism := range unimplementedMechanisms {
+					if !strings.Contains(lower, mechanism) || recordsAbsence(unit) {
+						continue
+					}
+					t.Errorf("%s names %q in a claim that does not record its absence.\n\n"+
+						"svcdoctor does not implement it, so any statement mentioning it "+
+						"has to be saying so. If this is a false positive, phrase the "+
+						"statement as the denial it is rather than widening the guard."+
+						"\n\nunit: %s", name, mechanism, unit)
+				}
+			}
+		})
+	}
+}
+
+// claimUnits splits a Markdown document into the units a reader takes as one
+// claim: one table cell, or one sentence of prose with its wrapping undone.
+func claimUnits(document string) []string {
+	var out []string
+	var prose []string
+
+	flush := func() {
+		if len(prose) == 0 {
+			return
+		}
+		out = append(out, claimSentences(strings.Join(prose, " "))...)
+		prose = nil
+	}
+
+	for _, line := range strings.Split(document, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "":
+			flush()
+		case strings.HasPrefix(trimmed, "|"):
+			flush()
+			for _, cell := range strings.Split(strings.Trim(trimmed, "|"), "|") {
+				// Sentences within the cell, not the whole cell. A "known gaps"
+				// column routinely carries several independent statements, and
+				// a denial in one of them must not exempt a claim in the next —
+				// which is exactly the mutation that survived the cell-level
+				// version of this guard.
+				out = append(out, claimSentences(strings.TrimSpace(cell))...)
+			}
+		case strings.HasPrefix(trimmed, "- "), strings.HasPrefix(trimmed, "#"):
+			// A new list item or heading ends the previous unit; a continuation
+			// line does not, which is what undoes Markdown's wrapping.
+			flush()
+			prose = append(prose, trimmed)
+		default:
+			prose = append(prose, trimmed)
+		}
+	}
+	flush()
+	return out
+}
+
+// recordsAbsence reports whether a claim unit is saying a thing is not there.
+//
+// It is denies() plus the three markers a compatibility table uses instead of a
+// sentence: the ✗ glyph, the UNSUPPORTED evidence label, and "declined", which
+// is the word the PostgreSQL mechanism table has always used for a mechanism
+// svcdoctor observes and refuses to perform.
+func recordsAbsence(unit string) bool {
+	lower := strings.ToLower(unit)
+	return denies(unit) ||
+		strings.Contains(unit, "✗") ||
+		strings.Contains(lower, "unsupported") ||
+		strings.Contains(lower, "declined")
+}
+
+// TestTheCompatibilityGuardCanFail proves the parsing above is not vacuous.
+func TestTheCompatibilityGuardCanFail(t *testing.T) {
+	rows := compatibilityRows(t)
+	if len(rows) < 8 {
+		t.Fatalf("found %d compatibility rows; the table parser is not seeing the "+
+			"document and every assertion above is vacuous", len(rows))
+	}
+
+	planted := "| **AWS MSK — IAM** | Kafka | `SASL_SSL` | yes | YES | **2 — TESTED BASIC** | none |"
+	if !claimsRealEvidence(planted) {
+		t.Fatal("a planted Level 2 row is not recognized as claiming real evidence")
+	}
+	if claimsRealEvidence("| **AWS MSK — IAM** | Kafka | x | x | NO | **1 — PROTOCOL-PLAUSIBLE** | x |") {
+		t.Error("a Level 1 row is misread as claiming real evidence")
+	}
+	if got := compatibilityPlatform(planted); got != "AWS MSK — IAM" {
+		t.Errorf("platform name = %q, want %q", got, "AWS MSK — IAM")
+	}
+	if realTestedPlatforms[compatibilityPlatform(planted)] {
+		t.Error("a planted MSK IAM row would be accepted as really tested")
+	}
+}
+
+// claimsRealEvidence reports whether a row claims a level that only a real run
+// can produce.
+//
+// The level names are matched rather than the numbers, because the number is the
+// part most likely to be reworded and the name is the part that carries the
+// claim. Level 1 is "PROTOCOL-PLAUSIBLE" and level 0 "NOT EVALUATED"; neither
+// contains either phrase below.
+func claimsRealEvidence(row string) bool {
+	return strings.Contains(row, "TESTED BASIC") || strings.Contains(row, "SUPPORTED BASIC")
+}
+
+// compatibilityRows returns the platform rows of the compatibility document.
+//
+// The level-definition table at the top uses the same shape, so a row whose
+// first cell begins with a digit is skipped: those define the vocabulary rather
+// than making a claim with it.
+func compatibilityRows(t *testing.T) []string {
+	t.Helper()
+
+	var out []string
+	for _, line := range strings.Split(readRepoFile(t, "docs/COMPATIBILITY.md"), "\n") {
+		line = strings.TrimSpace(line)
+		// A data row, not a header and not the alignment separator.
+		if !strings.HasPrefix(line, "| **") || strings.Count(line, "|") < 4 {
+			continue
+		}
+		if name := compatibilityPlatform(line); name == "" ||
+			(name[0] >= '0' && name[0] <= '9') {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// compatibilityPlatform reads the first cell of a table row, stripped of
+// Markdown emphasis and of the version suffix a row may carry.
+func compatibilityPlatform(row string) string {
+	cells := strings.Split(strings.Trim(row, "|"), "|")
+	if len(cells) == 0 {
+		return ""
+	}
+	name := strings.TrimSpace(cells[0])
+	if bold := strings.Index(name, "**"); bold == 0 {
+		if end := strings.Index(name[2:], "**"); end >= 0 {
+			name = name[2 : 2+end]
+		}
+	}
+	return strings.TrimSpace(name)
+}
+
+// operatorFacingDocuments are the documents that make claims to an operator who
+// has not read the code.
+//
+// The release notes are in the list because they are the single most
+// overclaim-prone document a project produces: written last, written quickly,
+// and read by everyone who never reads anything else.
+var operatorFacingDocuments = []string{
+	"README.md",
+	"docs/COMPATIBILITY.md",
+	"docs/validation/RELEASE_NOTES_v0.2.0_DRAFT.md",
+}
+
+// healthClaims are the things svcdoctor observes nothing about.
+//
+// Each is a claim BASIC structurally cannot make: no exchange in either adapter
+// obtains topic, partition, consumer-group, replication or pool state, so a
+// document asserting one is describing a different product. ADR 0052 fixed the
+// terminal vocabulary on exactly this basis; this extends the same rule to the
+// prose an operator reads before ever running the tool.
+var healthClaims = []string{
+	"cluster health", "cluster is healthy", "broker health", "partition health",
+	"consumer lag", "consumer group health", "topic health",
+	"replication health", "connection pool health", "query latency",
+}
+
+// TestNoDocumentClaimsHealthTheProductCannotObserve guards the release notes and
+// their neighbours against the claim BASIC exists to avoid making.
+func TestNoDocumentClaimsHealthTheProductCannotObserve(t *testing.T) {
+	for _, name := range operatorFacingDocuments {
+		t.Run(name, func(t *testing.T) {
+			for _, unit := range claimUnits(readRepoFile(t, name)) {
+				lower := strings.ToLower(unit)
+				for _, claim := range healthClaims {
+					if !strings.Contains(lower, claim) || recordsAbsence(unit) {
+						continue
+					}
+					t.Errorf("%s claims %q in a unit that does not deny it.\n\n"+
+						"BASIC obtains no topic, partition, consumer-group, replication "+
+						"or pool state from either service, so this describes a product "+
+						"that does not exist (ADR 0052).\n\nunit: %s", name, claim, unit)
+				}
+			}
+		})
+	}
+}
+
+// TestTheHealthClaimGuardCanFail proves the guard above is not vacuous.
+func TestTheHealthClaimGuardCanFail(t *testing.T) {
+	planted := "svcdoctor reports cluster health and consumer lag for every broker"
+	found := false
+	for _, claim := range healthClaims {
+		if strings.Contains(planted, claim) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a planted health claim matches nothing in healthClaims")
+	}
+	if recordsAbsence(planted) {
+		t.Error("a planted health claim reads as a denial")
+	}
 }
