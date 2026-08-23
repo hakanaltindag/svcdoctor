@@ -100,73 +100,80 @@ func TestTheREADMENeverClaimsManagedCompatibility(t *testing.T) {
 	}
 }
 
-// TestTheREADMENeverClaimsIPLiteralSupport pins the boundary Phase 6.4C
-// measured.
+// TestTheDocsRecordIPLiteralSupport is the inverse of the guard Phase 6.5 held
+// here, and the inversion is the point.
 //
-// `net.Resolver` returns a literal unchanged, so a literal target produces a
-// `dns.lookup` PASS with a measured duration for work that did not happen, and
-// the generic TCP finding's prose names a hostname that does not exist. The
-// transport diagnosis below L1 is right and the L1 claim is not.
+// Until Phase 6.7 the contract was that `--host` expects a name that resolves,
+// because a literal produced a `dns.lookup` PASS for work that did not happen.
+// The graph-shape decision was taken (ADR 0059), a literal now performs and
+// records no resolution, and the capability is real — so the documents must say
+// so, and this fails if that sentence disappears.
 //
-// The fix is the graph-shape decision in docs/BACKLOG.md, not a special case in
-// a command — so until it is taken, the contract is that `--host` expects a name
-// that resolves, and this is where that sentence is held.
-func TestTheREADMENeverClaimsIPLiteralSupport(t *testing.T) {
-	readme := readRepoFile(t, "README.md")
-
-	if !strings.Contains(readme, "no literal IPv4/IPv6 target support") {
-		t.Error("the README's `Not in v0.1` list no longer records that literal " +
-			"IPv4/IPv6 targets are unsupported")
-	}
-	if !strings.Contains(readme, "`--host` expects a name that resolves") {
-		t.Error("the README no longer states what `--host` accepts")
-	}
-	assertNoIPLiteralClaim(t, "README.md", readme)
-}
-
-// TestTheKafkaHelpNeverClaimsIPLiteralSupport holds the same line in the text
-// an operator reads without opening a browser.
-//
-// The help describes `--host` as *the bootstrap endpoint to diagnose*, which
-// claims nothing about the form it takes. That is the honest wording while the
-// graph semantics are undecided, and this fails if it grows into a promise.
-func TestTheKafkaHelpNeverClaimsIPLiteralSupport(t *testing.T) {
+// The guard did not become weaker. It kept its shape and changed sides: the
+// claim it used to forbid is now the claim it requires, and the claim it now
+// forbids — scoped IPv6 — is the one thing this phase deliberately did not
+// implement.
+func TestTheDocsRecordIPLiteralSupport(t *testing.T) {
+	docs := map[string]string{"README.md": readRepoFile(t, "README.md")}
 	for _, service := range []string{"kafka", "postgres"} {
 		h := newHarness(app.Result{}, nil)
 		if code := h.run("diagnose", service, "--help"); code != ExitOK {
 			t.Fatalf("`diagnose %s --help` exit = %d", service, code)
 		}
-		assertNoIPLiteralClaim(t, service+" help", h.stdout.String())
+		docs[service+" help"] = h.stdout.String()
+	}
+
+	for where, text := range docs {
+		// Whitespace is collapsed first: help text is wrapped to a column, so a
+		// phrase can be split across two lines without changing what it says.
+		lower := strings.Join(strings.Fields(strings.ToLower(text)), " ")
+		if !strings.Contains(lower, "ipv4 or ipv6 address") {
+			t.Errorf("%s no longer says that --host accepts an address literal", where)
+		}
+		assertNoScopedIPv6Claim(t, where, text)
 	}
 }
 
-// assertNoIPLiteralClaim fails on any sentence offering an address as valid
-// input.
+// TestTheREADMEStillDeniesWhatWasNotImplemented keeps the boundary of the
+// capability honest.
 //
-// It matches the phrasings that would be written, not the concept: a document
-// may explain that literals are unsupported, and every phrase here is one that
-// only appears when offering the capability.
-func assertNoIPLiteralClaim(t *testing.T, where, text string) {
+// First-class literal support is not scoped-IPv6 support, and a README that
+// blurred the two would promise something `probe.ParseHost` refuses outright.
+func TestTheREADMEStillDeniesWhatWasNotImplemented(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+
+	if !strings.Contains(readme, "no scoped IPv6") {
+		t.Error("the README's `Not in v0.1` list no longer records that a zoned " +
+			"IPv6 literal is refused")
+	}
+}
+
+// assertNoScopedIPv6Claim fails on any sentence offering a zone identifier as
+// valid input.
+//
+// A zone is a vantage-local interface name with no decided representation in the
+// evidence subject, the credential binding key, the TLS identity or the
+// pseudonym namespace, and probe.ParseHost refuses one. Advertising it would
+// promise a capability the code declines to have.
+func assertNoScopedIPv6Claim(t *testing.T, where, text string) {
 	t.Helper()
 
 	claims := []string{
-		"hostname or ip",
-		"host or ip",
-		"name or address",
-		"name or an address",
-		"ip address or",
-		"accepts an ip",
-		"accepts either",
-		"ipv4 or ipv6 address",
-		"literal ipv4/ipv6 targets are supported",
+		"scoped ipv6 is supported",
+		"zone identifier is supported",
+		"including a zone",
+		"with a zone identifier",
+		"fe80::1%en0 is supported",
+		"link-local with zone",
 	}
-	lower := strings.ToLower(text)
+	lower := strings.Join(strings.Fields(strings.ToLower(text)), " ")
 	for _, claim := range claims {
 		if strings.Contains(lower, claim) {
 			t.Errorf("%s offers %q as valid input for a target.\n\n"+
-				"A literal reaches transport and produces a false `dns.lookup` PASS "+
-				"and hostname-resolution wording. The capability is an open design "+
-				"item in docs/BACKLOG.md and must not be advertised.", where, claim)
+				"probe.ParseHost refuses a zoned literal, and the zone has no decided "+
+				"representation in the subject, the credential key, the TLS identity "+
+				"or the pseudonym namespace. Support is deferred; see ADR 0059.",
+				where, claim)
 		}
 	}
 }
@@ -192,9 +199,10 @@ func TestTheDocsClaimGuardsCanFail(t *testing.T) {
 	}
 
 	fake := &testing.T{}
-	assertNoIPLiteralClaim(fake, "planted", "`--host` accepts either a hostname or an IP address.")
+	assertNoScopedIPv6Claim(fake, "planted",
+		"`--host` accepts a link-local address with a zone identifier.")
 	if !fake.Failed() {
-		t.Error("the guard does not flag a planted IP-literal claim")
+		t.Error("the guard does not flag a planted scoped-IPv6 claim")
 	}
 }
 

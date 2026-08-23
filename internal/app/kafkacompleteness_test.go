@@ -586,3 +586,115 @@ func (hangingDialer) DialTCP(ctx context.Context, _ netip.AddrPort) (net.Conn, e
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
+
+// --- advertisements that named an address ---------------------------------
+
+// literalAdvertisement builds the resolution-free shape: the connections hang
+// straight off the advertisement, with no lookup between (ADR 0059).
+func (g *graphOf) literalAdvertisement(paths ...[2]any) domain.EvidenceID {
+	advertisement := g.advertisement()
+	for _, path := range paths {
+		state, _ := path[0].(domain.State)
+		class, _ := path[1].(domain.FailureClass)
+		g.connect(advertisement, state, class)
+	}
+	return advertisement
+}
+
+// literalTLSAdvertisement is the same shape with the handshake the plan required.
+func (g *graphOf) literalTLSAdvertisement(paths ...[4]any) domain.EvidenceID {
+	advertisement := g.advertisement()
+	for _, path := range paths {
+		tcpState, _ := path[0].(domain.State)
+		tcpClass, _ := path[1].(domain.FailureClass)
+		tlsState, _ := path[2].(domain.State)
+		tlsClass, _ := path[3].(domain.FailureClass)
+		connect := g.connect(advertisement, tcpState, tcpClass)
+		g.handshake(connect, tlsState, tlsClass)
+	}
+	return advertisement
+}
+
+// TestALiteralAdvertisementResolvesCompleteness is the completeness half of
+// ADR 0059.
+//
+// An advertisement that named an address has no L1 node, and a predicate that
+// only knew the resolving shape would answer "unresolved" for it — reporting a
+// fully measured run as INCOMPLETE, which is exit code 4 on a run that finished
+// everything it set out to do.
+//
+// Every case here is a *measured* outcome, so every one must settle.
+func TestALiteralAdvertisementResolvesCompleteness(t *testing.T) {
+	tests := map[string]func(*graphOf){
+		"reached": func(g *graphOf) { g.literalAdvertisement(pass()) },
+		"refused": func(g *graphOf) { g.literalAdvertisement(refused()) },
+		"reached over TLS": func(g *graphOf) {
+			g.literalTLSAdvertisement([4]any{
+				domain.StatePass, domain.FailureNone, domain.StatePass, domain.FailureNone})
+		},
+		"rejected certificate": func(g *graphOf) {
+			g.literalTLSAdvertisement([4]any{
+				domain.StatePass, domain.FailureNone,
+				domain.StateFail, domain.FailureTLSUnknownAuthority})
+		},
+		"beside a resolving advertisement": func(g *graphOf) {
+			g.plainAdvertisement(pass())
+			g.literalAdvertisement(refused())
+		},
+	}
+	for name, build := range tests {
+		t.Run(name, func(t *testing.T) {
+			g := newGraphOf(t)
+			g.metadataPassed()
+			build(g)
+
+			if incompleteKafkaRun(context.Background(), g.freeze()) {
+				t.Error("a fully measured literal advertisement left the run incomplete")
+			}
+		})
+	}
+}
+
+// The other direction, so the branch above cannot be satisfied by answering
+// "resolved" unconditionally: a literal advertisement svcdoctor's own budget cut
+// short is still unresolved, and ADR 0051's asymmetry survives.
+func TestAnUnmeasuredLiteralAdvertisementLeavesTheRunIncomplete(t *testing.T) {
+	tests := map[string]func(*graphOf){
+		"the sweep never began": func(g *graphOf) { g.literalAdvertisement() },
+		"the connection timed out locally": func(g *graphOf) {
+			g.literalAdvertisement(unmeasured())
+		},
+		"the handshake timed out locally": func(g *graphOf) {
+			g.literalTLSAdvertisement([4]any{
+				domain.StatePass, domain.FailureNone,
+				domain.StateUnknown, domain.FailureExecLocalTimeout})
+		},
+	}
+	for name, build := range tests {
+		t.Run(name, func(t *testing.T) {
+			g := newGraphOf(t)
+			g.metadataPassed()
+			build(g)
+
+			if !incompleteKafkaRun(context.Background(), g.freeze()) {
+				t.Error("an unmeasured literal advertisement reported a finished run")
+			}
+		})
+	}
+}
+
+// A shape no producer makes — a lookup *and* a direct connection under one
+// advertisement — is unresolved, never resolved. Unrecognized must always err
+// towards saying the run is not finished.
+func TestAMixedAdvertisedShapeLeavesTheRunIncomplete(t *testing.T) {
+	g := newGraphOf(t)
+	g.metadataPassed()
+	advertisement := g.advertisement()
+	lookup := g.lookup(advertisement, domain.StatePass, domain.FailureNone)
+	g.connect(lookup, domain.StatePass, domain.FailureNone)
+	g.connect(advertisement, domain.StatePass, domain.FailureNone)
+
+	if !incompleteKafkaRun(context.Background(), g.freeze()) {
+		t.Error("a mixed advertised shape was read as a finished run")
+	}
+}

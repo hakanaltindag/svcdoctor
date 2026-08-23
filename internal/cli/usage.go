@@ -76,7 +76,12 @@ Usage:
   svcdoctor diagnose kafka --host <host> --sasl-mechanism <name> [flags]
 
 Required:
-  --host string             the bootstrap endpoint to diagnose
+  --host string             the bootstrap endpoint to diagnose: a hostname or
+                            an IPv4 or IPv6 address literal. An address is
+                            connected to directly and nothing is resolved, so
+                            the report records no name resolution for one.
+                            Give IPv6 unbracketed and separately from the
+                            port: --host ::1 --port 9092
   --sasl-mechanism string   the SASL mechanism to propose, in uppercase.
                             svcdoctor can perform PLAIN and SCRAM-SHA-256; any
                             other registered name is proposed to the broker and
@@ -97,7 +102,14 @@ Transport encryption:
   --tls-ca-file path        PEM trust source; empty uses the system store
   --tls-server-name string  identity to verify and send in SNI; empty uses
                             the host. It is not applied to advertised brokers,
-                            which are verified against their own names
+                            which are verified against their own names.
+                            --host decides where svcdoctor connects and this
+                            decides whose identity it expects there, so
+                            --host 10.20.30.40 --tls-server-name kafka.internal
+                            connects to the address and verifies the name.
+                            With a bare address and no override, the
+                            certificate is checked against its IP SANs and no
+                            SNI is sent, because SNI carries names only
   --tls-insecure            do not verify the endpoint's identity. Explicit,
                             never automatic, and recorded in the report. The
                             resulting channel is unverified, which the
@@ -148,7 +160,12 @@ Usage:
   svcdoctor diagnose postgres --host <host> --user <role> [flags]
 
 Required:
-  --host string             the endpoint to diagnose
+  --host string             the endpoint to diagnose: a hostname or an IPv4 or
+                            IPv6 address literal. An address is connected to
+                            directly and nothing is resolved, so the report
+                            records no name resolution for one. Give IPv6
+                            unbracketed and separately from the port:
+                            --host ::1 --port 5432
   --user string             the role to connect as
 
 Connection:
@@ -164,7 +181,13 @@ Transport encryption:
   --tls string              "require" or "disable" (default "require")
   --tls-ca-file path        PEM trust source; empty uses the system store
   --tls-server-name string  identity to verify and send in SNI; empty uses
-                            the host
+                            the host. --host decides where svcdoctor connects
+                            and this decides whose identity it expects there,
+                            so --host 10.20.30.40 --tls-server-name db.internal
+                            connects to the address and verifies the name.
+                            With a bare address and no override, the
+                            certificate is checked against its IP SANs and no
+                            SNI is sent, because SNI carries names only
   --tls-insecure            do not verify the endpoint's identity. Explicit,
                             never automatic, and recorded in the report. The
                             resulting channel is unverified, which the

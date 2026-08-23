@@ -116,28 +116,13 @@ func metadataNode(graph domain.Graph) (domain.Evidence, bool) {
 // itself finished when it is not, so the direction it errs in is the one that
 // says so.
 func advertisementResolved(graph domain.Graph, advertisement domain.EvidenceID) bool {
-	lookup, ok := singleChild(graph, advertisement, vocabulary.StepDNSLookup)
-	if !ok {
-		// The budget stopped the run before this advertisement's sweep began.
-		// Nothing about the endpoint was measured, and the advertisement node
-		// alone claims nothing about reachability.
-		return false
+	connections, outcome := advertisedConnections(graph, advertisement)
+	if outcome != inspectConnections {
+		return outcome == resolvedByLookup
 	}
-	if unknownLocal(lookup) {
-		return false
-	}
-	if lookup.State() == domain.StateFail {
-		// Resolution produced nothing to connect to, which is a complete
-		// negative on its own: there is no address a client could have selected
-		// instead. The chain mints no TCP node under such a lookup, so there is
-		// nothing further to inspect.
-		return true
-	}
-
-	connections := children(graph, lookup.ID(), vocabulary.StepTCPConnect)
 	if len(connections) == 0 {
-		// The name resolved and nothing was attempted against it. That is not a
-		// negative anybody proved.
+		// Something was in hand to connect to and nothing was attempted against
+		// it. That is not a negative anybody proved.
 		return false
 	}
 
@@ -173,6 +158,75 @@ func advertisementResolved(graph domain.Graph, advertisement domain.EvidenceID) 
 	// Every path terminated in a positively observed failure. The negative is
 	// complete.
 	return true
+}
+
+// advertisedRoot says what the top of one advertisement's sweep established.
+type advertisedRoot int
+
+const (
+	// inspectConnections means the sweep produced connection nodes, and the
+	// answer depends on them.
+	inspectConnections advertisedRoot = iota
+
+	// resolvedByLookup means the DNS root settled the question on its own: it
+	// failed, so there is no address a client could have selected instead, and
+	// the chain minted no TCP node beneath it.
+	resolvedByLookup
+
+	// unresolvedRoot means nothing about the endpoint was measured, or the
+	// measurement that exists is svcdoctor's own budget rather than a fact about
+	// the target.
+	unresolvedRoot
+)
+
+// advertisedConnections walks the top of one advertisement's sweep and returns
+// the connection nodes to inspect.
+//
+// # The two shapes, and why the layer decides
+//
+//	kafka.broker_advertised -> dns.lookup -> tcp.connect ...   a name
+//	kafka.broker_advertised ->               tcp.connect ...   an address
+//
+// An advertisement that named an address resolved nothing, so its sweep has no
+// L1 node and the connections hang straight off it (ADR 0059). The
+// discriminator is the child's step, which the producer wrote into the graph.
+//
+// **Unrecognized means unresolved, never resolved.** The failure this predicate
+// exists to prevent is a run reporting itself finished when it is not, so every
+// shape it was not taught returns unresolvedRoot — including a mixed shape, and
+// including a literal sweep with more than one connection, which nothing
+// produces because one address is one address.
+func advertisedConnections(
+	graph domain.Graph, advertisement domain.EvidenceID,
+) ([]domain.Evidence, advertisedRoot) {
+	roots := graph.Children(advertisement)
+	if lookup, ok := singleChild(graph, advertisement, vocabulary.StepDNSLookup); ok {
+		// The lookup must be the *only* thing beneath the advertisement. A
+		// sibling connection alongside it is a mixed shape no producer makes,
+		// and reading the lookup branch while ignoring the sibling would be
+		// exactly the partial read of an unrecognized graph this predicate
+		// exists to refuse.
+		if len(roots) != 1 {
+			return nil, unresolvedRoot
+		}
+		if unknownLocal(lookup) {
+			return nil, unresolvedRoot
+		}
+		if lookup.State() == domain.StateFail {
+			return nil, resolvedByLookup
+		}
+		return children(graph, lookup.ID(), vocabulary.StepTCPConnect), inspectConnections
+	}
+
+	// No lookup. Either the sweep measured an address directly, or the budget
+	// stopped the run before this advertisement's sweep began — in which case
+	// there are no children at all, nothing about the endpoint was measured, and
+	// the advertisement node alone claims nothing about reachability.
+	connections := children(graph, advertisement, vocabulary.StepTCPConnect)
+	if len(connections) == 0 || len(connections) != len(roots) {
+		return nil, unresolvedRoot
+	}
+	return connections, inspectConnections
 }
 
 // transportPath is one measured address, with the handshake the plan required

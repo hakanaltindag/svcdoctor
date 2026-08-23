@@ -33,6 +33,47 @@ type logicalTarget struct {
 	port uint16
 }
 
+// normalizeHost is L0 input normalization for the one host a run is about.
+//
+// # Why the composition root does this rather than each consumer
+//
+// The host an operator typed reaches four places that must agree: the
+// requested-target anchor's subject, the report envelope's target, the logical
+// endpoint every transport node is scoped by, and the key the credential is
+// bound to. Canonicalizing at each of them is how they come to disagree, and the
+// disagreement is not hypothetical — before this rule, `--host
+// 2001:0db8:0:0:0:0:0:1` produced an anchor reading `[2001:0db8:0:0:0:0:0:1]:1`
+// and a connection subject reading `[2001:db8::1]:1`, two spellings of one
+// address inside a single evidence identifier.
+//
+// So it happens once, here, before validate runs. Everything downstream receives
+// the canonical spelling and no longer has an opportunity to pick a different
+// one. The rule itself is internal/probe's, shared with the transport chain, so
+// L0 and L1 cannot drift apart either (ADR 0059).
+//
+// # Empty is left alone
+//
+// An empty host is a caller defect with an existing, more specific message in
+// validate. Producing an "unsupported host" error for it here would replace a
+// precise diagnosis with a vaguer one.
+//
+// # A name is returned verbatim
+//
+// Lowercasing, trailing-dot removal and IDNA conversion all change the question
+// the resolver is asked, and evidence must record the question that was actually
+// asked. Only an address literal has a canonical form this layer may impose,
+// because for a literal there is no question to change.
+func normalizeHost(host string) (string, error) {
+	if host == "" {
+		return host, nil
+	}
+	h, err := probe.ParseHost(host)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrInvalidInput, err)
+	}
+	return h.String(), nil
+}
+
 // label renders the logical endpoint.
 //
 // net.JoinHostPort is the whole implementation on purpose. It is the bracketing

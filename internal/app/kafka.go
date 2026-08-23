@@ -212,6 +212,14 @@ func DiagnoseKafka(ctx context.Context, params KafkaParams) (Result, error) {
 	if ctx == nil {
 		return Result{}, fmt.Errorf("%w: context must not be nil", ErrInvalidInput)
 	}
+	// L0 input normalization, before validation, so that every later layer —
+	// including the credential binding check inside validate — sees one canonical
+	// spelling of the host. See normalizeHost and ADR 0059.
+	host, err := normalizeHost(params.Host)
+	if err != nil {
+		return Result{}, err
+	}
+	params.Host = host
 	if err := params.validate(); err != nil {
 		return Result{}, err
 	}

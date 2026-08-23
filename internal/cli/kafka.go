@@ -114,6 +114,10 @@ func (a *App) parseKafka(args []string) (kafkaCommand, error) {
 	if *host == "" {
 		return kafkaCommand{}, usagef("--host is required")
 	}
+	target, err := checkHost(*host)
+	if err != nil {
+		return kafkaCommand{}, err
+	}
 	if *port == 0 || *port > math.MaxUint16 {
 		return kafkaCommand{}, usagef("--port %d is outside 1-65535", *port)
 	}
@@ -150,7 +154,7 @@ func (a *App) parseKafka(args []string) (kafkaCommand, error) {
 	// ADR 0050 makes the composition root refuse anything differently bound, so
 	// a credential naming a resolved address or an advertised broker cannot be
 	// constructed here and travel.
-	credential, err := credentialFor(*host, uint16(*port), *user, secret)
+	credential, err := credentialFor(target, uint16(*port), *user, secret)
 	if err != nil {
 		return kafkaCommand{}, err
 	}
@@ -165,7 +169,7 @@ func (a *App) parseKafka(args []string) (kafkaCommand, error) {
 		output:    *output,
 		shareable: *shareable,
 		params: app.KafkaParams{
-			Host:      *host,
+			Host:      target,
 			Port:      uint16(*port),
 			Mechanism: *mechanism,
 

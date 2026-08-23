@@ -9,12 +9,14 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 	"time"
 
 	adapterpostgres "github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/app"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/platform/local"
+	"github.com/hakanaltindag/svcdoctor/internal/probe"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/tcp"
 	"github.com/hakanaltindag/svcdoctor/internal/render"
@@ -207,6 +209,10 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 	if *host == "" {
 		return postgresCommand{}, usagef("--host is required")
 	}
+	target, err := checkHost(*host)
+	if err != nil {
+		return postgresCommand{}, err
+	}
 	if *user == "" {
 		// No fallback to the operating-system user. Diagnosing as whoever
 		// happens to be logged in would make the report ambiguous about the
@@ -251,7 +257,7 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 	if err != nil {
 		return postgresCommand{}, err
 	}
-	credential, err := credentialFor(*host, uint16(*port), *user, secret)
+	credential, err := credentialFor(target, uint16(*port), *user, secret)
 	if err != nil {
 		return postgresCommand{}, err
 	}
@@ -269,7 +275,7 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 		output:    *output,
 		shareable: *shareable,
 		params: app.PostgresParams{
-			Host:     *host,
+			Host:     target,
 			Port:     uint16(*port),
 			Role:     *user,
 			Database: *database,
@@ -338,6 +344,33 @@ func checkOutput(output string) error {
 	default:
 		return usagef(`--output %q must be "text" or "json"`, output)
 	}
+}
+
+// checkHost accepts a hostname or an IP address literal and returns the
+// canonical spelling of it.
+//
+// # Why the CLI canonicalizes rather than leaving it to the run
+//
+// The credential is built here, and it is bound to `security.Endpoint`, which
+// canonicalizes an address literal of its own accord. The run canonicalizes too.
+// If those two saw different spellings of the same address the binding check
+// would refuse a credential the operator correctly supplied — so the CLI
+// normalizes once, before the credential exists, and both halves are built from
+// the same string.
+//
+// # It is a usage error, not a run error
+//
+// A host svcdoctor declines to measure is bad input, and bad input exits 2 with
+// the flag named. Reaching the composition root first would produce the same
+// refusal as an internal error, which is a worse answer to the same question.
+// Today the only such host is an IPv6 literal carrying a zone identifier; see
+// probe.ParseHost and ADR 0059.
+func checkHost(host string) (string, error) {
+	h, err := probe.ParseHost(host)
+	if err != nil {
+		return "", usagef("--host %s", strings.TrimPrefix(err.Error(), "unsupported host: "))
+	}
+	return h.String(), nil
 }
 
 // trustSource loads the PEM trust material, or reports that it could not.
