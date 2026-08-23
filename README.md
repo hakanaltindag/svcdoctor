@@ -367,22 +367,65 @@ Credential material is not part of the report, in either output mode.
 
 ## TLS
 
-TLS is required by default and the endpoint's identity is verified by default.
+TLS is required by default and the endpoint's identity is verified by default. The full
+policy is [ADR 0058](docs/decisions/0058-tls-trust-and-peer-identity-authority.md).
 
 | Flag | Meaning |
 |---|---|
 | `--tls require\|disable` | negotiate an encrypted channel, or do not (default `require`) |
-| `--tls-ca-file <path>` | PEM trust source; empty uses the system trust store |
+| `--tls-ca-file <path>` | PEM trust source. **It replaces the system trust store** — see below |
 | `--tls-server-name <name>` | identity to verify and send in SNI; empty uses `--host` |
 | `--tls-insecure` | do not verify the endpoint's identity |
 
 There is no automatic fallback: a failed TLS negotiation is reported, never retried in
 plaintext. libpq's `sslmode` vocabulary is deliberately not reproduced.
 
-`--tls-insecure` disables verification and is recorded in the report. It does **not** mean
-"connect insecurely and authenticate anyway": the resulting channel is unverified, and the
-credential-transport policy refuses to present a password over an unverified channel. Such a
-run reports `POSTGRES_CREDENTIAL_WITHHELD` and sends nothing.
+**Trust and identity are two separate questions**, and svcdoctor reports them separately:
+`TLS_CHAIN_NOT_TRUSTED` means the chain did not verify against this run's trust source, and
+`TLS_IDENTITY_MISMATCH` means it verified and named something else. A trusted chain with the
+wrong identity is never reported as a verified peer.
+
+### `--tls-ca-file` replaces the system trust store
+
+When you name a CA file it becomes the **complete** trust source for the run; system roots are
+not consulted. That is what makes "only this issuer is acceptable here" expressible, and it is
+why naming the wrong CA fails rather than quietly passing against a public certificate. To
+trust both, concatenate the PEMs into one file.
+
+An unusable CA file — missing, unreadable, empty, or holding no certificate — is an invocation
+error (exit 2). svcdoctor never falls back to the system store when you asked for a specific
+one.
+
+### Identity is the name you asked for
+
+The identity verified is exactly `--host`, unless `--tls-server-name` overrides it. **DNS
+resolution never changes it**: one hostname resolving to five addresses produces five
+handshakes that all verify that hostname, which is what a real client does.
+
+`--tls-server-name` sets both the identity verified and the name sent in SNI — they are one
+setting, and svcdoctor will not verify one name while announcing another. It applies to the
+**requested target only**. Kafka brokers learned from Metadata are verified against their own
+advertised names, because a bootstrap address and a broker are different endpoints and
+frequently carry different certificates.
+
+Certificates are matched on subject alternative names. A `CN`-only certificate does not verify,
+matching every modern client; svcdoctor adds no compatibility exception for one.
+
+### `--tls-insecure`
+
+It disables identity verification — both chain and name, which in Go are one operation. It is
+explicit, per-run, and never an automatic fallback after a verification failure.
+
+It does **not** mean "connect insecurely and authenticate anyway": the resulting channel is
+unverified, and the credential-transport policy refuses to present a password over an
+unverified channel. Such a run reports `POSTGRES_CREDENTIAL_WITHHELD` or
+`KAFKA_CREDENTIAL_WITHHELD` and sends nothing.
+
+> **Read the JSON to see that verification was disabled.** The canonical report records it as
+> `security.tlsVerificationDisabled` and marks each handshake `tls.verified: false`. **The
+> terminal output does not yet say so** — it shows `✓ PASS TLS` for a handshake whose peer was
+> never identified. That gap is recorded in [ADR 0058](docs/decisions/0058-tls-trust-and-peer-identity-authority.md)
+> §14.1 and is scheduled for the next phase.
 
 ## Output modes
 
@@ -593,9 +636,8 @@ pending release validation.
 Next, in no committed order:
 
 - Kafka BASIC release validation
-- literal IPv4/IPv6 target semantics, for both services
-- a TLS trust and identity policy review — trust replacement versus augmentation, IP SAN
-  verification, client certificates
+- literal IPv4/IPv6 target semantics, for both services, and the three gaps ADR 0058 recorded
+- client certificates / mTLS, whose credential authority ADR 0058 deliberately left open
 - managed-service protocol compatibility: Redpanda, Confluent Cloud, AWS MSK, Azure Event
   Hubs' Kafka API; RDS, Aurora, Cloud SQL, Azure Database for PostgreSQL
 - Markdown and HTML renderers, derived from the canonical report

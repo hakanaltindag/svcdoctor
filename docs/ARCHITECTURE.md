@@ -1140,6 +1140,11 @@ less: each endpoint against its own identity rather than all of them against one
 
 `TestASuccessfulMetadataExchangeSweepsAdvertisedEndpoints` fails if the override travels.
 
+**ADR 0058 later made this one clause of a whole-product TLS policy** — trust source,
+requested-target identity, SNI, IP SANs and insecure mode — and reached the same answer
+from the other direction: one `--tls-server-name` cannot truthfully be the expected
+identity for both a bootstrap endpoint and the brokers it names, so it does not try.
+
 **Completeness is Kafka's own predicate.** `incompleteKafkaRun` implements ADR 0051:
 `kafka.metadata` PASS does **not** short-circuit, because advertised reachability is half
 of what the command promised to measure. One working path resolves an advertisement

@@ -2552,7 +2552,9 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 | ~~6.3~~ | ~~Kafka protocol diagnosis ownership~~ | **Delivered early as Phase 6.1c-P2.** ADR 0054 required the owners before composition made their producers reachable, so this moved ahead of 6.1c rather than staying here. The number is retired, not pending |
 | **6.4** | Kafka renderer hierarchy + Kafka CLI | `collectPaths` promotes every `tcp.connect` to a top-level path, which conflates bootstrap and advertised sweeps; the tree needs a third level. Also owns the measured-zero versus unmeasured duration contract |
 | **6.5** | Kafka BASIC closure | **Complete.** Includes the ADR 0054 §5 closure test, re-run mechanically against the producers |
-| **6.6** | Kafka release validation | |
+| **6.6** | TLS trust and peer identity policy | **Complete.** ADR 0058. A decision phase: it had to precede IP literals, managed compatibility and release validation, because each would otherwise have made its own trust and identity assumption |
+| **6.7** | IP literal target semantics | The graph-shape decision and its implementation. **Not blocked by TLS** — ADR 0058 §6 settled IP SAN identity — and it also carries ADR 0058's three deferred product gaps |
+| **6.8** | Release and compatibility validation | Formerly numbered 6.6. Real-cluster release validation, and the first managed/Redpanda evidence |
 
 - [x] **6.1a** mechanism guard: UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`, zero `SecretFor`,
       zero `Reveal`, zero bytes written, proven by test — **COMPLETE**
@@ -2579,7 +2581,15 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
       `not measured` branches, unread finding prose, and unguarded README capability claims.
       SCRAM production files byte-identical, `schemaVersion` 1, 40 finding codes. See
       "Phase 6.5" below
-- [ ] **6.6** Kafka release validation against the real cluster
+- [x] **6.6** TLS trust and peer identity policy — **COMPLETE**, ADR 0058. Decision only: no
+      production Go, no `FindingCode`, no `FailureClass`, no `schemaVersion`, no flag, no
+      dependency, and no SCRAM change. Sixteen mutations; the two clauses that turned out to be
+      unguarded rather than unimplemented are now covered, and Go's IP-SAN and CN behaviour is
+      pinned by test rather than remembered. Three product gaps recorded and deferred to 6.7.
+      See "Phase 6.6" below
+- [ ] **6.7** IP literal target semantics, plus ADR 0058 §14's three deferred gaps
+- [ ] **6.8** Kafka release validation against the real cluster *(this was Phase 6.6 until the
+      TLS policy review took that number in Phase 6.6; the content is unchanged)*
 
 ### Phase 6.1a — Kafka authentication mechanism guard (complete)
 
@@ -3236,10 +3246,11 @@ These are recorded elsewhere in this document and are **not** closed by Phase 6.
 - [ ] IP literal target semantics — reproduction and the full decision list are recorded below.
       The public contract is that `--host` expects a name that resolves, and that sentence is
       now held by `TestTheREADMENeverClaimsIPLiteralSupport` and its `--help` sibling
-- [ ] TLS Trust & Identity Policy Review — system roots versus a supplied CA, trust
+- [x] TLS Trust & Identity Policy Review — system roots versus a supplied CA, trust
       replacement versus augmentation, internal and enterprise PKI, `ServerName` override, IP
       SAN verification, insecure mode, discovered-broker identity, mTLS. **No trust widening
-      was decided or implied here**
+      was decided or implied here.** *Closed afterwards by Phase 6.6 and ADR 0058, except
+      mTLS, which that ADR deliberately leaves open*
 - [ ] Managed-service protocol compatibility — Apache Kafka self-hosted is the only Kafka
       implementation svcdoctor has ever run against. Redpanda self-hosted, Redpanda Cloud,
       Confluent Cloud, AWS MSK SCRAM, AWS MSK IAM and Azure Event Hubs' Kafka API are all
@@ -3248,6 +3259,89 @@ These are recorded elsewhere in this document and are **not** closed by Phase 6.
       only item that tests the Kafka protocol against a non-Apache implementation
 - [ ] SCRAM server-final strictness hardening — the four-row table below is pinned at
       first-wins behaviour and row three is the one worth revisiting
+
+### Phase 6.6 — TLS trust and peer identity policy: COMPLETE
+
+**A decision phase. Its output is ADR 0058 and three test files; it changed no production Go.**
+
+It had to come before Phase 6.7, managed compatibility and release validation, because each of
+those would otherwise have made its own trust-and-identity assumption and none of them would
+have written it down.
+
+#### What was decided
+
+Almost every clause ratifies what the code already did — which is the outcome a review should
+hope for and not the one it should assume. Each was checked against source, and the
+externally-observable ones against the Go standard library rather than against its
+documentation.
+
+- **A supplied `--tls-ca-file` replaces the system trust store.** Model A. Augmentation was
+  rejected because it cannot express *"only this issuer is acceptable here"* and because it
+  silently passes a run configured with the **wrong** CA against any publicly-issued
+  certificate — a diagnostic tool reporting success for a broken configuration.
+- **Identity is `--host`, or `--tls-server-name` when given, and DNS resolution never changes
+  it.** The identity analogue of ADR 0028's credential rule, for the same reason: resolution
+  is attacker-influenceable.
+- **The override drives verification *and* SNI**, because in Go they are one field. Splitting
+  them is refused: it needs hand-written verification and no operator wants it.
+- **IP SANs already verify with no flag**, and Go sends no SNI for an IP literal (RFC 6066
+  forbids it). **CN is never an identity** and svcdoctor will add no exception to resurrect it.
+- **Advertised Kafka brokers are verified against their own advertised names**, and the
+  requested-target override does **not** propagate. One `--tls-server-name` cannot truthfully
+  be the expected identity for both a bootstrap load balancer and three brokers with their own
+  certificates — that is the *normal* managed topology — so it does not try. No new flag.
+- **Discovery creates identity context; discovery never creates credential authority.** An
+  advertised name necessarily becomes the expected peer identity for a connection to that
+  endpoint, and that constrains what svcdoctor will accept *upward*. It authorizes nothing:
+  zero credential bytes, zero SASL bytes, whatever certificate the endpoint presents.
+- **`--tls-insecure` disables identity verification and nothing else.** It notably does not
+  enable authentication — the credential-transport policy still refuses an unverified channel,
+  so the flag makes authentication *not* happen.
+- **Go's default TLS version bounds are kept**, measured at 1.2 minimum with 1.3 negotiated.
+  Pinning stricter bounds would make the evidence describe svcdoctor rather than the target.
+- **No new finding code.** The distinction that mattered — unknown CA versus name mismatch,
+  which need different operator actions — is already `TLS_CHAIN_NOT_TRUSTED` and
+  `TLS_IDENTITY_MISMATCH`.
+
+#### What the phase found that the plan did not
+
+1. **Two policy clauses were unguarded rather than unimplemented, and only mutation found
+   them.** Making a supplied CA *append* to the system store passed the entire repository
+   suite — the single most consequential clause of the trust policy, and every existing test
+   covered what the loader refuses rather than what its pool contains. And a transport chain
+   that ignored `--tls-server-name` outright also passed, while the PostgreSQL adapter's copy
+   of the same rule *was* covered. The two halves of one policy were guarded unequally, and the
+   uncovered half is the one every Kafka handshake goes through.
+
+2. **A surviving mutation is a hypothesis, not a finding.** The mutation for *"keep trust,
+   drop identity"* added a permissive `VerifyConnection` and survived — meaninglessly, because
+   Go calls it **after** normal verification rather than instead of it. Measured, then
+   rewritten as `InsecureSkipVerify` plus a chain-only `VerifyPeerCertificate`, which is the
+   only reachable form and is exactly what the ADR forbids svcdoctor from writing. Reported as
+   a guard gap it would have been wrong.
+
+3. **The terminal never says peer verification was disabled.** `internal/render/terminal`
+   contains no reference to `TLSVerificationDisabled` or `tls.verified`. A `--tls-insecure`
+   run renders `✓ PASS  TLS  1.7ms` and `status OK`, with nothing anywhere in the document
+   saying nobody checked who answered. Reproduced. The canonical JSON is correct, so it is a
+   projection gap rather than a semantic one — which is why it is a recorded gap and not a
+   STOP — but it is the same failure ADR 0048 §9 fixed for `OK`.
+
+4. **PostgreSQL and Kafka disagree about inert TLS flags.** `--tls disable --tls-server-name x`
+   is refused by Kafka and silently accepted by PostgreSQL, which then also reports
+   `tlsVerificationDisabled: true` for a run that performed no handshake. Measured against the
+   built binary. Both are PostgreSQL predating Kafka's reasoning; neither is a trust defect,
+   and fixing the first turns a previously-accepted invocation into exit 2, which is a
+   released-CLI change.
+
+5. **TLS was never what blocked IP literals.** The layer already does the right thing for an
+   address target. What Phase 6.7 must fix is DNS and graph shape.
+
+#### Deliberately not done
+
+No IP-literal execution, no managed or Redpanda validation, no mTLS, no trust-source flag, no
+certificate auto-discovery, no revocation or pinning, no TLS version change, no renderer
+change, and no SCRAM change — all 23 SCRAM production files byte-identical.
 
 ## Standing design items opened by Phase 6.2 — NOT STARTED
 
@@ -3309,8 +3403,14 @@ Nothing here is implemented, and none of it should be attempted piecemeal:
       structurally different reports for the same endpoint
 - [ ] what run completeness means when there was nothing to resolve
 
-This overlaps the TLS item below at IP SAN verification, and the two must be sequenced
-together rather than each assuming the other decided.
+This overlapped the TLS item below at IP SAN verification. **That half is now decided:**
+ADR 0058 §6 establishes, by measurement against the standard library, that an IP literal
+already verifies against a certificate's IP SANs with no flag, that Go sends no SNI for one,
+and that `--host <address> --tls-server-name <name>` connects by address and verifies the name.
+`internal/probe/tls/ipsan_test.go` pins all of it.
+
+So **TLS is not what blocks IP literals.** Everything remaining above is DNS, graph shape,
+canonicalization, rendering and redaction, and none of it needs a TLS decision.
 
 **Measured in Phase 6.4C, against the real binary, rather than assumed.** A literal target is
 accepted today and produces a run that is useful and partly untrue:
@@ -3341,24 +3441,51 @@ Both were identified during the Phase 6.2a and 6.2a-R2 SCRAM reviews and both we
 of them on purpose. Neither is a SCRAM question, and folding either into a secret-authority
 record would produce one document answering neither well.
 
-### TLS Trust & Identity Policy Review
+### TLS Trust & Identity Policy Review — CLOSED by ADR 0058 (Phase 6.6)
 
-svcdoctor decides what to trust and whose identity to check, and today that decision is
-implicit. A dedicated review must settle, at minimum:
+**Settled. The policy is ADR 0058; it is Accepted and it is a decision record, not an
+implementation record.** Phase 6.6 changed no production Go.
 
-- [ ] system trust store versus an explicitly supplied CA
-- [ ] internal AD / private PKI trust, including container and Kubernetes CA injection
-- [ ] `--tls-ca-file`: trust **replacement** versus **augmentation** — the two have different
-      failure modes and only one can be the default
-- [ ] hostname verification, and an explicit `ServerName` override
-- [ ] **IP SAN verification** — what identity a certificate must carry when the target is a
-      literal address rather than a name. Shared with the IP literal item above, and the two
-      must be decided together rather than each assuming the other settled it
-- [ ] bootstrap `ServerName` versus advertised-endpoint `ServerName` semantics
-- [ ] client certificates / mTLS, and where that credential's authority lives
-- [ ] managed-service CA bundles
+- [x] system trust store versus an explicitly supplied CA — §2
+- [x] internal AD / private PKI trust, including container and Kubernetes CA injection — §2;
+      an injected CA is supplied through `--tls-ca-file` like any other
+- [x] `--tls-ca-file`: **replacement**, not augmentation, and the reasoning is that
+      augmentation cannot express "only this issuer is acceptable here" and silently passes a
+      run configured with the wrong CA — §2
+- [x] hostname verification and the `ServerName` override — §3, §4. The override drives
+      verification **and** SNI, because in Go they are one field; it applies to the requested
+      target only
+- [x] **IP SAN verification** — §6. It already works, measured rather than assumed: an IP
+      literal verifies against an IP SAN with no flag, and Go sends no SNI for one. **The TLS
+      layer is therefore not what blocks IP literals**; the graph layer is
+- [x] bootstrap versus advertised-endpoint `ServerName` — §7. Each advertised endpoint is
+      verified against its own advertised name, and the requested-target override does not
+      propagate. One flag could not truthfully serve both, and does not try
+- [ ] client certificates / mTLS, and where that credential's authority lives — **still open,
+      deliberately.** ADR 0058 §17 records that mTLS credential authority is *not* decided by
+      the trust policy and must not be assumed to follow from it
+- [x] managed-service CA bundles — §2 and §13; a provider bundle is an ordinary
+      `--tls-ca-file`. Policy compatibility only; nothing is validated
 
-This is separate from SCRAM secret authority (ADR 0055, ADR 0056) and must stay separate.
+This stayed separate from SCRAM secret authority (ADR 0055, ADR 0056), as required.
+
+**Three product gaps were found and deferred to Phase 6.7** (ADR 0058 §14), none of them a
+trust or identity defect:
+
+- [ ] the terminal renderer never says peer verification was disabled — `✓ PASS TLS` with no
+      annotation. The canonical JSON is correct, so this is a projection gap. Reproduced in
+      ADR 0058 §14.1
+- [ ] PostgreSQL accepts `--tls-ca-file`, `--tls-server-name` and `--tls-insecure` alongside
+      `--tls disable`, where Kafka refuses all three. Fixing it turns a previously-accepted
+      invocation into exit 2, which is a released-CLI change and needs its regression test
+- [ ] a plaintext PostgreSQL run can report `tlsVerificationDisabled: true`, because the flag
+      is not gated on a TLS plan existing. Kafka gates it correctly
+
+**Two policy clauses turned out to be unguarded rather than unimplemented**, found by the
+Phase 6.6 mutation matrix and closed by tests that changed no production behaviour: a supplied
+CA appending to the system store passed the whole suite, and so did a transport chain that
+ignored `--tls-server-name` outright. A third file pins Go's IP-SAN and CN behaviour, so
+Phase 6.7 inherits a measured contract rather than a remembered one.
 
 ### Managed-service protocol compatibility
 
