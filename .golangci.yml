@@ -94,6 +94,41 @@ linters:
         # only by accident.
     depguard:
       rules:
+        # The shared SCRAM core is a leaf, and this is an allowlist rather than
+        # a deny list.
+        #
+        # Every other rule in this file names what a layer may not reach, which
+        # is the right shape when the forbidden set is small and known. Here the
+        # *permitted* set is the small known one — six standard-library packages,
+        # each carrying its reason in ADR 0056 section 10 — and the forbidden set
+        # is everything else that exists or will ever exist. A deny list would
+        # have to be extended every time the standard library grows a package
+        # somebody could reach for.
+        #
+        # Three of the denials this produces are load-bearing. internal/security
+        # would put security.Reveal in reach of a package whose entire design is
+        # that it cannot open a secret. net would let a package that is supposed
+        # to be a pure function over bytes perform I/O. crypto/pbkdf2 would mean
+        # the core derives from a password — which is Model A, the design ADR
+        # 0055 rejected.
+        #
+        # Test files are exempt: the guards in guards_test.go parse this
+        # package's own source with go/ast and go/parser, and asserting the
+        # import set from inside it is the second, independent enforcement of the
+        # same property. See TestSharedCoreImportsAreExactlyTheAllowlist.
+        sasl-core-is-a-leaf:
+          list-mode: strict
+          files:
+            - "**/internal/sasl/**"
+            - "!**/*_test.go"
+          allow:
+            - crypto/hmac
+            - crypto/rand
+            - crypto/sha256
+            - encoding/base64
+            - errors
+            - strconv
+
         # Diagnosis is a pure function over frozen evidence.
         # docs/ARCHITECTURE.md section 6, ADR 0002.
         diagnosis-is-pure:

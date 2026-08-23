@@ -1,78 +1,31 @@
 package wire
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hakanaltindag/svcdoctor/internal/sasl/scram"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
-// --- the external authority -----------------------------------------------
-
-// RFC 7677 section 3 is the published SCRAM-SHA-256 test vector.
+// What this file tests after the Phase 6.2 extraction.
 //
-// It is the only test here that proves the derivation is *correct* rather than
-// self-consistent: every value below was written by the RFC, not by this
-// repository, so a mistake in PBKDF2, in the HMAC chain, in the auth-message
-// construction or in the channel-binding value fails it.
-const (
-	rfcPassword        = "pencil"
-	rfcClientNonce     = "rOprNGfwEbeRWgbNEkqO"
-	rfcServerNonce     = "rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0"
-	rfcSaltBase64      = "W22ZaJ0SNY7soEsUEjb6gQ=="
-	rfcIterations      = 4096
-	rfcClientFirstBare = "n=user,r=" + rfcClientNonce
-	rfcServerFirst     = "r=" + rfcServerNonce + ",s=" + rfcSaltBase64 + ",i=4096"
-	rfcClientProof     = "dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ="
-	rfcServerSignature = "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4="
-)
-
-func TestDeriveMatchesRFC7677Vector(t *testing.T) {
-	salt, err := base64.StdEncoding.DecodeString(rfcSaltBase64)
-	if err != nil {
-		t.Fatalf("decoding vector salt: %v", err)
-	}
-
-	first := serverFirst{nonce: rfcServerNonce, salt: salt, iterations: rfcIterations}
-	clientFinal, signature, err := derive(rfcPassword, rfcClientFirstBare, rfcServerFirst, first)
-	if err != nil {
-		t.Fatalf("derive: %v", err)
-	}
-
-	wantFinal := "c=biws,r=" + rfcServerNonce + ",p=" + rfcClientProof
-	if clientFinal != wantFinal {
-		t.Errorf("client-final:\n got %q\nwant %q", clientFinal, wantFinal)
-	}
-	if got := base64.StdEncoding.EncodeToString(signature); got != rfcServerSignature {
-		t.Errorf("server signature = %q, want %q", got, rfcServerSignature)
-	}
-}
-
-// TestChannelBindingValueIsComputedNotHardcoded proves "biws" is base64 of the
-// header actually sent, so the two cannot drift apart silently.
-func TestChannelBindingValueIsComputedNotHardcoded(t *testing.T) {
-	if got := base64.StdEncoding.EncodeToString([]byte(gs2Header)); got != "biws" {
-		t.Fatalf("base64(%q) = %q, want biws", gs2Header, got)
-	}
-}
-
-// TestGS2HeaderNeverClaimsChannelBindingSupport pins the one header PostgreSQL
-// accepts from a client that does not implement channel binding.
+// The RFC 5802 semantics moved to internal/sasl/scram, and the RFC 7677 vectors
+// that prove them moved with them: the derivation, the server-first grammar,
+// every bound, the nonce, the SASLname encoding and the mandatory
+// server-signature check are pinned there, once, for both services.
 //
-// "y,," is a downgrade claim and a real server refuses it with 28000 when it
-// does offer -PLUS; an authzid is refused outright with 0A000.
-func TestGS2HeaderNeverClaimsChannelBindingSupport(t *testing.T) {
-	if gs2Header != "n,," {
-		t.Fatalf("gs2 header = %q, want %q", gs2Header, "n,,")
-	}
-}
-
-// --- printable ASCII -------------------------------------------------------
+// What stays here is what this package still owns — PostgreSQL framing, the
+// plaintext password and its printable-ASCII policy, the boundary at
+// AuthenticationOk, and the guarantee that the shared core is handed a callback
+// and never a credential.
 
 func TestPrintableASCIIBoundaries(t *testing.T) {
 	tests := []struct {
@@ -146,243 +99,6 @@ func TestNonASCIIPasswordSendsNothing(t *testing.T) {
 }
 
 // --- server-first parsing ---------------------------------------------------
-
-func TestParseServerFirst(t *testing.T) {
-	const clientNonce = "CLIENTNONCE"
-	const goodSalt = "MDEyMzQ1Njc4OWFiY2RlZg=="
-
-	tests := []struct {
-		name string
-		raw  string
-		want error // nil means accepted
-	}{
-		{"well formed", "r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=4096", nil},
-		{"unknown extension ignored", "r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=4096,x=whatever", nil},
-
-		{"missing r", "s=" + goodSalt + ",i=4096", ErrMalformedMessage},
-		{"missing s", "r=" + clientNonce + "XYZ,i=4096", ErrMalformedMessage},
-		{"missing i", "r=" + clientNonce + "XYZ,s=" + goodSalt, ErrMalformedMessage},
-		{"duplicate r", "r=" + clientNonce + "XYZ,r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=4096", ErrMalformedMessage},
-		{"duplicate s", "r=" + clientNonce + "XYZ,s=" + goodSalt + ",s=" + goodSalt + ",i=4096", ErrMalformedMessage},
-		{"duplicate i", "r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=4096,i=4096", ErrMalformedMessage},
-
-		{"nonce does not extend", "r=OTHERNONCE,s=" + goodSalt + ",i=4096", ErrMalformedMessage},
-		{"nonce equal to client nonce", "r=" + clientNonce + ",s=" + goodSalt + ",i=4096", ErrMalformedMessage},
-		{"nonce is a prefix but shorter", "r=CLIENT,s=" + goodSalt + ",i=4096", ErrMalformedMessage},
-		{"nonce empty", "r=,s=" + goodSalt + ",i=4096", ErrMalformedMessage},
-
-		{"salt not base64", "r=" + clientNonce + "XYZ,s=!!!!,i=4096", ErrMalformedMessage},
-		{"attribute without equals", "r=" + clientNonce + "XYZ,ssss,i=4096", ErrMalformedMessage},
-		{"empty attribute", "r=" + clientNonce + "XYZ,,i=4096", ErrMalformedMessage},
-		{"mandatory extension", "m=required,r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=4096", ErrUnexpectedResponse},
-
-		{"iterations zero", "r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=0", ErrMalformedMessage},
-		{"iterations negative", "r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=-1", ErrMalformedMessage},
-		{"iterations not a number", "r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=4x", ErrMalformedMessage},
-		{"iterations empty", "r=" + clientNonce + "XYZ,s=" + goodSalt + ",i=", ErrMalformedMessage},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := parseServerFirst(tt.raw, clientNonce)
-			switch {
-			case tt.want == nil && err != nil:
-				t.Fatalf("parseServerFirst = %v, want accepted", err)
-			case tt.want != nil && !errors.Is(err, tt.want):
-				t.Fatalf("parseServerFirst = %v, want %v", err, tt.want)
-			}
-		})
-	}
-}
-
-// TestServerNonceMustStrictlyExtend states the rule on its own, because it is
-// two conditions and a mutation that drops either one is a real weakening.
-//
-// RFC 5802 section 5 requires the prefix check. The length check is separate: a
-// nonce equal to the client's carries no server entropy and defeats the replay
-// protection the nonce exists for.
-func TestServerNonceMustStrictlyExtend(t *testing.T) {
-	const nonce = "abcdefghijkl"
-	const salt = ",s=MDEyMzQ1Njc4OWFiY2RlZg==,i=4096"
-
-	if _, err := parseServerFirst("r="+nonce+"Q"+salt, nonce); err != nil {
-		t.Fatalf("a strictly extending nonce was refused: %v", err)
-	}
-	if _, err := parseServerFirst("r="+nonce+salt, nonce); err == nil {
-		t.Fatal("a server nonce equal to the client nonce was accepted")
-	}
-}
-
-// --- iteration bounds -------------------------------------------------------
-
-func TestParseIterations(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want int
-		err  error
-	}{
-		{"one", "1", 1, nil},
-		{"below the RFC floor", "4095", 4095, nil},
-		{"the RFC floor", "4096", 4096, nil},
-		{"postgresql default", "4096", 4096, nil},
-		{"a real hardened value", "65536", 65536, nil},
-		{"the ceiling", "1048576", MaxSCRAMIterations, nil},
-
-		{"one above the ceiling", "1048577", 0, ErrIterationsUnsupported},
-		{"postgresql's own maximum", "2147483647", 0, ErrIterationsUnsupported},
-		{"beyond uint64", "99999999999999999999999999", 0, ErrIterationsUnsupported},
-
-		{"zero", "0", 0, ErrMalformedMessage},
-		{"negative", "-1", 0, ErrMalformedMessage},
-		{"trailing garbage", "4096x", 0, ErrMalformedMessage},
-		{"empty", "", 0, ErrMalformedMessage},
-		{"whitespace", " 4096", 0, ErrMalformedMessage},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseIterations(tt.in)
-			if tt.err != nil {
-				if !errors.Is(err, tt.err) {
-					t.Fatalf("parseIterations(%q) err = %v, want %v", tt.in, err, tt.err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseIterations(%q) = %v", tt.in, err)
-			}
-			if got != tt.want {
-				t.Errorf("parseIterations(%q) = %d, want %d", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestExcessiveIterationsCostNothing proves the ceiling is enforced before any
-// PBKDF2 work, not after it.
-//
-// PostgreSQL's own maximum would take minutes of CPU. If this test ever becomes
-// slow, the check moved after the derivation and the guard is gone.
-func TestExcessiveIterationsCostNothing(t *testing.T) {
-	_, err := parseServerFirst(
-		"r=CLIENTX,s=MDEyMzQ1Njc4OWFiY2RlZg==,i=2147483647", "CLIENT")
-	if !errors.Is(err, ErrIterationsUnsupported) {
-		t.Fatalf("err = %v, want ErrIterationsUnsupported", err)
-	}
-}
-
-// TestLowIterationCountsAreAcceptedNotRefused pins a deliberate decision: RFC
-// 7677 says SHOULD, PostgreSQL's minimum is 1, and refusing would make svcdoctor
-// blind to the weak configuration it ought to be reporting.
-func TestLowIterationCountsAreAcceptedNotRefused(t *testing.T) {
-	first, err := parseServerFirst("r=CLIENTX,s=MDEyMzQ1Njc4OWFiY2RlZg==,i=1", "CLIENT")
-	if err != nil {
-		t.Fatalf("i=1 was refused: %v", err)
-	}
-	if first.iterations != 1 {
-		t.Errorf("iterations = %d, want 1", first.iterations)
-	}
-}
-
-// --- server-final -----------------------------------------------------------
-
-func TestVerifyServerFinal(t *testing.T) {
-	expected := []byte("0123456789abcdef0123456789abcdef")
-	good := base64.StdEncoding.EncodeToString(expected)
-	other := base64.StdEncoding.EncodeToString([]byte("ffffffffffffffffffffffffffffffff"))
-
-	tests := []struct {
-		name string
-		raw  string
-		want error
-	}{
-		{"correct signature", "v=" + good, nil},
-		{"correct signature with an extension", "v=" + good + ",x=ignored", nil},
-		{"wrong signature", "v=" + other, ErrServerSignatureMismatch},
-		{"truncated signature", "v=" + good[:20], ErrServerSignatureMismatch},
-		{"signature not base64", "v=!!!!", ErrMalformedMessage},
-		{"empty signature", "v=", ErrServerSignatureMismatch},
-
-		{"invalid-proof", "e=invalid-proof", ErrSCRAMRejected},
-		{"unknown-user", "e=unknown-user", ErrSCRAMRejected},
-		// Not a credential refusal: an encoding fault in the username field.
-		// Unreachable in practice — this client sends an empty username — and
-		// classified conservatively rather than as a rejection.
-		{"invalid-username-encoding", "e=invalid-username-encoding", ErrUnexpectedResponse},
-		{"other-error", "e=other-error", ErrUnexpectedResponse},
-		{"no-resources", "e=no-resources", ErrUnexpectedResponse},
-		{"an extension token", "e=vendor-specific-thing", ErrUnexpectedResponse},
-
-		{"neither v nor e", "x=something", ErrMalformedMessage},
-		{"empty", "", ErrMalformedMessage},
-		{"no equals", "vvvv", ErrMalformedMessage},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := verifyServerFinal(tt.raw, expected)
-			if tt.want == nil {
-				if err != nil {
-					t.Fatalf("verifyServerFinal = %v, want accepted", err)
-				}
-				return
-			}
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("verifyServerFinal = %v, want %v", err, tt.want)
-			}
-		})
-	}
-}
-
-// TestServerErrorTokenIsNeverReturned proves the peer's SCRAM error token cannot
-// reach a caller, since RFC 5802's extension production means it is not a closed
-// set and a peer may put arbitrary text there.
-func TestServerErrorTokenIsNeverReturned(t *testing.T) {
-	const hostile = "role=admin@prod-db.internal 10.0.0.5"
-
-	err := verifyServerFinal("e="+hostile, []byte("irrelevant"))
-	if err == nil {
-		t.Fatal("a hostile error token was accepted")
-	}
-	if strings.Contains(err.Error(), hostile) || strings.Contains(err.Error(), "prod-db") {
-		t.Fatalf("the peer's token reached the error: %q", err)
-	}
-}
-
-// --- nonce ------------------------------------------------------------------
-
-// TestCryptoNonceShape pins the shape libpq uses: 18 raw bytes, base64-encoded
-// to 24 characters with no padding.
-func TestCryptoNonceShape(t *testing.T) {
-	seen := make(map[string]struct{})
-	for range 64 {
-		nonce, err := cryptoNonce()
-		if err != nil {
-			t.Fatalf("cryptoNonce: %v", err)
-		}
-		if len(nonce) != 24 {
-			t.Fatalf("nonce %q has length %d, want 24", nonce, len(nonce))
-		}
-		if strings.Contains(nonce, "=") {
-			t.Fatalf("nonce %q carries base64 padding", nonce)
-		}
-		if strings.Contains(nonce, ",") {
-			t.Fatalf("nonce %q contains a comma, which SCRAM forbids", nonce)
-		}
-		raw, err := base64.StdEncoding.DecodeString(nonce)
-		if err != nil || len(raw) != scramRawNonceLen {
-			t.Fatalf("nonce %q did not decode to %d bytes", nonce, scramRawNonceLen)
-		}
-		if _, repeat := seen[nonce]; repeat {
-			t.Fatalf("cryptoNonce repeated %q", nonce)
-		}
-		seen[nonce] = struct{}{}
-	}
-}
-
-// --- exact client bytes -----------------------------------------------------
-
 // TestClientFirstMessageBytes pins the exact SASLInitialResponse svcdoctor
 // writes, with a deterministic nonce.
 //
@@ -392,7 +108,7 @@ func TestCryptoNonceShape(t *testing.T) {
 func TestClientFirstMessageBytes(t *testing.T) {
 	const nonce = "FIXEDNONCEfixednonce0000"
 
-	got, err := saslInitialResponse(gs2Header + "n=,r=" + nonce)
+	got, err := saslInitialResponse(scram.GS2Header + "n=,r=" + nonce)
 	if err != nil {
 		t.Fatalf("saslInitialResponse: %v", err)
 	}
@@ -415,7 +131,7 @@ func TestClientFirstMessageBytes(t *testing.T) {
 
 // TestClientFirstCarriesNoRoleName proves no identity reaches the SCRAM layer.
 func TestClientFirstCarriesNoRoleName(t *testing.T) {
-	frameBytes, err := saslInitialResponse(gs2Header + "n=,r=NONCE")
+	frameBytes, err := saslInitialResponse(scram.GS2Header + "n=,r=NONCE")
 	if err != nil {
 		t.Fatalf("saslInitialResponse: %v", err)
 	}
@@ -437,5 +153,139 @@ func TestWireNeverWritesAFrameItWouldRefuseToRead(t *testing.T) {
 	}
 	if _, err := saslInitialResponse(strings.Repeat("x", MaxMessageSize+1)); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("saslInitialResponse accepted an oversized payload: %v", err)
+	}
+}
+
+// --- the extraction boundary ------------------------------------------------
+
+// TestSCRAMSentinelsAliasTheSharedCore pins the identities Phase 6.2 preserved.
+//
+// internal/adapter/postgres/authenticate.go classifies with errors.Is against
+// these three values. If an alias were replaced by a fresh errors.New with the
+// same text, every classification would silently fall through to the default and
+// a rejected credential would arrive as a protocol error. Same text, different
+// identity, is exactly the failure this catches.
+func TestSCRAMSentinelsAliasTheSharedCore(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		wire error
+		core error
+	}{
+		{"iterations", ErrIterationsUnsupported, scram.ErrIterationsUnsupported},
+		{"signature mismatch", ErrServerSignatureMismatch, scram.ErrServerSignatureMismatch},
+		{"credential rejected", ErrSCRAMRejected, scram.ErrRejected},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !errors.Is(tt.wire, tt.core) || !errors.Is(tt.core, tt.wire) {
+				t.Errorf("%v and %v are not the same error identity; errors.Is in the "+
+					"adapter's classifier depends on it", tt.wire, tt.core)
+			}
+		})
+	}
+
+	// The two framing sentinels are deliberately **not** aliases. Both already
+	// mean something about PostgreSQL framing, and pointing them at the core's
+	// equivalents would collapse two meanings onto one identity.
+	if errors.Is(ErrMalformedMessage, scram.ErrMalformedMessage) {
+		t.Error("ErrMalformedMessage became an alias of the shared core's; " +
+			"PostgreSQL framing and SCRAM grammar must stay distinguishable")
+	}
+	if errors.Is(ErrUnexpectedResponse, scram.ErrUnexpectedResponse) {
+		t.Error("ErrUnexpectedResponse became an alias of the shared core's")
+	}
+}
+
+// TestTranslateSCRAMCoversEverySharedSentinel makes the boundary total.
+//
+// A core error with no translation would fall through the default and reach the
+// adapter as itself, where the classifier has never heard of it and would map it
+// to a protocol failure — blaming the target for a value svcdoctor invented.
+func TestTranslateSCRAMCoversEverySharedSentinel(t *testing.T) {
+	local := []error{
+		scram.ErrUsernameUnsupported,
+		scram.ErrNoDerivation,
+		scram.ErrDerivationFailed,
+		scram.ErrDerivedKeyLength,
+		scram.ErrWrongStep,
+	}
+	for _, err := range local {
+		if got := translateSCRAM(err); !errors.Is(got, ErrLocalDerivation) {
+			t.Errorf("translateSCRAM(%v) = %v, want ErrLocalDerivation: a fault in "+
+				"svcdoctor must never be reported as one in the target", err, got)
+		}
+	}
+
+	for _, tt := range []struct{ in, want error }{
+		{scram.ErrMalformedMessage, ErrMalformedMessage},
+		{scram.ErrUnexpectedResponse, ErrUnexpectedResponse},
+		{scram.ErrMessageTooLarge, ErrFrameTooLarge},
+		{scram.ErrIterationsUnsupported, ErrIterationsUnsupported},
+		{scram.ErrServerSignatureMismatch, ErrServerSignatureMismatch},
+		{scram.ErrRejected, ErrSCRAMRejected},
+	} {
+		if got := translateSCRAM(tt.in); !errors.Is(got, tt.want) {
+			t.Errorf("translateSCRAM(%v) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+
+	if translateSCRAM(nil) != nil {
+		t.Error("translateSCRAM(nil) must stay nil")
+	}
+}
+
+// TestDerivationClosureCapturesOnlyThePassword guards the one authority Model D
+// cannot remove.
+//
+// The shared core invokes a callback this package supplies, and it cannot see
+// what that callback closed over. A closure capturing the connection, the
+// context or the secret would hand the core the ability to cause I/O or to reach
+// a credential — not because the core asked, but because the caller passed it
+// in. ADR 0056 section 11 records this as a residual risk with review as the
+// primary control; this test is the mechanical part of that control.
+//
+// It is deliberately a *denylist* of the identifiers in scope at the call site,
+// not an allowlist of what the closure may name: an allowlist would have to
+// enumerate every package-level function the derivation legitimately calls, and
+// would fail on the next harmless refactor while catching nothing extra.
+func TestDerivationClosureCapturesOnlyThePassword(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "scram.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing scram.go: %v", err)
+	}
+
+	// Everything in scope at the call site that the closure must not reach.
+	forbidden := map[string]string{
+		"conn":     "the connection would let the shared core cause I/O",
+		"ctx":      "the context is the caller's execution budget, not the core's",
+		"secret":   "the core receives derived material, never a security.Secret",
+		"release":  "the deadline's lifetime belongs to this function",
+		"exchange": "the closure must not be able to re-enter the exchange",
+	}
+
+	literals := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		literals++
+		ast.Inspect(lit, func(inner ast.Node) bool {
+			ident, ok := inner.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if reason, banned := forbidden[ident.Name]; banned {
+				t.Errorf("the derivation closure names %q at line %d: %s",
+					ident.Name, fset.Position(ident.Pos()).Line, reason)
+			}
+			return true
+		})
+		return true
+	})
+
+	if literals != 1 {
+		t.Errorf("found %d function literal(s) in scram.go, want exactly 1 (the derivation "+
+			"callback). A second one would not be covered by the capture check above.", literals)
 	}
 }

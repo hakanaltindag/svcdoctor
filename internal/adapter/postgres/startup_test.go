@@ -466,12 +466,18 @@ func TestEnglishMessageGuardCoversTheClassifier(t *testing.T) {
 		t.Fatal("sqlStateFailure moved; the guard above may no longer cover the classifier")
 	}
 
-	// The authentication classifier and the SCRAM parser are covered too, and
-	// neither may join the exemption list: one maps SQLSTATE onto a class, and
-	// the other walks a grammar over bytes the peer chose.
+	// The authentication classifier is covered too, and may not join the
+	// exemption list: it maps SQLSTATE onto a failure class.
+	//
+	// The SCRAM attribute walker used to be named here as well. Phase 6.2 moved
+	// it to internal/sasl/scram, so the path follows it rather than the entry
+	// being dropped — a guard that stops naming what it guards is how this kind
+	// of coverage disappears. The walker still performs no strings operation,
+	// and the shared core cannot import strings at all: it is absent from the
+	// depguard allowlist, which is a stronger statement than this guard makes.
 	for _, want := range []struct{ path, symbol string }{
 		{"authenticate.go", "func authSQLStateFailure("},
-		{"wire/scram.go", "func scramAttributes("},
+		{"../../sasl/scram/parse.go", "func attributes("},
 	} {
 		body, readErr := os.ReadFile(want.path)
 		if readErr != nil {

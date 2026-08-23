@@ -2,62 +2,40 @@ package wire
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/pbkdf2"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"net"
-	"strconv"
 
+	"github.com/hakanaltindag/svcdoctor/internal/sasl/scram"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
-// MechanismSCRAMSHA256 is the only SASL mechanism svcdoctor performs.
+// MechanismSCRAMSHA256 is the only SASL mechanism svcdoctor performs for
+// PostgreSQL.
 //
 // It is exported because the adapter must decide whether the server advertised
 // it before deciding to authenticate at all, and that decision must compare
-// against the same string this package sends. One constant, one meaning.
-const MechanismSCRAMSHA256 = "SCRAM-SHA-256"
+// against the same string this package sends. One constant, one meaning — and
+// since Phase 6.2 that meaning comes from the shared core, so the name the
+// mechanism check compares and the name the exchange performs cannot drift.
+const MechanismSCRAMSHA256 = scram.MechanismSHA256
 
 // MaxSCRAMIterations bounds the PBKDF2 work svcdoctor will perform for one
 // exchange.
 //
-// The server names the iteration count, so it is the only value in this exchange
-// that decides how much CPU a diagnostic tool spends. PostgreSQL's
-// `scram_iterations` is settable per session by any role, with `max_val`
-// 2147483647; libpq validates only `>= 1` and imposes no ceiling at all. A peer
-// answering with the maximum buys roughly eight minutes of PBKDF2 for four bytes
-// of ASCII, measured.
+// The bound moved to internal/sasl/scram in Phase 6.2 and this is an alias, so
+// nothing that referenced the constant had to change. The reasoning is
+// unchanged and is recorded on scram.MaxIterations: the server names the
+// iteration count, so it is the only value in the exchange that decides how much
+// CPU a diagnostic tool spends, and 1048576 is 256 times PostgreSQL's default
+// for about a quarter of a second of work.
 //
-// 1048576 is 256 times PostgreSQL's default of 4096, sixteen times the highest
-// value observed in a real configuration, and about a quarter of a second of
-// work. A count above it is refused **before any derivation runs**. See ADR 0038
-// section 16.
-const MaxSCRAMIterations = 1 << 20
-
-// gs2Header is the GS2 header svcdoctor sends, and it is not negotiable.
-//
-// RFC 5802 section 5 defines "n" as *"client doesn't support channel binding"*,
-// which is the truthful statement for this implementation, and PostgreSQL
-// accepts it unconditionally — including over TLS with SCRAM-SHA-256-PLUS first
-// in the advertised list.
-//
-// "y" is **never** sent. It means "I support channel binding but I think you do
-// not", which is a downgrade claim, and a real PostgreSQL server refuses it with
-// `28000` when it does offer -PLUS. The authorization identity is absent rather
-// than empty-and-present, because PostgreSQL rejects any authzid outright with
-// `0A000`. See ADR 0038 section 4.
-const gs2Header = "n,,"
-
-// scramRawNonceLen is the client nonce length in bytes before encoding.
-//
-// Eighteen matches libpq's SCRAM_RAW_NONCE_LEN, which matters twice: it is the
-// shape every PostgreSQL-compatible server has been tested against, and it is
-// divisible by three, so the base64 encoding is 24 characters with no "="
-// padding to worry about against the RFC's printable-character rule.
-const scramRawNonceLen = 18
+// **The numeric ceiling is the core's, and mapping a refusal into evidence is
+// this service's.** That split is ADR 0056 section 7: the CPU being protected is
+// svcdoctor's and is service-independent, while EXEC_UNSUPPORTED_BY_SVCDOCTOR is
+// a claim in PostgreSQL's evidence model.
+const MaxSCRAMIterations = scram.MaxIterations
 
 // SCRAM is what one SCRAM-SHA-256 exchange observed, in plain Go values.
 //
@@ -100,23 +78,6 @@ type SCRAM struct {
 	Fields ErrorFields
 }
 
-// nonceSource produces one base64-encoded client nonce.
-//
-// It is an unexported function type rather than an exported interface on
-// purpose. Deterministic nonces are needed to pin exact message bytes in a test,
-// and that is the entire requirement; a public randomness abstraction would be a
-// seam anybody could reach and a production caller could set.
-type nonceSource func() (string, error)
-
-// cryptoNonce is the production source: 18 bytes of crypto/rand, base64-encoded.
-func cryptoNonce() (string, error) {
-	var raw [scramRawNonceLen]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(raw[:]), nil
-}
-
 // AuthenticateSCRAM runs one SCRAM-SHA-256 exchange over conn and stops at
 // AuthenticationOk.
 //
@@ -136,6 +97,20 @@ func cryptoNonce() (string, error) {
 // of the two to hold policy. See ADR 0027 for why the boundary is here and ADR
 // 0038 for what the caller must have established before arriving.
 //
+// # What moved out in Phase 6.2, and what deliberately did not
+//
+// The RFC 5802 semantics — nonce generation, SASLname encoding, the server-first
+// grammar, every bound, the derivation of the proof and the mandatory server
+// signature check — live in internal/sasl/scram, shared with Kafka.
+//
+// **The plaintext did not move with them.** The shared core exposes no API that
+// accepts a password; it receives the callback below, which closes over the
+// revealed value and performs PBKDF2 here. What crosses the package boundary is
+// a SaltedPassword: credential-derived and sensitive, but scoped to this
+// principal on this server for this salt rather than being the operator's
+// reusable credential. That is Model D, and ADR 0055 records why the simpler
+// design — handing the core a password — was rejected.
+//
 // # Where it stops
 //
 // At AuthenticationOk, having read exactly that frame and no further. The
@@ -145,15 +120,15 @@ func cryptoNonce() (string, error) {
 // path, so no byte belonging to a later step can be taken into a buffer that
 // step has no handle on.
 func AuthenticateSCRAM(ctx context.Context, conn net.Conn, secret security.Secret) (SCRAM, error) {
-	return authenticateSCRAM(ctx, conn, secret, cryptoNonce)
+	return authenticateSCRAM(ctx, conn, secret)
 }
 
-// authenticateSCRAM is the deterministic-nonce core.
+// authenticateSCRAM drives the exchange over one borrowed connection.
 //
 // # Order
 //
 // The password is revealed and immediately checked. Nothing between those two
-// statements can generate a nonce, derive a key, or write a byte, because there
+// statements can start an exchange, derive a key, or write a byte, because there
 // is nothing between them. See ADR 0038 section 11.1.1 for why the check cannot
 // precede the reveal: security.Secret exposes no way to learn anything about its
 // content, by construction, and deciding whether a password is printable ASCII
@@ -161,44 +136,46 @@ func AuthenticateSCRAM(ctx context.Context, conn net.Conn, secret security.Secre
 //
 // # Lifetime
 //
-// The plaintext exists as a local here and inside the PBKDF2 call. It is not
-// stored, not logged, not returned, and not placed in any error. **No erasure is
-// claimed and none is performed**: crypto/pbkdf2 copies the string, the derived
-// slices are copied into the frames written to the socket, and Go strings are
-// immutable and may already have been moved by the collector. Zeroing anything
-// here would leave live copies untouched while implying the value was gone.
-// internal/security/doc.go has stated since Phase 1 that Go cannot guarantee
-// erasure; a Zero call would be theatre that contradicts it.
-func authenticateSCRAM(
-	ctx context.Context, conn net.Conn, secret security.Secret, nonces nonceSource,
-) (SCRAM, error) {
+// The plaintext exists as a local here and inside the closure passed to
+// Continue, which the shared core invokes exactly once and never retains. It is
+// not stored, not logged, not returned, and not placed in any error. **No
+// erasure is claimed and none is performed**: crypto/pbkdf2 copies the string,
+// the derived slices are copied into the frames written to the socket, and Go
+// strings are immutable and may already have been moved by the collector.
+// Zeroing anything here would leave live copies untouched while implying the
+// value was gone. internal/security/doc.go has stated since Phase 1 that Go
+// cannot guarantee erasure; a Zero call would be theatre that contradicts it.
+func authenticateSCRAM(ctx context.Context, conn net.Conn, secret security.Secret) (SCRAM, error) {
 	if conn == nil {
 		return SCRAM{}, ErrInvalidInput
 	}
 
 	password := security.Reveal(secret)
 	if !printableASCII(password) {
-		// Refused before a deadline is bound, before a nonce exists, before any
-		// derivation, and before a byte is written.
+		// Refused before a deadline is bound, before an exchange exists, before
+		// any derivation, and before a byte is written.
 		return SCRAM{}, ErrPasswordUnsupported
 	}
 
 	release := bindDeadline(ctx, conn)
 	defer release()
 
-	clientNonce, err := nonces()
+	// The username is empty and that is the correct PostgreSQL form: the role
+	// travelled in the StartupMessage and the server ignores this attribute
+	// entirely — verified against a real server with a deliberately wrong value,
+	// which still authenticated. Sending it would add a second place a role name
+	// must be SCRAM-escaped for no protocol effect.
+	//
+	// RFC 5802's saslname production is 1*(...), so an empty username is not
+	// strictly grammatical; PostgreSQL requires it anyway, and the shared core
+	// permits it deliberately for exactly this caller. Kafka, which reads its
+	// principal from this field, refuses an empty one before it gets here.
+	exchange, clientFirstBare, err := scram.Begin("")
 	if err != nil {
-		return SCRAM{}, err
+		return SCRAM{}, translateSCRAM(err)
 	}
 
-	// client-first-bare. The username field is empty and that is the correct
-	// PostgreSQL form: the role travelled in the StartupMessage and the server
-	// ignores this attribute entirely — verified against a real server with a
-	// deliberately wrong value, which still authenticated. Sending it would add
-	// a second place a role name must be SCRAM-escaped for no protocol effect.
-	clientFirstBare := "n=,r=" + clientNonce
-
-	initial, err := saslInitialResponse(gs2Header + clientFirstBare)
+	initial, err := saslInitialResponse(scram.GS2Header + clientFirstBare)
 	if err != nil {
 		return SCRAM{}, err
 	}
@@ -211,20 +188,27 @@ func authenticateSCRAM(
 		return SCRAM{Fields: fields}, err
 	}
 
-	first, err := parseServerFirst(serverFirstRaw, clientNonce)
+	// iterations is captured rather than returned, because the shared core
+	// hands the count to the derivation and returns only the client-final
+	// message. It is recorded for evidence: ADR 0038 section 18 classifies the
+	// iteration count as a safe protocol fact, and it is the only value from
+	// this exchange that may leave the package.
+	var iterations int
+	clientFinal, err := exchange.Continue(serverFirstRaw, func(salt []byte, count int) ([]byte, error) {
+		iterations = count
+		// **The only thing this closure captures is the revealed password.** Not
+		// the connection, not the context, not the secret, not the deadline —
+		// capturing any of those would hand the shared core authority it is
+		// designed not to have, and TestDerivationClosureCapturesOnlyThePassword
+		// fails if one appears here. See ADR 0056 section 11.
+		return pbkdf2.Key(sha256.New, password, salt, count, sha256.Size)
+	})
+	out := SCRAM{Iterations: iterations}
 	if err != nil {
-		return SCRAM{}, err
-	}
-	// Everything the peer chose has now been validated. The iteration ceiling in
-	// particular was applied inside the parse, so no PBKDF2 has run.
-	out := SCRAM{Iterations: first.iterations}
-
-	proof, expectedSignature, err := derive(password, clientFirstBare, serverFirstRaw, first)
-	if err != nil {
-		return out, err
+		return out, translateSCRAM(err)
 	}
 
-	final, err := saslResponse(proof)
+	final, err := saslResponse(clientFinal)
 	if err != nil {
 		return out, err
 	}
@@ -238,8 +222,8 @@ func authenticateSCRAM(
 		return out, err
 	}
 
-	if err := verifyServerFinal(serverFinalRaw, expectedSignature); err != nil {
-		return out, err
+	if err := exchange.Verify(serverFinalRaw); err != nil {
+		return out, translateSCRAM(err)
 	}
 	out.Verified = true
 
@@ -262,7 +246,15 @@ func authenticateSCRAM(
 // relied on is that SASLprep is the identity function over this range, and an
 // undecodable byte sequence is not in it.
 //
-// # Why this restriction exists at all
+// # Why this stays here rather than moving with the rest
+//
+// It inspects the **plaintext password**, and plaintext does not cross into
+// internal/sasl/scram. That package holds an identical predicate for the
+// username, which is not a secret; this one holds it for the password, which is.
+// The duplication is the design: a shared helper would need the password as an
+// argument, which is the one thing Model D exists to prevent (ADR 0055).
+//
+// # Why the restriction exists at all
 //
 // PostgreSQL applies SASLprep (RFC 4013) to a password on both sides: when
 // `CREATE ROLE ... PASSWORD` builds the verifier, and in libpq before deriving.
@@ -283,297 +275,6 @@ func printableASCII(s string) bool {
 		}
 	}
 	return true
-}
-
-// serverFirst is a validated server-first message.
-type serverFirst struct {
-	nonce      string
-	salt       []byte
-	iterations int
-}
-
-// parseServerFirst validates everything the peer chose, and derives nothing.
-//
-// It parses structurally into comma-separated single-letter attributes; there is
-// no substring search anywhere, because a peer that can place "i=" inside a salt
-// should not be able to steer a heuristic.
-//
-// Every rule below is a refusal to continue rather than a warning:
-//
-//   - r, s and i are all required, and each may appear exactly once.
-//   - The server nonce must **strictly extend** the client nonce: the prefix must
-//     match and the result must be longer. RFC 5802 section 5 requires the prefix
-//     check; the length check is separate because a nonce equal to the client's
-//     adds no server entropy and defeats the replay protection the nonce exists
-//     for.
-//   - The salt must be valid standard base64.
-//   - The iteration count must be a positive decimal integer within
-//     MaxSCRAMIterations.
-//   - A mandatory extension ("m") must be refused, as RFC 5802 section 7
-//     requires of a client that does not understand it.
-//
-// Unrecognized non-mandatory attributes are ignored, which is what the RFC's
-// extension rule asks for.
-func parseServerFirst(raw, clientNonce string) (serverFirst, error) {
-	var (
-		out                      serverFirst
-		haveR, haveS, haveI      bool
-		nonce, saltText, iterStr string
-	)
-
-	err := scramAttributes(raw, func(key byte, value string) error {
-		switch key {
-		case 'r':
-			if haveR {
-				return ErrMalformedMessage
-			}
-			haveR, nonce = true, value
-		case 's':
-			if haveS {
-				return ErrMalformedMessage
-			}
-			haveS, saltText = true, value
-		case 'i':
-			if haveI {
-				return ErrMalformedMessage
-			}
-			haveI, iterStr = true, value
-		case 'm':
-			// A mandatory extension this implementation does not understand.
-			// RFC 5802 section 7 requires failing rather than proceeding.
-			return ErrUnexpectedResponse
-		default:
-			// A non-mandatory extension. Ignored by design.
-		}
-		return nil
-	})
-	if err != nil {
-		return serverFirst{}, err
-	}
-
-	if !haveR || !haveS || !haveI {
-		return serverFirst{}, ErrMalformedMessage
-	}
-	// Strictly extending: the prefix must be svcdoctor's own nonce, and the
-	// result must be longer. Compared as an exact slice equality against a value
-	// this process generated, never as a search through peer-chosen text.
-	if len(nonce) <= len(clientNonce) || nonce[:len(clientNonce)] != clientNonce {
-		return serverFirst{}, ErrMalformedMessage
-	}
-
-	salt, err := base64.StdEncoding.DecodeString(saltText)
-	if err != nil {
-		return serverFirst{}, ErrMalformedMessage
-	}
-
-	iterations, err := parseIterations(iterStr)
-	if err != nil {
-		return serverFirst{}, err
-	}
-
-	out.nonce, out.salt, out.iterations = nonce, salt, iterations
-	return out, nil
-}
-
-// scramAttributes walks the comma-separated `k=v` attributes of a SCRAM message.
-//
-// # Why this is hand-written rather than a strings.Split
-//
-// TestNoEnglishMessageClassification forbids the strings search and split
-// functions in every production file that interprets a peer's reply, because a
-// classifier that reads prose makes confident claims about bytes the peer chose.
-// **This file takes no exemption from that rule.** The scan below is a
-// byte-level grammar walk — a comma delimiter, an `=` separator and single-letter
-// keys, all fixed by RFC 5802 — and writing it out means a reader can see that
-// scram.go performs no text operation at all, rather than having to trust an
-// exemption entry.
-//
-// An attribute shorter than two bytes, or whose second byte is not `=`, is
-// malformed: the sender announced a grammar it did not follow.
-func scramAttributes(raw string, visit func(key byte, value string) error) error {
-	for {
-		end := len(raw)
-		for i := 0; i < len(raw); i++ {
-			if raw[i] == ',' {
-				end = i
-				break
-			}
-		}
-
-		attr := raw[:end]
-		if len(attr) < 2 || attr[1] != '=' {
-			return ErrMalformedMessage
-		}
-		if err := visit(attr[0], attr[2:]); err != nil {
-			return err
-		}
-
-		if end == len(raw) {
-			return nil
-		}
-		raw = raw[end+1:]
-	}
-}
-
-// parseIterations reads the iteration count and applies svcdoctor's ceiling.
-//
-// The digit scan happens first so that the two failures stay distinguishable: a
-// value that is not a number is a malformed message and says something about the
-// peer's framing, while a number too large for svcdoctor is a gap in svcdoctor
-// and says nothing about the peer at all. A value that overflows is in the
-// second category, because it is unambiguously above the ceiling.
-//
-// A count *below* RFC 7677's recommended 4096 is accepted. The RFC says SHOULD,
-// PostgreSQL's own minimum is 1, and a server configured that low is a real
-// deployment with a real weakness — refusing would make svcdoctor blind exactly
-// where its report would be most useful. The count is recorded, so a rule can
-// say so later.
-func parseIterations(v string) (int, error) {
-	if v == "" {
-		return 0, ErrMalformedMessage
-	}
-	for i := 0; i < len(v); i++ {
-		if v[i] < '0' || v[i] > '9' {
-			return 0, ErrMalformedMessage
-		}
-	}
-
-	n, err := strconv.ParseUint(v, 10, 64)
-	if err != nil {
-		// Only a range error is reachable: every byte is a digit. A count that
-		// does not fit in a uint64 is far above the ceiling.
-		return 0, ErrIterationsUnsupported
-	}
-	if n == 0 {
-		return 0, ErrMalformedMessage
-	}
-	if n > MaxSCRAMIterations {
-		return 0, ErrIterationsUnsupported
-	}
-	return int(n), nil
-}
-
-// derive computes the client proof and the signature the server must produce.
-//
-// Straight RFC 5802 section 3 with SHA-256, from the standard library only. The
-// channel-binding value is computed from the header actually sent rather than
-// written as the constant "biws", so it cannot silently stop matching if the
-// header ever changes — and the server includes that header in the value it
-// verifies.
-//
-// **Nothing computed here leaves this function except the two values returned**,
-// and neither of those leaves the exchange: the proof goes onto the socket and
-// the expected signature is compared and discarded.
-func derive(
-	password, clientFirstBare, serverFirstRaw string, first serverFirst,
-) (clientFinal string, expectedServerSignature []byte, err error) {
-	saltedPassword, err := pbkdf2.Key(sha256.New, password, first.salt, first.iterations, sha256.Size)
-	if err != nil {
-		return "", nil, err
-	}
-
-	clientKey := mac(saltedPassword, []byte("Client Key"))
-	storedKey := sha256.Sum256(clientKey)
-
-	channelBinding := base64.StdEncoding.EncodeToString([]byte(gs2Header))
-	withoutProof := "c=" + channelBinding + ",r=" + first.nonce
-	authMessage := clientFirstBare + "," + serverFirstRaw + "," + withoutProof
-
-	clientSignature := mac(storedKey[:], []byte(authMessage))
-	proof := make([]byte, len(clientKey))
-	for i := range clientKey {
-		proof[i] = clientKey[i] ^ clientSignature[i]
-	}
-
-	serverKey := mac(saltedPassword, []byte("Server Key"))
-	expected := mac(serverKey, []byte(authMessage))
-
-	return withoutProof + ",p=" + base64.StdEncoding.EncodeToString(proof), expected, nil
-}
-
-// mac is HMAC-SHA-256.
-func mac(key, data []byte) []byte {
-	h := hmac.New(sha256.New, key)
-	h.Write(data)
-	return h.Sum(nil)
-}
-
-// verifyServerFinal checks that the peer proved knowledge of the credential.
-//
-// **This is mandatory and it is the half of the exchange that authenticates the
-// server.** RFC 5802 section 5: *"If the two are different, the client MUST
-// consider the authentication exchange to be unsuccessful."* A peer that sends
-// AuthenticationOk without getting here has proved nothing, and svcdoctor treats
-// it as a failure however confident the message that follows sounds.
-//
-// # The error attribute is read and never kept
-//
-// RFC 5802 defines server-error-value as a token list *with* an extension
-// production, so the token is not guaranteed to come from the closed set and a
-// peer may put arbitrary text there. It is compared against exact tokens to
-// choose a sentinel and then dropped: it reaches no field, no error and no
-// evidence. No PostgreSQL or pgBouncer version observed sends one at all — both
-// report SCRAM failures as an ErrorResponse — so this path is defensive.
-//
-// # Two outcomes, two directions
-//
-// A `v=` that does not match yields ErrServerSignatureMismatch, and that is
-// **svcdoctor refusing the peer**, not the peer refusing svcdoctor. It is only
-// reachable once the peer has accepted the client proof — a peer that rejects
-// the proof never sends a `v=` at all — so the two must not be normalized
-// together downstream. See ADR 0040 section 5.1.
-func verifyServerFinal(raw string, expected []byte) error {
-	// Only the first attribute decides the outcome; RFC 5802 permits trailing
-	// extensions after it, which are ignored.
-	end := len(raw)
-	for i := 0; i < len(raw); i++ {
-		if raw[i] == ',' {
-			end = i
-			break
-		}
-	}
-	attr := raw[:end]
-	if len(attr) < 2 || attr[1] != '=' {
-		return ErrMalformedMessage
-	}
-
-	switch attr[0] {
-	case 'e':
-		switch attr[2:] {
-		case "invalid-proof", "unknown-user":
-			// Both are the peer refusing what it was presented: the proof did
-			// not verify, or there is no such principal to verify it against.
-			// Neither is read for its cause — the two are one outcome here, as
-			// they are for 28P01.
-			return ErrSCRAMRejected
-		case "invalid-username-encoding":
-			// **Not a credential refusal.** RFC 5802 defines this as the
-			// username field failing SASLprep or `=`-escaping, which is a fault
-			// in the value's encoding rather than a decision about the material.
-			// Calling it a rejection would let a decoding fault reach diagnosis
-			// as "the peer refused your credential".
-			//
-			// It is defensive and unobserved: this client sends `n=`, an empty
-			// username, because the role travels in the StartupMessage — so
-			// there is nothing here for a peer to fail to decode. Handled
-			// anyway, at the conservative class, because a peer chooses this
-			// token and svcdoctor does not get to assume it will not send one.
-			return ErrUnexpectedResponse
-		default:
-			return ErrUnexpectedResponse
-		}
-	case 'v':
-		signature, err := base64.StdEncoding.DecodeString(attr[2:])
-		if err != nil {
-			return ErrMalformedMessage
-		}
-		if !hmac.Equal(signature, expected) {
-			return ErrServerSignatureMismatch
-		}
-		return nil
-	default:
-		return ErrMalformedMessage
-	}
 }
 
 // Authentication message codes this exchange reads.

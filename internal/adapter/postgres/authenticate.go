@@ -443,6 +443,15 @@ func (o authObservation) classify() (domain.State, domain.FailureClass) {
 		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
 	case errors.Is(o.err, wire.ErrIterationsUnsupported):
 		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
+	case errors.Is(o.err, wire.ErrLocalDerivation):
+		// svcdoctor's own SCRAM derivation did not produce usable material.
+		// Unreachable from this package's call path — the callback is a
+		// literal, the exchange is driven linearly, and PBKDF2 is asked for
+		// exactly sha256.Size bytes — and classified anyway, because the
+		// alternative is that a defect in svcdoctor arrives as an accusation
+		// against the target. No new class: this is the same "gap in the tool"
+		// vocabulary the two cases above already use.
+		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
 	}
 
 	// SCRAM authenticates both parties, so a failure has a direction, and the

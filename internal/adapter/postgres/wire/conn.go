@@ -6,6 +6,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/hakanaltindag/svcdoctor/internal/sasl/scram"
 )
 
 // MaxMessageSize bounds the body of one server message svcdoctor will read.
@@ -68,13 +70,46 @@ var (
 	// section 11.
 	ErrPasswordUnsupported = errors.New("password is outside the range svcdoctor can prepare for SCRAM")
 
+	// ErrLocalDerivation means svcdoctor's own SCRAM derivation did not
+	// produce usable key material.
+	//
+	// It covers a missing derivation callback, a callback that failed, key
+	// material of the wrong length, and an exchange driven out of order. Every
+	// one is a defect in svcdoctor rather than anything the peer did, which is
+	// why it classifies as a capability gap and never as a target failure.
+	//
+	// **None of them is reachable from this package's own call path**: the
+	// callback is a literal, the exchange is driven linearly, and PBKDF2 is
+	// asked for exactly sha256.Size bytes. It exists so that if one ever
+	// becomes reachable, it arrives as "svcdoctor could not do this" instead of
+	// as an accusation against the server.
+	ErrLocalDerivation = errors.New("svcdoctor could not complete its own SCRAM derivation")
+)
+
+// SCRAM sentinels that are aliases of the shared core's.
+//
+// # Why these three are aliases and two others are not
+//
+// internal/adapter/postgres/authenticate.go classifies with errors.Is against
+// these exact values, so aliasing keeps identity — and therefore every existing
+// FailureClass — unchanged by the Phase 6.2 extraction. No test moved, no
+// mapping moved, and a caller cannot tell the difference.
+//
+// ErrMalformedMessage and ErrUnexpectedResponse are deliberately **not**
+// aliased. Both already exist above with PostgreSQL *framing* meanings, and
+// pointing them at the core's equivalents would collapse two distinct meanings
+// onto one identity: "this postgres frame could not be decoded" and "this SCRAM
+// attribute list could not be decoded" would become the same error. The
+// classifier does not match either individually, so translateSCRAM converts
+// them at the boundary instead. See ADR 0056 section 8.
+var (
 	// ErrIterationsUnsupported means the peer named a PBKDF2 iteration count
 	// above MaxSCRAMIterations.
 	//
-	// Also a statement about svcdoctor: the count is legal protocol, and
-	// svcdoctor declines to spend the CPU. It is kept distinct from
-	// ErrMalformedMessage because the value was structurally valid.
-	ErrIterationsUnsupported = errors.New("peer demanded more SCRAM iterations than svcdoctor performs")
+	// A statement about svcdoctor: the count is legal protocol, and svcdoctor
+	// declines to spend the CPU. Kept distinct from ErrMalformedMessage because
+	// the value was structurally valid.
+	ErrIterationsUnsupported = scram.ErrIterationsUnsupported
 
 	// ErrServerSignatureMismatch means the server's SCRAM signature did not
 	// match the one derived locally, so the peer did not prove knowledge of the
@@ -82,14 +117,52 @@ var (
 	//
 	// The exchange is unsuccessful from that point on, whatever the peer sends
 	// next — including AuthenticationOk.
-	ErrServerSignatureMismatch = errors.New("server did not prove knowledge of the credential")
+	ErrServerSignatureMismatch = scram.ErrServerSignatureMismatch
 
 	// ErrSCRAMRejected means the server ended the SCRAM exchange with an error
 	// token naming the credential.
 	//
-	// The token itself never leaves the comparison that produced this sentinel.
-	ErrSCRAMRejected = errors.New("peer rejected the SCRAM credential")
+	// The token itself never leaves the shared core's comparison.
+	ErrSCRAMRejected = scram.ErrRejected
 )
+
+// translateSCRAM maps a shared-core error into this package's vocabulary.
+//
+// The three aliased sentinels pass through untouched — they are the same values.
+// The core's framing errors become this package's own, so that a caller
+// classifying a PostgreSQL exchange keeps seeing PostgreSQL errors. The local
+// faults collapse into ErrLocalDerivation.
+//
+// Nothing here wraps: every returned value is a package-level sentinel with
+// fixed text, so no byte the peer chose can travel out through an error.
+func translateSCRAM(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, scram.ErrIterationsUnsupported),
+		errors.Is(err, scram.ErrServerSignatureMismatch),
+		errors.Is(err, scram.ErrRejected):
+		return err
+	case errors.Is(err, scram.ErrMalformedMessage):
+		return ErrMalformedMessage
+	case errors.Is(err, scram.ErrUnexpectedResponse):
+		return ErrUnexpectedResponse
+	case errors.Is(err, scram.ErrMessageTooLarge):
+		// The core refused a peer field larger than it reads. That is the same
+		// claim ErrFrameTooLarge already makes one layer down — the length was
+		// structurally legal and svcdoctor declined it — so it reuses that
+		// sentinel rather than inventing a second way to say it.
+		return ErrFrameTooLarge
+	case errors.Is(err, scram.ErrUsernameUnsupported),
+		errors.Is(err, scram.ErrNoDerivation),
+		errors.Is(err, scram.ErrDerivationFailed),
+		errors.Is(err, scram.ErrDerivedKeyLength),
+		errors.Is(err, scram.ErrWrongStep):
+		return ErrLocalDerivation
+	default:
+		return err
+	}
+}
 
 // bindDeadline makes the caller's context able to interrupt blocking I/O, and
 // leaves the connection clean afterwards.
