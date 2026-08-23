@@ -580,7 +580,7 @@ func TestNoCredentialConfiguredSendsNothingAndSaysSo(t *testing.T) {
 // credential would send an operator to a secret store for no reason.
 func TestAnUnsupportedMechanismSendsNothing(t *testing.T) {
 	ca := newAuthority(t)
-	broker := newPeer(t, ca, peerConfig{mechanisms: []string{"SCRAM-SHA-256"}}) // plaintext
+	broker := newPeer(t, ca, peerConfig{mechanisms: []string{"SCRAM-SHA-512"}}) // plaintext
 
 	s := &scenario{
 		host: bootstrapCanaryHost, port: broker.addr.Port(),
@@ -588,7 +588,7 @@ func TestAnUnsupportedMechanismSendsNothing(t *testing.T) {
 		dialer: &routingDialer{routes: map[netip.Addr]route{
 			addrPrimary: {to: broker.addr},
 		}},
-		mechanism:  "SCRAM-SHA-256",
+		mechanism:  "SCRAM-SHA-512",
 		credential: credentialFor(t, bootstrapCanaryHost, broker.addr.Port()),
 	}
 	result := s.run(t)
@@ -1155,7 +1155,14 @@ func TestTheGuardFileStillExists(t *testing.T) {
 		"func TestTheCompositionWiresEveryOwnerOfWhatItCanProduce",
 		"func TestTheCompositionMintsNoCredential",
 		"func TestAtMostOneAuthenticationCallSiteExists",
-		"func TestNoSharedSCRAMPackageExists",
+		// Phase 6.2 replaced TestNoSharedSCRAMPackageExists with the positive
+		// guards below, atomically and in one change-set (ADR 0056 section 13).
+		// This list is the reason that swap could not be done quietly: deleting
+		// the negative without naming its successors fails here, which is
+		// exactly what happened while Phase 6.2 was being written.
+		"func TestTheSharedSCRAMCoreIsWhereItWasAuthorized",
+		"func TestRevealHasExactlyTwoProductionCallSites",
+		"func TestTheSharedSCRAMCoreOpensNoSecret",
 	} {
 		if !strings.Contains(string(source), required) {
 			t.Errorf("the closure guard no longer contains %q.\n\n"+

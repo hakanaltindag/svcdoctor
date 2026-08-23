@@ -143,6 +143,14 @@ func TestTheAuthorizedTableIsExactlyTheProducedOutcomes(t *testing.T) {
 		{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureProtocolMalformedResponse},
 		{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureProtocolPeerClosed},
 		{servicekafka.StepSASLAuthenticate, domain.StateUnknown, domain.FailureAuthMechanismUnsupported},
+		// Phase 6.2. SCRAM authenticates both parties, so the wire package can
+		// now report that the *broker* failed to prove it knows the credential —
+		// the opposite direction from a rejection, and a different claim.
+		{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureAuthPeerVerificationFailed},
+		// Phase 6.2. An identity or password outside the printable-ASCII range
+		// svcdoctor can prepare for SCRAM, an iteration count above the ceiling,
+		// or a local derivation fault. All are gaps in svcdoctor.
+		{servicekafka.StepSASLAuthenticate, domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor},
 		{servicekafka.StepSASLAuthenticate, domain.StateSkipped, domain.FailureExecSkippedByPolicy},
 		{servicekafka.StepSASLAuthenticate, domain.StateSkipped, domain.FailureExecRequiredInputMissing},
 
@@ -180,8 +188,12 @@ func TestProtocolCodeCount(t *testing.T) {
 	for _, c := range protocolClaims {
 		codes[c.code] = true
 	}
-	if len(codes) != 10 {
-		t.Errorf("distinct codes = %d, want 10: %v", len(codes), codes)
+	// 11 since Phase 6.2 added KAFKA_PEER_VERIFICATION_FAILED. SCRAM
+	// authenticates both parties, so "the broker did not prove it knows the
+	// credential" became reachable and is a different claim from "the broker
+	// refused what svcdoctor presented".
+	if len(codes) != 11 {
+		t.Errorf("distinct codes = %d, want 11: %v", len(codes), codes)
 	}
 }
 
@@ -774,6 +786,7 @@ func TestSeverityAndVantageAreFixedPerCode(t *testing.T) {
 		CodeAuthMechanismNotOffered:    {domain.SeverityError, false},
 		CodeSASLHandshakeNotCompleted:  {domain.SeverityError, true},
 		CodeCredentialsRejected:        {domain.SeverityError, false},
+		CodePeerVerificationFailed:     {domain.SeverityError, false},
 		CodeAuthenticationNotCompleted: {domain.SeverityError, true},
 		CodeMetadataNotCompleted:       {domain.SeverityError, true},
 
@@ -785,8 +798,8 @@ func TestSeverityAndVantageAreFixedPerCode(t *testing.T) {
 		CodeAuthenticationUnsupportedBySvcdoctor: {domain.SeverityInfo, false},
 	}
 
-	if len(want) != 10 {
-		t.Fatalf("the expectation covers %d codes, want 10", len(want))
+	if len(want) != 11 {
+		t.Fatalf("the expectation covers %d codes, want 11", len(want))
 	}
 	for key, c := range protocolClaims {
 		expected, known := want[c.code]

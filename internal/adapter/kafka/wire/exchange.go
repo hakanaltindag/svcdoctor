@@ -196,3 +196,10 @@ func writeError(err error) error {
 	}
 	return err
 }
+
+// errNew and errorIs are thin aliases so that this package's sentinel
+// declarations and error comparisons read the same way in every file without
+// each one importing errors separately.
+func errNew(text string) error { return errors.New(text) }
+
+func errorIs(err, target error) bool { return errors.Is(err, target) }

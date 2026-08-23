@@ -528,35 +528,201 @@ func importPath(t *testing.T, root, dir string) string {
 	return modulePath + "/" + filepath.ToSlash(relative)
 }
 
-// TestNoSharedSCRAMPackageExists is the Phase 6.2a gate in executable form.
+// TestTheSharedSCRAMCoreIsWhereItWasAuthorized is the positive successor to the
+// Phase 6.2a gate.
 //
-// Kafka SCRAM needs no new module — `internal/adapter/postgres/wire/scram.go`
-// already implements SCRAM-SHA-256 on the standard library — so the only thing
-// standing between this repository and a shared SCRAM core is a decision nobody
-// has taken yet.
+// # What this replaced, and why the swap had to be atomic
 //
-// **Extraction is the one place in the Kafka plan where a security boundary is
-// relaxed rather than tightened**: it moves revealed plaintext across a package
-// boundary for the first time. `docs/BACKLOG.md` requires Phase 6.2a, a
-// dedicated security review, to be Accepted before that happens, and this makes
-// the requirement fail a build rather than depend on somebody remembering it.
+// Until Phase 6.2 this file carried TestNoSharedSCRAMPackageExists, which failed
+// the build if `internal/sasl`, `internal/scram` or `internal/crypto/scram`
+// existed at all. That negative was the security review's gate in executable
+// form: extraction moves credential-derived material across a package boundary
+// for the first time, and the review had to be Accepted before the package could
+// be written.
 //
-// When 6.2a is Accepted, this test is deleted **in the commit that records the
-// acceptance** — not in the commit that wants the package.
-func TestNoSharedSCRAMPackageExists(t *testing.T) {
+// ADR 0055 said the guard should be deleted in the commit that recorded the
+// review's acceptance. **ADR 0056 section 13 corrected that**, and the
+// correction is the reason this test reads the way it does: deleting the
+// negative on acceptance would have left every commit between the review and the
+// implementation with no guard at all — the negative gone, the positive ones
+// impossible because the package they describe did not yet exist.
+//
+// So the swap happened in one change-set. The package, the depguard allowlist,
+// this test and the Reveal counters below all arrived together, and there was
+// never a state in which neither held.
+//
+// This test asserts location only. The core's own guards_test.go asserts its
+// imports, its exported surface, its callback cardinality and its state shape,
+// from inside the package where the AST is in reach.
+func TestTheSharedSCRAMCoreIsWhereItWasAuthorized(t *testing.T) {
 	root := repositoryRoot(t)
 
-	for _, forbidden := range []string{"internal/sasl", "internal/scram", "internal/crypto/scram"} {
+	// The one authorized location, from ADR 0056 section 1.
+	authorized := filepath.Join(root, "internal/sasl/scram")
+	if info, err := os.Stat(authorized); err != nil || !info.IsDir() {
+		t.Fatalf("internal/sasl/scram is missing.\n\n"+
+			"Phase 6.2 extracted the RFC 5802 core there and every guard in this file "+
+			"and in internal/sasl/scram/guards_test.go describes that package. If it was "+
+			"moved, the guards describe nothing. (%v)", err)
+	}
+
+	// The locations the old negative guard named are still forbidden, because
+	// each would be a second SCRAM implementation rather than a move of this
+	// one.
+	for _, forbidden := range []string{"internal/scram", "internal/crypto/scram"} {
 		if _, err := os.Stat(filepath.Join(root, forbidden)); err == nil {
-			t.Errorf("%s exists.\n\n"+
-				"Phase 6.2 implementation is not authorized: Phase 6.2a, the shared "+
-				"SCRAM core security review, must be Accepted first. It must settle "+
-				"string versus []byte, plaintext copies and escape analysis, Go's "+
-				"zeroization limits, accidental fmt and error formatting, panic paths, "+
-				"the depguard rule for the shared package, RFC 5802 test vectors, "+
-				"nonce injection, PostgreSQL regression risk and the Reveal count. "+
-				"See docs/BACKLOG.md.", forbidden)
+			t.Errorf("%s exists. The shared SCRAM core lives at internal/sasl/scram and "+
+				"nowhere else; a second one would drift from the vectors that pin this one.",
+				forbidden)
 		}
+	}
+}
+
+// TestRevealHasExactlyTwoProductionCallSites is the repository-wide credential
+// surface, and it is new in Phase 6.2.
+//
+// # The gap this closes
+//
+// Before this test, two mechanisms bounded `security.Reveal`. golangci-lint's
+// forbidigo rule confines the call to `internal/adapter/*/wire/`, and
+// TestPostgresCredentialSurfaceIsExactlyTwoCalls pins PostgreSQL at exactly one.
+// **Nothing pinned Kafka's count, and nothing asserted the total.** A third
+// reveal inside either wire package, or a whole third wire package, would have
+// passed every check that existed.
+//
+// Phase 6.2a found that gap while arguing about whether extraction would widen
+// the credential surface. It does not — but the argument only holds if the count
+// is a property of the source rather than of a sentence in an ADR.
+func TestRevealHasExactlyTwoProductionCallSites(t *testing.T) {
+	root := repositoryRoot(t)
+
+	// Where each call is allowed, and nowhere else.
+	authorized := map[string]bool{
+		"internal/adapter/postgres/wire/scram.go":     true,
+		"internal/adapter/kafka/wire/authenticate.go": true,
+	}
+
+	found := map[string]int{}
+
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "bin", "dist", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+
+		relative, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		relative = filepath.ToSlash(relative)
+
+		// internal/security defines Reveal, and its own leak matrix proves what
+		// it returns. Those calls are in-package and are not written as
+		// "security.Reveal".
+		if strings.HasPrefix(relative, "internal/security/") {
+			return nil
+		}
+
+		ast.Inspect(parseFile(t, path), func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Reveal" {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != "security" {
+				return true
+			}
+			found[relative]++
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the repository: %v", err)
+	}
+
+	total := 0
+	for path, count := range found {
+		total += count
+		if !authorized[path] {
+			t.Errorf("%s calls security.Reveal %d time(s).\n\n"+
+				"Only a service adapter's wire package may open a secret, immediately "+
+				"before the value goes on the socket. See ADR 0027 and ADR 0056 section 12.",
+				path, count)
+			continue
+		}
+		if count != 1 {
+			t.Errorf("%s calls security.Reveal %d times, want exactly 1", path, count)
+		}
+	}
+	for path := range authorized {
+		if found[path] == 0 {
+			t.Errorf("%s no longer calls security.Reveal.\n\n"+
+				"If authentication moved, this guard now describes nothing and must be "+
+				"updated deliberately rather than left passing vacuously.", path)
+		}
+	}
+
+	if total != 2 {
+		t.Errorf("found %d production security.Reveal call site(s), want exactly 2 "+
+			"(one per service, each in its wire package)", total)
+	}
+}
+
+// TestTheSharedSCRAMCoreOpensNoSecret is the other half of the Reveal contract.
+//
+// The core cannot import internal/security — depguard and the package's own
+// import guard both say so — which makes Reveal and SecretFor unreachable there
+// by construction. This asserts it from outside the package as well, because the
+// property is what the whole Model D decision rests on and a single enforcement
+// point for it would be one edit away from silence.
+func TestTheSharedSCRAMCoreOpensNoSecret(t *testing.T) {
+	core := filepath.Join(repositoryRoot(t), "internal/sasl/scram")
+
+	entries, err := os.ReadDir(core)
+	if err != nil {
+		t.Fatalf("reading internal/sasl/scram: %v", err)
+	}
+
+	inspected := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		inspected++
+
+		ast.Inspect(parseFile(t, filepath.Join(core, name)), func(n ast.Node) bool {
+			ident, ok := n.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			switch ident.Name {
+			case "Reveal", "SecretFor", "NewSecret", "NewCredential":
+				t.Errorf("internal/sasl/scram/%s names %q.\n\n"+
+					"The shared core receives a derivation callback, never a credential. "+
+					"See ADR 0055 and ADR 0056 section 12.", name, ident.Name)
+			}
+			return true
+		})
+	}
+
+	if inspected == 0 {
+		t.Fatal("no production files were inspected; this guard would pass vacuously")
 	}
 }
 

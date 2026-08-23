@@ -326,7 +326,7 @@ func TestFourAuthenticationOutcomesStayDistinct(t *testing.T) {
 		{
 			name: "unsupported mechanism",
 			run: func(t *testing.T) (*authTarget, *AuthResult) {
-				withNegotiatedMechanism(t, "SCRAM-SHA-256")
+				withNegotiatedMechanism(t, "SCRAM-SHA-512")
 				target := verifiedTarget(t)
 				return target, authenticate(t, target, credentialFor(t, authHost, 9092), AuthParams{})
 			},

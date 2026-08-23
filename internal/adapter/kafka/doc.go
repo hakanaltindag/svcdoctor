@@ -78,7 +78,7 @@
 //	  -> policy.PermitsCredentials(channel)  may a secret cross it at all
 //	  -> security.NewEndpoint(session)       the logical name, never the address
 //	  -> credential.SecretFor(endpoint)      is this credential authorized here
-//	  -> wire.ExchangePLAIN                  the only layer that may reveal
+//	  -> wire.Authenticate                   the only layer that may reveal
 //
 // A channel the policy refuses ends the call before an endpoint is parsed; a
 // credential bound elsewhere ends it before the wire package is reached. Neither

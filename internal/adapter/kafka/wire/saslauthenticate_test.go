@@ -31,7 +31,7 @@ const (
 // compiles, passes a type check, and is rejected by a real broker with an error
 // code that looks like bad credentials.
 func TestPLAINPayloadIsRFC4616(t *testing.T) {
-	payload := plainAuthBytes(testIdentity, security.NewSecret(testSecret))
+	payload := plainAuthBytes(testIdentity, testSecret)
 
 	want := append([]byte{0}, testIdentity...)
 	want = append(want, 0)
@@ -60,7 +60,7 @@ func TestPLAINPayloadIsRFC4616(t *testing.T) {
 // TestEmptyAuthzidIsPresentNotOmitted: the field is empty, and it is still
 // there. A two-field message is not a PLAIN message.
 func TestEmptyAuthzidIsPresentNotOmitted(t *testing.T) {
-	payload := plainAuthBytes(testIdentity, security.NewSecret(testSecret))
+	payload := plainAuthBytes(testIdentity, testSecret)
 
 	if len(payload) == 0 || payload[0] != 0 {
 		t.Fatalf("payload starts with %q, want a leading NUL for the empty authzid", payload)
@@ -76,7 +76,7 @@ func TestEmptyAuthzidIsPresentNotOmitted(t *testing.T) {
 // Whether an empty password should be sent at all is the caller's question;
 // this layer's job is to encode what it was given correctly.
 func TestPLAINPayloadHandlesAnEmptySecret(t *testing.T) {
-	payload := plainAuthBytes(testIdentity, security.Secret{})
+	payload := plainAuthBytes(testIdentity, "")
 
 	want := append([]byte{0}, testIdentity...)
 	want = append(want, 0)
@@ -179,8 +179,8 @@ func TestAuthenticateCorrelationIsDistinct(t *testing.T) {
 // otherwise surface as a nil dereference — and does so before anything is built
 // from the secret.
 func TestExchangePLAINRefusesNoConnection(t *testing.T) {
-	_, err := ExchangePLAIN(
-		context.Background(), nil, testIdentity, security.NewSecret(testSecret))
+	_, err := Authenticate(
+		context.Background(), nil, MechanismPLAIN, testIdentity, security.NewSecret(testSecret))
 	if err == nil {
 		t.Fatal("a nil connection was accepted")
 	}

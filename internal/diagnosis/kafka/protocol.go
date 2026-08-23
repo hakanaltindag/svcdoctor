@@ -87,6 +87,25 @@ const (
 	// something.
 	CodeAuthenticationUnsupportedBySvcdoctor domain.FindingCode = "KAFKA_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR"
 
+	// CodePeerVerificationFailed: the broker did not prove it knows the
+	// credential.
+	//
+	// SCRAM authenticates **both** parties, so an authentication failure has a
+	// direction and the two directions are different claims. This is the one
+	// where svcdoctor refuses the peer: the broker accepted the client proof and
+	// then presented a server signature that did not verify.
+	//
+	// It is deliberately not CodeCredentialsRejected, which says the opposite —
+	// that the endpoint refused svcdoctor's material. Normalizing the two
+	// together was the PostgreSQL adapter's own defect until Phase 4.6a.5 (ADR
+	// 0038 amendment D), and this mirrors the correction rather than repeating
+	// the mistake in a second service.
+	//
+	// Unreachable before Phase 6.2: PLAIN authenticates one party, so there was
+	// no peer proof to fail. SCRAM-SHA-256 made it reachable, and ADR 0054
+	// requires the owner to arrive with the producer rather than after it.
+	CodePeerVerificationFailed domain.FindingCode = "KAFKA_PEER_VERIFICATION_FAILED"
+
 	// CodeCredentialWithheld: a credential was configured and svcdoctor declined
 	// to present it over the channel this path established.
 	//
@@ -162,6 +181,16 @@ const (
 		"svcdoctor could not attribute why, and no authentication was attempted afterwards."
 	recommendHandshakeNotCompleted = "Check the broker log for this connection, and whether " +
 		"the listener expects SASL at all"
+
+	summaryPeerVerificationFailed = "The Kafka broker failed authentication proof verification"
+	detailPeerVerificationFailed  = "SCRAM authenticates both parties. " +
+		"The broker accepted the material svcdoctor presented, and then presented a value of " +
+		"its own that did not verify against the configured credential.\n" +
+		"The observation does not say why: a broker that does not hold this credential, " +
+		"something answering in its place, and a defective implementation are indistinguishable " +
+		"from what was exchanged."
+	recommendPeerVerificationFailed = "Verify the credential configured for this endpoint, and " +
+		"establish what this broker is before presenting the credential again"
 
 	//nolint:gosec // G101: report prose, not a credential.
 	summaryCredentialsRejected = "The Kafka endpoint rejected the credential it was presented"
@@ -390,6 +419,34 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryCredentialsRejected,
 		detail:           detailCredentialsRejected,
 		recommendation:   recommendCredentialsRejected,
+	},
+	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureAuthPeerVerificationFailed}: {
+		code:     CodePeerVerificationFailed,
+		severity: domain.SeverityError,
+		// A completed evaluation, like a rejection: this broker presented a
+		// signature and it did not verify. That does not become false because a
+		// different observer is treated differently.
+		vantageDependent: false,
+		summary:          summaryPeerVerificationFailed,
+		detail:           detailPeerVerificationFailed,
+		recommendation:   recommendPeerVerificationFailed,
+	},
+	{servicekafka.StepSASLAuthenticate, domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor}: {
+		// The same claim CodeAuthenticationUnsupportedBySvcdoctor already makes
+		// — *svcdoctor could not perform this* — reached by a different route:
+		// an identity or password outside the printable-ASCII range svcdoctor
+		// can prepare for SCRAM, an iteration count above the ceiling, or a
+		// local derivation fault.
+		//
+		// It reuses that code rather than adding a second one, because a
+		// separate code would divide one operator-facing fact into two on the
+		// basis of which internal check produced it.
+		code:             CodeAuthenticationUnsupportedBySvcdoctor,
+		severity:         domain.SeverityInfo,
+		vantageDependent: false,
+		summary:          summaryUnsupportedBySvcdoctor,
+		detail:           detailUnsupportedBySvcdoctor,
+		recommendation:   recommendUnsupportedBySvcdoctor,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureAuthMechanismNotOffered}: {
 		code:             CodeAuthMechanismNotOffered,

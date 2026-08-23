@@ -10,7 +10,7 @@
 //
 //	ExchangeAPIVersions(ctx, conn)                     -> APIVersions
 //	ExchangeSASLHandshake(ctx, conn, mechanism)        -> SASLHandshake
-//	ExchangePLAIN(ctx, conn, identity, secret)         -> SASLAuthenticate
+//	Authenticate(ctx, conn, mechanism, identity, secret) -> SASLAuthenticate
 //
 // One request, one response, over a connection somebody else established and
 // still owns. It does not dial, does not retry, does not reconnect, and does not
@@ -20,7 +20,7 @@
 //
 // # This is where a secret becomes bytes
 //
-// ExchangePLAIN holds svcdoctor's only call to security.Reveal, and this package
+// Authenticate holds this package's only call to security.Reveal, and this package
 // is the only place a lint permits one (ADR 0027). The properties that make it
 // the right home are structural rather than promised: it holds no state between
 // exchanges, owns no connection, has no evidence or report model in scope, and

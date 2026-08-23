@@ -16,8 +16,16 @@ import (
 // The last entry is deliberately not a real mechanism: an unrecognized name must
 // be unsupported by the same rule as a recognized-but-unimplemented one, not by
 // a separate branch that could be forgotten.
+// Phase 6.2 moved SCRAM-SHA-256 out of this list, because an exchange now
+// performs it. Everything still here is unsupported for the one reason that
+// matters: no exchange in internal/adapter/kafka/wire frames it.
+//
+// SCRAM-SHA-512 stays, and is the sharpest entry in the list. It is one hash
+// away from a mechanism svcdoctor does perform, shares the RFC 5802 state
+// machine, and would look plausible to anyone widening the whitelist without
+// adding the derivation — which is exactly the defect the whitelist exists to
+// prevent.
 var unsupportedMechanisms = []string{
-	"SCRAM-SHA-256",
 	"SCRAM-SHA-512",
 	"OAUTHBEARER",
 	"GSSAPI",
@@ -28,7 +36,7 @@ var unsupportedMechanisms = []string{
 // TestUnsupportedMechanismSendsNoCredentialBytes is the security property of
 // this phase, and it is asserted against the bytes a real broker received.
 //
-// Before the guard, a session that negotiated SCRAM-SHA-256 was handed to
+// Before the guard, a session that negotiated an unperformable mechanism was handed to
 // wire.ExchangePLAIN, which framed the identity and the password as RFC 4616's
 // three NUL-separated fields and wrote them to the socket. The peer had agreed
 // to a different mechanism and would never have parsed them as PLAIN — the
@@ -88,7 +96,7 @@ func TestUnsupportedMechanismSendsNoCredentialBytes(t *testing.T) {
 // That is a stronger statement than a call counter: it shows the credential was
 // not merely unused but unreachable.
 func TestUnsupportedMechanismNeverCallsSecretFor(t *testing.T) {
-	withNegotiatedMechanism(t, "SCRAM-SHA-256")
+	withNegotiatedMechanism(t, "SCRAM-SHA-512")
 	target := verifiedTarget(t)
 
 	// Bound to an endpoint this session is not. SecretFor would reject it.
@@ -145,7 +153,7 @@ func TestUnsupportedMechanismWinsOverAZeroCredential(t *testing.T) {
 // This mirrors internal/adapter/postgres, where admissibleMechanism is checked
 // before the transport policy for the same reason (docs/ARCHITECTURE.md §5.7).
 func TestUnsupportedMechanismWinsOverAnUnverifiedChannel(t *testing.T) {
-	withNegotiatedMechanism(t, "SCRAM-SHA-256")
+	withNegotiatedMechanism(t, "SCRAM-SHA-512")
 	target := unverifiedTarget(t)
 
 	result := authenticate(t, target, credentialFor(t, authHost, 9092), AuthParams{})
@@ -164,7 +172,7 @@ func TestUnsupportedMechanismWinsOverAnUnverifiedChannel(t *testing.T) {
 // TestUnsupportedMechanismEvidenceShape pins every field of the node, because a
 // node that exists but misdescribes itself is worse than none.
 func TestUnsupportedMechanismEvidenceShape(t *testing.T) {
-	withNegotiatedMechanism(t, "SCRAM-SHA-256")
+	withNegotiatedMechanism(t, "SCRAM-SHA-512")
 	target := verifiedTarget(t)
 
 	result := authenticate(t, target, credentialFor(t, authHost, 9092), AuthParams{})
@@ -204,8 +212,8 @@ func TestUnsupportedMechanismEvidenceShape(t *testing.T) {
 	if !ok {
 		t.Fatal("the mechanism attribute is missing; a reader cannot tell which one was declined")
 	}
-	if got := mechanism.String(); !strings.Contains(got, "SCRAM-SHA-256") {
-		t.Errorf("mechanism attribute = %q, want SCRAM-SHA-256", got)
+	if got := mechanism.String(); !strings.Contains(got, "SCRAM-SHA-512") {
+		t.Errorf("mechanism attribute = %q, want SCRAM-SHA-512", got)
 	}
 	for _, forbidden := range []domain.AttributeKey{
 		AttrSASLSessionLifetimeMs, AttrErrorCode, AttrRequestAPIVersion,
@@ -226,9 +234,13 @@ func TestOnlyPLAINIsSupported(t *testing.T) {
 	if !supportedMechanism(wire.MechanismPLAIN) {
 		t.Error("PLAIN must remain supported")
 	}
+	if !supportedMechanism(wire.MechanismSCRAMSHA256) {
+		t.Error("SCRAM-SHA-256 must be supported: Phase 6.2 added the exchange that performs it")
+	}
 	for _, mechanism := range unsupportedMechanisms {
 		if supportedMechanism(mechanism) {
-			t.Errorf("supportedMechanism(%q) = true; Phase 6.1a performs PLAIN and nothing else. "+
+			t.Errorf("supportedMechanism(%q) = true; svcdoctor performs PLAIN and SCRAM-SHA-256 "+
+				"and nothing else. "+
 				"Adding a mechanism here without its wire exchange re-creates the defect this "+
 				"test exists to prevent", mechanism)
 		}
@@ -317,7 +329,7 @@ func assertNoSecretAnywhere(t *testing.T, target *authTarget) {
 // path because nothing writes a TLS close_notify alert through it. The baseline
 // is taken after the handshake, so only what Authenticate wrote is counted.
 func TestUnsupportedMechanismWritesNoBytesAtAll(t *testing.T) {
-	withNegotiatedMechanism(t, "SCRAM-SHA-256")
+	withNegotiatedMechanism(t, "SCRAM-SHA-512")
 	target := plaintextTarget(t)
 
 	conn := target.conn(t)
@@ -334,5 +346,34 @@ func TestUnsupportedMechanismWritesNoBytesAtAll(t *testing.T) {
 	}
 	if got := evidenceOf(t, target, result).FailureClass(); got != domain.FailureAuthMechanismUnsupported {
 		t.Errorf("failure class = %s, want AUTH_MECHANISM_UNSUPPORTED", got)
+	}
+}
+
+// TestEverySCRAMCapabilitySentinelClassifiesAsAGap is the guard for the defect
+// this test was written after.
+//
+// Phase 6.2 split the SCRAM input refusal into a username sentinel and a
+// password sentinel — two different inputs, so an operator fixing one should not
+// be pointed at the other — and the classifier was only taught about the first.
+// The result was that a password svcdoctor cannot prepare arrived as FAIL,
+// blaming the broker for a limit in the tool. Real integration caught it; this
+// makes the next omission fail in the unit suite instead.
+func TestEverySCRAMCapabilitySentinelClassifiesAsAGap(t *testing.T) {
+	for _, sentinel := range []error{
+		wire.ErrSCRAMUsernameUnsupported,
+		wire.ErrSCRAMPasswordUnsupported,
+		wire.ErrSCRAMIterationsUnsupported,
+		wire.ErrSCRAMLocalDerivation,
+	} {
+		observation := authObservation{err: sentinel}
+		state, class := observation.classify()
+
+		if state != domain.StateUnknown {
+			t.Errorf("%v classified as %s, want UNKNOWN: a gap in svcdoctor is never a "+
+				"failure of the thing being inspected", sentinel, state)
+		}
+		if class != domain.FailureExecUnsupportedBySvcdoctor {
+			t.Errorf("%v classified as %s, want EXEC_UNSUPPORTED_BY_SVCDOCTOR", sentinel, class)
+		}
 	}
 }

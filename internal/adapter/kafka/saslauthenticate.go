@@ -123,7 +123,7 @@ func (p AuthParams) validate() error {
 //	  -> policy.PermitsCredentials(channel)    may a secret cross this channel
 //	  -> security.NewEndpoint(session)         the logical name, never the address
 //	  -> credential.SecretFor(endpoint)        is this credential authorized here
-//	  -> wire.ExchangePLAIN                    the only layer that may reveal
+//	  -> wire.Authenticate                     the only layer that may reveal
 //
 // Each step is a precondition for the next. A mechanism svcdoctor cannot perform
 // ends the call before the credential is looked at; a run holding no credential
@@ -260,7 +260,8 @@ func Authenticate(
 			"%w: credential is not authorized for %s: %w", ErrInvalidInput, endpoint, err)
 	}
 
-	observed := observeAuthentication(ctx, conn, credential.Identity(), secret, params)
+	observed := observeAuthentication(
+		ctx, conn, session.Mechanism(), credential.Identity(), secret, params)
 
 	evidence, err := observed.evidence(session)
 	if err != nil {
@@ -350,14 +351,26 @@ func logicalEndpoint(session *HandshakeSession) (security.Endpoint, error) {
 // let a name svcdoctor did not recognize reach a framing built for a different
 // one, which is the whole failure this function exists to make impossible.
 //
-// **Nothing here falls back.** A mechanism that is not PLAIN does not become
-// PLAIN, is not retried as PLAIN, and is not approximated. Kafka's SASL
+// **Nothing here falls back.** A mechanism outside the set does not become one
+// inside it, is not retried as another, and is not approximated. Kafka's SASL
 // mechanisms differ in their message framing, not only in their cryptography, so
 // sending PLAIN's three NUL-separated fields into a SCRAM exchange would put the
 // identity and the password on the wire in a shape the peer never agreed to
-// receive. That is what this predicate prevents.
+// receive. That is what this predicate prevents, and it is the defect Phase 6.1a
+// found and fixed.
+//
+// Phase 6.2 added the second entry. **Two supported mechanisms is not a menu**:
+// the broker names one during the handshake and this decides only whether
+// svcdoctor can perform *that* one. A SCRAM-SHA-256 failure never becomes a
+// PLAIN attempt and a PLAIN failure never becomes a SCRAM attempt, because there
+// is one negotiated mechanism per session and one attempt per run.
+//
+// SCRAM-SHA-512 is still unsupported, and so are OAUTHBEARER, GSSAPI and
+// AWS_MSK_IAM. Each is absent because no exchange in
+// internal/adapter/kafka/wire performs it — which is the invariant
+// TestSupportedMechanismsHaveExchanges pins in both directions.
 func supportedMechanism(mechanism string) bool {
-	return mechanism == wire.MechanismPLAIN
+	return mechanism == wire.MechanismPLAIN || mechanism == wire.MechanismSCRAMSHA256
 }
 
 // recordUnsupportedMechanism records that svcdoctor could not perform the
@@ -657,6 +670,7 @@ type authObservation struct {
 func observeAuthentication(
 	ctx context.Context,
 	conn net.Conn,
+	mechanism string,
 	identity string,
 	secret security.Secret,
 	params AuthParams,
@@ -669,7 +683,7 @@ func observeAuthentication(
 	}
 
 	startedAt := time.Now()
-	response, err := wire.ExchangePLAIN(exchangeCtx, conn, identity, secret)
+	response, err := wire.Authenticate(exchangeCtx, conn, mechanism, identity, secret)
 	duration := time.Since(startedAt)
 
 	return authObservation{
@@ -733,6 +747,42 @@ func (o authObservation) classify() (domain.State, domain.FailureClass) {
 		return domain.StateUnknown, domain.FailureExecCancelled
 	case errors.Is(o.err, context.DeadlineExceeded), errors.Is(o.ctxErr, context.DeadlineExceeded):
 		return domain.StateUnknown, domain.FailureExecLocalTimeout
+	}
+
+	// Gaps in svcdoctor, not defects in the target. UNKNOWN rather than FAIL,
+	// because docs/ARCHITECTURE.md requires that an unsupported capability is
+	// never reported as a failure of the thing being inspected. Decided before
+	// the peer-side classes below, so that a run svcdoctor could not perform is
+	// never described as a run the broker refused.
+	switch {
+	case errors.Is(o.err, wire.ErrSCRAMUsernameUnsupported),
+		errors.Is(o.err, wire.ErrSCRAMPasswordUnsupported):
+		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
+	case errors.Is(o.err, wire.ErrSCRAMIterationsUnsupported):
+		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
+	case errors.Is(o.err, wire.ErrSCRAMLocalDerivation):
+		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
+	}
+
+	// SCRAM authenticates both parties, so a failure has a direction and the two
+	// directions get different classes. Normalizing them together was the
+	// PostgreSQL adapter's own error until Phase 4.6a.5; see ADR 0038 amendment
+	// D, whose reasoning this follows exactly.
+	switch {
+	case errors.Is(o.err, wire.ErrSCRAMServerSignatureMismatch):
+		// **svcdoctor refused the peer.** The broker's ServerSignature did not
+		// equal the one this credential derives, so it did not prove it knows
+		// the credential. Only reachable once the broker has *accepted* the
+		// client proof, so AUTH_CREDENTIALS_REJECTED here would state the
+		// opposite of what happened.
+		return domain.StateFail, domain.FailureAuthPeerVerificationFailed
+	case errors.Is(o.err, wire.ErrSCRAMRejected):
+		// **The peer refused svcdoctor.** The server-final carried
+		// `e=invalid-proof` or `e=unknown-user`, which is the broker declining
+		// the material it was presented — the same claim
+		// SASL_AUTHENTICATION_FAILED carries, in SCRAM's vocabulary instead of
+		// an error code.
+		return domain.StateFail, domain.FailureAuthCredentialsRejected
 	}
 
 	switch {

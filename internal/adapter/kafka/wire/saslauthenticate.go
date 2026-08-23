@@ -5,8 +5,6 @@ import (
 	"net"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
-
-	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // saslAuthenticateRequestVersion is the version of SaslAuthenticate svcdoctor
@@ -82,31 +80,21 @@ const MechanismPLAIN = "PLAIN"
 // for, so that the recorded evidence can say what the exchange actually was.
 func SASLAuthenticateVersion() int16 { return saslAuthenticateRequestVersion }
 
-// ExchangePLAIN authenticates over conn with SASL/PLAIN and reads the response.
+// exchangePLAIN authenticates over conn with SASL/PLAIN and reads the response.
 //
 // The connection is borrowed, not owned; see exchange. It must already have
 // completed a SaslHandshake naming PLAIN, which is what the caller's type
 // guarantees.
 //
-// # This is where a secret becomes bytes
-//
-// It is the only function in svcdoctor that calls security.Reveal, and it is one
-// call away from the socket by construction: this package holds no state between
-// exchanges, has no evidence model in scope, and owns no connection. See ADR
-// 0027 for why the boundary is here and ADR 0030 for what the caller must have
-// checked before arriving.
-//
-// The caller obtains secret from Credential.SecretFor, so the endpoint binding
-// has already been verified, and checks the channel policy before calling. This
-// function performs neither check: duplicating them here would mean two places
-// could disagree about whether a credential may be sent, and the wire boundary
-// is the wrong one of the two to hold policy.
-func ExchangePLAIN(
-	ctx context.Context, conn net.Conn, identity string, secret security.Secret,
+// It is unexported and takes the plaintext rather than a security.Secret,
+// because Authenticate is this package's single reveal boundary. See that
+// function for why there is exactly one.
+func exchangePLAIN(
+	ctx context.Context, conn net.Conn, identity, password string,
 ) (SASLAuthenticate, error) {
 	request := kmsg.NewPtrSASLAuthenticateRequest()
 	request.SetVersion(saslAuthenticateRequestVersion)
-	request.SASLAuthBytes = plainAuthBytes(identity, secret)
+	request.SASLAuthBytes = plainAuthBytes(identity, password)
 
 	response := kmsg.NewPtrSASLAuthenticateResponse()
 	response.SetVersion(saslAuthenticateRequestVersion)
@@ -148,14 +136,12 @@ func ExchangePLAIN(
 // **No erasure is claimed, and none is performed.** By the time these bytes
 // reach the socket, kmsg has copied them into the encoded frame it builds, so
 // zeroing the slice here would leave that copy untouched while implying the
-// value was gone — and the string returned by Reveal cannot be erased at all,
+// value was gone — and the string Authenticate revealed cannot be erased at all,
 // because Go strings are immutable and the garbage collector may have moved it
 // already. internal/security/doc.go has stated since Phase 1 that Go cannot
 // guarantee erasure and that memory exposure is addressed by process hardening
 // instead; a Zero call here would be theatre that contradicts it. See ADR 0030.
-func plainAuthBytes(identity string, secret security.Secret) []byte {
-	password := security.Reveal(secret)
-
+func plainAuthBytes(identity, password string) []byte {
 	payload := make([]byte, 0, len(identity)+len(password)+2)
 	payload = append(payload, 0)
 	payload = append(payload, identity...)
