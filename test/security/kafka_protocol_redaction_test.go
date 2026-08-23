@@ -62,7 +62,7 @@ func protocolReport(
 		Attributes: map[domain.AttributeKey]domain.AttrValue{
 			servicekafka.AttrSASLMechanism: domain.StringAttr("PLAIN"),
 		},
-		StartedAt: at, Duration: time.Millisecond,
+		StartedAt: at, Elapsed: domain.Measured(time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("evidence: %v", err)

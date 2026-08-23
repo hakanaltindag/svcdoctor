@@ -47,7 +47,7 @@ func unusableReport(t *testing.T, ref, host string, port int64) domain.Report {
 		evidence, err := domain.NewEvidence(domain.EvidenceInput{
 			ID: domain.EvidenceID(id), Subject: ref, Layer: domain.LayerTopology,
 			Step: step, State: state, FailureClass: class, Attributes: attributes,
-			StartedAt: at, Duration: time.Millisecond,
+			StartedAt: at, Elapsed: domain.Measured(time.Millisecond),
 		})
 		if err != nil {
 			t.Fatalf("evidence %q: %v", id, err)

@@ -249,7 +249,10 @@ linters:
             - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter/postgres/wire
               desc: a wire package holds the protocol and the authorized Reveal; the CLI reaches neither
             - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter/kafka
-              desc: no Kafka composition exists, and the CLI exposes no Kafka command
+              desc: >-
+                the Kafka command builds app.KafkaParams and nothing else; a
+                mechanism name is a string on the wire, and reaching for the
+                adapter's constant would put the protocol in the CLI
             - pkg: os/exec
               desc: the command runs no subprocesses
             - pkg: net/http
@@ -493,6 +496,24 @@ linters:
       - path: _test\.go$
         linters:
           - forbidigo
+
+      # A renderer's *test* may read a golden file and parse its own source.
+      #
+      # The rule this narrows exists so that rendered output cannot depend on
+      # where it was written: no file, no environment, no terminal query. A test
+      # comparing output against testdata is the opposite — it is what proves the
+      # output is the same everywhere — and the AST boundary guard in
+      # internal/render/terminal/boundary_test.go has to read this package's own
+      # sources to check them.
+      #
+      # It is granted by message text rather than by linter, exactly as the
+      # forbidigo grants above are, so a test file gains the file-access
+      # exemption and none of the other denials in the same rule: importing
+      # internal/app or internal/diagnosis from a renderer test still fails.
+      - path: internal/render/.*_test\.go$
+        linters:
+          - depguard
+        text: 'a renderer opens no file'
 
 issues:
   # See the note above the exclusions block: deduplicating by line can hide a

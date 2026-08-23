@@ -501,14 +501,21 @@ func TestPerLayerLatencyIsPreserved(t *testing.T) {
 	connect := node(t, graph, scopedConnectID(t, broker, "10.20.0.1"))
 	handshake := node(t, graph, scopedHandshakeID(t, broker, "10.20.0.1"))
 
-	if lookup.Duration() < 0 {
-		t.Errorf("dns duration = %s", lookup.Duration())
-	}
-	if connect.Duration() <= 0 {
-		t.Errorf("tcp duration = %s, want a measured connection time", connect.Duration())
-	}
-	if handshake.Duration() <= 0 {
-		t.Errorf("tls duration = %s, want a measured handshake time", handshake.Duration())
+	// Each is asserted to *be a measurement*, not to exceed a threshold. A
+	// loopback connect can complete inside one monotonic tick and measure zero,
+	// which is a real result; requiring a positive number here would make the
+	// test fail on a fast machine for no product reason.
+	for _, tt := range []struct {
+		name string
+		node domain.Evidence
+	}{{"dns", lookup}, {"tcp", connect}, {"tls", handshake}} {
+		d, measured := tt.node.Elapsed().Duration()
+		if !measured {
+			t.Errorf("%s recorded no measurement", tt.name)
+		}
+		if d < 0 {
+			t.Errorf("%s duration = %s, want non-negative", tt.name, d)
+		}
 	}
 
 	// And nothing aggregates them.

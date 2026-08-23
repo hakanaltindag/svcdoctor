@@ -54,7 +54,7 @@ func unreachableAdvertisementReport(t *testing.T) domain.Report {
 		evidence, err := domain.NewEvidence(domain.EvidenceInput{
 			ID: domain.EvidenceID(id), Subject: ref, Layer: layer, Step: step,
 			State: state, FailureClass: class, Attributes: attributes,
-			StartedAt: at, Duration: time.Millisecond,
+			StartedAt: at, Elapsed: domain.Measured(time.Millisecond),
 		})
 		if err != nil {
 			t.Fatalf("evidence %q: %v", id, err)

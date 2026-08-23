@@ -91,7 +91,7 @@ func identityReportFixture(t *testing.T) domain.Report {
 			"probe.round_trip":       domain.DurationAttr(12 * time.Millisecond),
 		},
 		StartedAt: time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC),
-		Duration:  12 * time.Millisecond,
+		Elapsed:   domain.Measured(12 * time.Millisecond),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence: %v", err)
@@ -449,7 +449,7 @@ func TestRedactionPerformsNoKeyNameInference(t *testing.T) {
 	rebuilt, err := domain.NewEvidence(domain.EvidenceInput{
 		ID: node.ID(), Subject: node.Subject(), Layer: node.Layer(), Step: node.Step(),
 		State: node.State(), Attributes: attrs,
-		StartedAt: node.StartedAt(), Duration: node.Duration(),
+		StartedAt: node.StartedAt(), Elapsed: node.Elapsed(),
 	})
 	if err != nil {
 		t.Fatalf("NewEvidence: %v", err)

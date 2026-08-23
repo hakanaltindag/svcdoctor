@@ -227,6 +227,15 @@ func TestTheTotalDurationIsRunMetadata(t *testing.T) {
 // Phase 5.2 added one, so asserting its absence would now assert the opposite of
 // ADR 0049. What survives is the part that was actually load-bearing: exactly
 // two sources, both explicit, and none of the three the ADR refuses or defers.
+//
+// # It is a set, not a list, and Phase 6.4C is why
+//
+// `diagnose kafka` declares the same two flags as `diagnose postgres`, because
+// each service owns its own flag set (ADR 0041) and both read a credential the
+// same way. That is two declarations of each name, not four names. The assertion
+// is over the distinct **names**, so a third source — an environment variable, a
+// literal `--password`, a DSN — still fails on either command, while a third
+// service reusing the two allowed ones does not.
 func TestTheCredentialSurfaceIsExactlyTwoFlags(t *testing.T) {
 	root := filepath.Join(repoRoot(t), "internal", "cli")
 
@@ -239,7 +248,7 @@ func TestTheCredentialSurfaceIsExactlyTwoFlags(t *testing.T) {
 
 		// The declared flag names, read from the fs.X("name", ...) calls.
 		for _, m := range regexp.MustCompile(`fs\.\w+\("([a-z-]+)"`).FindAllStringSubmatch(code, -1) {
-			if strings.Contains(m[1], "password") {
+			if strings.Contains(m[1], "password") && !slices.Contains(flags, m[1]) {
 				flags = append(flags, m[1])
 			}
 		}

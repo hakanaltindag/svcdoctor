@@ -184,8 +184,10 @@ func TestUnsupportedMechanismEvidenceShape(t *testing.T) {
 	if got := evidence.Layer(); got != domain.LayerAuth {
 		t.Errorf("layer = %s, want auth", got)
 	}
-	if got := evidence.Duration(); got != 0 {
-		t.Errorf("duration = %s, want 0: nothing was attempted", got)
+	// Not "zero": a zero-length measurement is something a real exchange can
+	// produce. Nothing ran here, so nothing was timed at all.
+	if evidence.Elapsed().IsMeasured() {
+		t.Error("nothing was attempted, yet the node carries a measurement")
 	}
 
 	graph := freeze(t, target.builder)
