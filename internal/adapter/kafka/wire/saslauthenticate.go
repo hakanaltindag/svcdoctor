@@ -65,6 +65,19 @@ type SASLAuthenticate struct {
 	SessionLifetimeMillis int64
 }
 
+// MechanismPLAIN is the only SASL mechanism svcdoctor can perform for Kafka.
+//
+// It is exported because the adapter must decide whether the mechanism a broker
+// agreed to is one this package can execute *before* it opens a credential, and
+// that decision must compare against the same string this package frames. One
+// constant, one meaning — the arrangement internal/adapter/postgres/wire uses
+// for MechanismSCRAMSHA256, for the same reason.
+//
+// Adding a mechanism here without adding the exchange that performs it would
+// re-create the defect the constant exists to prevent, which is why
+// TestOnlyPLAINIsSupported pins the supported set to exactly this value.
+const MechanismPLAIN = "PLAIN"
+
 // SASLAuthenticateVersion reports which version of SaslAuthenticate was asked
 // for, so that the recorded evidence can say what the exchange actually was.
 func SASLAuthenticateVersion() int16 { return saslAuthenticateRequestVersion }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 
+	"github.com/hakanaltindag/svcdoctor/internal/adapter/kafka/wire"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
@@ -70,17 +71,48 @@ func advertised() []kmsg.ApiVersionsResponseApiKey {
 	return keys
 }
 
-// countingConn counts closes so ownership assertions are facts.
+// countingConn counts closes so ownership assertions are facts, and writes so
+// that "svcdoctor transmitted nothing" is measurable on a plaintext path.
 //
-// It deliberately does not count bytes written. Counting them here cannot
-// express "nothing was transmitted" on a TLS path: closing a *tls.Conn writes a
-// close_notify alert through this socket, so a refusal that sent nothing still
-// moves the counter. The zero-byte claims are measured on the peer instead,
-// above its TLS layer — see broker.appBytes.
+// **The write counter is not usable on a TLS path.** Closing a *tls.Conn writes
+// a close_notify alert through this socket, so a refusal that transmitted
+// nothing still moves it. TLS-path zero-byte claims are measured on the peer
+// instead, above its TLS layer — see broker.appBytes.
 type countingConn struct {
 	net.Conn
 	mu     sync.Mutex
 	closes int
+
+	// written counts application bytes svcdoctor wrote to this socket.
+	//
+	// It is meaningful **only on a plaintext path**, which is why the doc above
+	// says this type does not count bytes: on a TLS path closing a *tls.Conn
+	// emits a close_notify alert through here, so the counter moves even when
+	// nothing was transmitted. On plaintext there is no such alert, and the
+	// number is exactly what svcdoctor's protocol layer wrote.
+	//
+	// It exists because broker.appBytes cannot express every leak. That counter
+	// reports request bytes the peer *consumed*, so bytes written outside Kafka
+	// framing — which the peer can never decode into a request — never reach it.
+	// A careless write of credential material is precisely that shape.
+	written int
+}
+
+func (c *countingConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+
+	c.mu.Lock()
+	c.written += n
+	c.mu.Unlock()
+
+	return n, err
+}
+
+// bytesWritten reports application bytes written to this socket. See written.
+func (c *countingConn) bytesWritten() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.written
 }
 
 func (c *countingConn) Close() error {
@@ -935,6 +967,26 @@ func (a *authTarget) conn(t *testing.T) *countingConn {
 	return established[0]
 }
 
+// negotiatedMechanism is the mechanism buildAuthTarget asks the broker about,
+// and therefore the one a resulting HandshakeSession carries.
+//
+// It is a package-level knob rather than a parameter because every existing
+// caller wants PLAIN and threading a parameter through four helpers would touch
+// tests this phase has no reason to touch. withNegotiatedMechanism restores it,
+// and the fixture broker accepts whatever it is asked about, so the session is
+// produced by the real handshake rather than hand-built.
+var negotiatedMechanism = ""
+
+// withNegotiatedMechanism makes the next targets negotiate mechanism, restoring
+// the default when the test ends.
+func withNegotiatedMechanism(t *testing.T, mechanism string) {
+	t.Helper()
+
+	previous := negotiatedMechanism
+	negotiatedMechanism = mechanism
+	t.Cleanup(func() { negotiatedMechanism = previous })
+}
+
 // buildAuthTarget runs the whole real chain — DNS, TCP, optionally TLS,
 // ApiVersions, SaslHandshake — so that authentication receives a session
 // produced the way production would produce one.
@@ -970,8 +1022,12 @@ func buildAuthTarget(
 	}
 	t.Cleanup(func() { _ = protocol.Close() })
 
+	mechanism := negotiatedMechanism
+	if mechanism == "" {
+		mechanism = wire.MechanismPLAIN
+	}
 	handshake, err := SASLHandshake(
-		context.Background(), builder, protocol.Sessions(), SASLParams{Mechanism: "PLAIN"})
+		context.Background(), builder, protocol.Sessions(), SASLParams{Mechanism: mechanism})
 	if err != nil {
 		t.Fatalf("SASLHandshake: %v", err)
 	}

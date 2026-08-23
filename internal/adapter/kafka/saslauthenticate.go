@@ -170,9 +170,6 @@ func Authenticate(
 	if session == nil {
 		return nil, fmt.Errorf("%w: session must not be nil", ErrInvalidInput)
 	}
-	if credential.IsZero() {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidInput, security.ErrUnboundCredential)
-	}
 	if err := params.validate(); err != nil {
 		return nil, err
 	}
@@ -193,8 +190,27 @@ func Authenticate(
 		}
 	}()
 
-	// 1. May a credential cross this channel at all? Asked first, so a refused
-	//    channel never reaches the code that handles a secret.
+	// 0. Can svcdoctor perform the mechanism the broker agreed to? Asked before
+	//    anything else, because every later step reasons about a credential and
+	//    none of that reasoning is meaningful for an exchange this package
+	//    cannot frame.
+	if !supportedMechanism(session.Mechanism()) {
+		if err := recordUnsupportedMechanism(builder, session, result); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
+	// The credential is required only once the mechanism is one that would use
+	// it. It is checked here rather than with the arguments above so that a
+	// mechanism svcdoctor cannot perform is reported as that, and not as a
+	// caller who forgot a credential for an exchange that was never possible.
+	if credential.IsZero() {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidInput, security.ErrUnboundCredential)
+	}
+
+	// 1. May a credential cross this channel at all? A refused channel never
+	//    reaches the code that handles a secret.
 	if !params.TransportPolicy.PermitsCredentials(session.Channel()) {
 		if err := recordRefusal(builder, session, result); err != nil {
 			return nil, err
@@ -289,6 +305,120 @@ func logicalEndpoint(session *HandshakeSession) (security.Endpoint, error) {
 		return security.Endpoint{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	return endpoint, nil
+}
+
+// supportedMechanism reports whether this package can perform the mechanism the
+// broker agreed to.
+//
+// # It is a whitelist, and that is the security property
+//
+// Exactly one mechanism has an exchange in internal/adapter/kafka/wire, so
+// exactly one is supported. Every other name — SCRAM-SHA-256, SCRAM-SHA-512,
+// OAUTHBEARER, GSSAPI, AWS_MSK_IAM, and anything a future broker invents — is
+// unsupported, and an unknown name is unsupported for the same reason rather
+// than by a separate rule.
+//
+// The comparison is exact. Kafka mechanism names are drawn from the SASL
+// registry and brokers send them verbatim; case-folding or trimming here would
+// let a name svcdoctor did not recognize reach a framing built for a different
+// one, which is the whole failure this function exists to make impossible.
+//
+// **Nothing here falls back.** A mechanism that is not PLAIN does not become
+// PLAIN, is not retried as PLAIN, and is not approximated. Kafka's SASL
+// mechanisms differ in their message framing, not only in their cryptography, so
+// sending PLAIN's three NUL-separated fields into a SCRAM exchange would put the
+// identity and the password on the wire in a shape the peer never agreed to
+// receive. That is what this predicate prevents.
+func supportedMechanism(mechanism string) bool {
+	return mechanism == wire.MechanismPLAIN
+}
+
+// recordUnsupportedMechanism records that svcdoctor could not perform the
+// mechanism this session negotiated.
+//
+// # It is UNKNOWN, and the class is a capability class
+//
+// The peer did nothing wrong. It offered a mechanism, agreed to the one it was
+// asked about, and is waiting for a message svcdoctor cannot construct. Nothing
+// was presented, so nothing was accepted or refused, and the credential's
+// validity is exactly as unknown afterwards as before. `UNKNOWN` +
+// `AUTH_MECHANISM_UNSUPPORTED` says that and stops, which is the same shape
+// internal/adapter/postgres records for md5, cleartext and SCRAM-SHA-256-PLUS.
+//
+// `FAIL` would assert an observation of the target that was never made.
+// `AUTH_MECHANISM_NOT_OFFERED` is the opposite direction — a peer that does not
+// offer what was asked for — and belongs to the handshake step, which already
+// produces it. `AUTH_CREDENTIALS_REJECTED` would accuse a credential nobody
+// evaluated. `SKIPPED` + `EXEC_SKIPPED_BY_POLICY` is the channel refusal beside
+// it, and reads as *"a policy declined"* rather than *"svcdoctor cannot do
+// this"*; the two lead to different actions and ADR 0030 keeps them apart.
+//
+// # It is a node, not silence
+//
+// An absent node is indistinguishable from a step nobody requested. The record
+// says the run reached the point of authenticating, found a mechanism it could
+// not perform, and sent nothing.
+//
+// # No blocker edge
+//
+// A `BlockedBy` edge points at the evidence that made a step impossible. Nothing
+// in the graph did: the limitation is svcdoctor's own, and the handshake node
+// above passed. Pointing at it would read as though the broker had obstructed
+// something. The refusal beside this one carries a blocker precisely because
+// there a TLS node proves the channel insufficient.
+//
+// # Attributes
+//
+// Only the mechanism, for the reason refusalEvidence records only the mechanism:
+// it is a protocol fact drawn from a public registry, it is already on the
+// handshake node, and every other attribute of this step would assert that a
+// request was made and answered. Nothing credential-derived exists here to
+// record — this function never receives a credential.
+func recordUnsupportedMechanism(
+	builder *domain.GraphBuilder, session *HandshakeSession, result *AuthResult,
+) error {
+	evidence, err := unsupportedMechanismEvidence(session)
+	if err != nil {
+		return err
+	}
+	if err := record(builder, evidence, session.Evidence()); err != nil {
+		return err
+	}
+	result.evidenceID = evidence.ID()
+	return nil
+}
+
+// unsupportedMechanismEvidence builds the node for an authentication svcdoctor
+// declined to attempt.
+//
+// The duration is zero because nothing was attempted: no request was framed, no
+// byte was written and no clock was waited on. That is the same value
+// refusalEvidence records for the same reason.
+func unsupportedMechanismEvidence(session *HandshakeSession) (domain.Evidence, error) {
+	subject, err := domain.NewEndpointSubject(session.Address().String())
+	if err != nil {
+		return domain.Evidence{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
+	}
+
+	evidence, err := domain.NewEvidence(domain.EvidenceInput{
+		ID: probe.EvidenceID(
+			StepSASLAuthenticate, session.Endpoint(), session.Address().Addr().String()),
+		Subject:      subject,
+		Layer:        domain.LayerAuth,
+		Step:         StepSASLAuthenticate,
+		State:        domain.StateUnknown,
+		FailureClass: domain.FailureAuthMechanismUnsupported,
+		Attributes: map[domain.AttributeKey]domain.AttrValue{
+			AttrSASLMechanism: domain.StringAttr(session.Mechanism()),
+		},
+		StartedAt: time.Now(),
+		Duration:  0,
+	})
+	if err != nil {
+		return domain.Evidence{}, fmt.Errorf(
+			"building unsupported-mechanism %s evidence: %w", StepSASLAuthenticate, err)
+	}
+	return evidence, nil
 }
 
 // recordRefusal records that a credential was not sent because the policy
