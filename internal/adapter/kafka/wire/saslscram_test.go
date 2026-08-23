@@ -160,7 +160,7 @@ func TestTranslateSCRAMCoversEverySharedSentinel(t *testing.T) {
 	}
 	for _, tt := range []struct{ in, want error }{
 		{scram.ErrMalformedMessage, ErrMalformedResponse},
-		{scram.ErrMessageTooLarge, ErrMalformedResponse},
+		{scram.ErrMessageTooLarge, ErrSCRAMParametersUnsupported},
 		{scram.ErrUnexpectedResponse, ErrNotKafka},
 		{scram.ErrIterationsUnsupported, ErrSCRAMIterationsUnsupported},
 		{scram.ErrServerSignatureMismatch, ErrSCRAMServerSignatureMismatch},

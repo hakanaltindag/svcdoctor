@@ -117,8 +117,9 @@ const (
 	// "neither accepted nor rejected" is the sentence that earns this finding
 	// its place: an UNKNOWN node must not read as a refusal.
 	detailUnsupportedBySvcdoctor = "svcdoctor performs SCRAM-SHA-256 over printable-ASCII " +
-		"passwords and a bounded iteration count, and declines the rest. The limitation is " +
-		"svcdoctor's own.\n" +
+		"passwords, a bounded iteration count and bounded SCRAM message sizes, and declines " +
+		"the rest. Those bounds are svcdoctor's own defensive limits rather than a protocol " +
+		"rule, so the endpoint's message may be entirely valid.\n" +
 		"The credential was neither accepted nor rejected."
 	recommendUnsupportedBySvcdoctor = "Re-run against a role whose password is printable ASCII, " +
 		"or diagnose this endpoint with a client that implements the full mechanism"

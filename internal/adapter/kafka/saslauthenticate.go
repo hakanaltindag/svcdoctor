@@ -760,6 +760,14 @@ func (o authObservation) classify() (domain.State, domain.FailureClass) {
 		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
 	case errors.Is(o.err, wire.ErrSCRAMIterationsUnsupported):
 		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
+	case errors.Is(o.err, wire.ErrSCRAMParametersUnsupported):
+		// The broker's SCRAM message was legal and above svcdoctor's defensive
+		// resource ceiling. Same claim as the iteration case above and the same
+		// class: a gap in svcdoctor, never a defect in the cluster. Before
+		// ADR 0061 this reached PROTOCOL_MALFORMED_RESPONSE, which said the
+		// broker sent something it could not decode — untrue of every value
+		// this covers.
+		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
 	case errors.Is(o.err, wire.ErrSCRAMLocalDerivation):
 		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
 	}

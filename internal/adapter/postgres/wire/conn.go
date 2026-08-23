@@ -124,6 +124,23 @@ var (
 	//
 	// The token itself never leaves the shared core's comparison.
 	ErrSCRAMRejected = scram.ErrRejected
+
+	// ErrSCRAMParametersUnsupported means the server's SCRAM message was legal
+	// and larger than svcdoctor's defensive resource policy reads.
+	//
+	// **A statement about svcdoctor, never about the server**, and the same
+	// claim ErrIterationsUnsupported makes about a legal iteration count: RFC
+	// 5802 and RFC 7677 set no maximum on a salt, a nonce, an attribute list or
+	// a message, so a value above one of svcdoctor's ceilings is valid protocol
+	// svcdoctor declines to process.
+	//
+	// It is distinct from ErrFrameTooLarge, which this previously reused.
+	// ErrFrameTooLarge is a *framing* fact about a PostgreSQL message header and
+	// classifies as a malformed response; a SCRAM field above a core ceiling is
+	// neither framing nor malformed, and reporting it that way blamed the peer
+	// for svcdoctor's policy. See ADR 0061 §19.
+	ErrSCRAMParametersUnsupported = errors.New(
+		"peer SCRAM parameters exceed the size svcdoctor reads")
 )
 
 // translateSCRAM maps a shared-core error into this package's vocabulary.
@@ -148,11 +165,16 @@ func translateSCRAM(err error) error {
 	case errors.Is(err, scram.ErrUnexpectedResponse):
 		return ErrUnexpectedResponse
 	case errors.Is(err, scram.ErrMessageTooLarge):
-		// The core refused a peer field larger than it reads. That is the same
-		// claim ErrFrameTooLarge already makes one layer down — the length was
-		// structurally legal and svcdoctor declined it — so it reuses that
-		// sentinel rather than inventing a second way to say it.
-		return ErrFrameTooLarge
+		// The core refused a peer field larger than it reads.
+		//
+		// This used to return ErrFrameTooLarge on the reasoning that both mean
+		// "structurally legal, and svcdoctor declined it". The claim is right
+		// and the sentinel was wrong: ErrFrameTooLarge classifies as
+		// PROTOCOL_MALFORMED_RESPONSE, so the reuse turned a svcdoctor policy
+		// decision into an accusation that the peer sent something undecodable.
+		// A legal 130-byte Redpanda salt is the measured counterexample.
+		// See ADR 0061 §19.
+		return ErrSCRAMParametersUnsupported
 	case errors.Is(err, scram.ErrUsernameUnsupported),
 		errors.Is(err, scram.ErrNoDerivation),
 		errors.Is(err, scram.ErrDerivationFailed),
