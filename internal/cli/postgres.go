@@ -2,13 +2,11 @@ package cli
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"strings"
 	"time"
 
@@ -24,13 +22,6 @@ import (
 	renderterminal "github.com/hakanaltindag/svcdoctor/internal/render/terminal"
 	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 )
-
-// maxCAFileSize bounds the trust material this command will read.
-//
-// A PEM bundle of system-CA size is well under this; anything larger is much
-// more likely to be the wrong file than a trust store, and failing loudly beats
-// reading an arbitrary amount of a file an operator pointed at by mistake.
-const maxCAFileSize = 1 << 20
 
 // errHelpRequested is not a failure. It says the parse ended because help was
 // asked for, and the caller has already written it to stdout.
@@ -237,6 +228,18 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 	if err != nil {
 		return postgresCommand{}, err
 	}
+	// Refused, not ignored. A trust source, a verified identity and a waiver of
+	// verification all describe a handshake, and `--tls disable` performs none.
+	// This is the clause Phase 6.8A brought into line with Kafka, and it is a
+	// released-CLI change: see ADR 0060 section 5 for the compatibility packet.
+	if err := refuseInertTLSFlags(tlsFlags{
+		disabled:   plan == adapterpostgres.TLSDisabled,
+		caFile:     *caFile,
+		serverName: *serverName,
+		insecure:   *insecure,
+	}); err != nil {
+		return postgresCommand{}, err
+	}
 	roots, err := trustSource(*caFile)
 	if err != nil {
 		return postgresCommand{}, err
@@ -371,53 +374,4 @@ func checkHost(host string) (string, error) {
 		return "", usagef("--host %s", strings.TrimPrefix(err.Error(), "unsupported host: "))
 	}
 	return h.String(), nil
-}
-
-// trustSource loads the PEM trust material, or reports that it could not.
-//
-// A nil pool means the system trust store, which is what the adapter documents
-// and what an operator who passed no flag asked for.
-//
-// # The path may appear in an error; the contents never do
-//
-// A file svcdoctor cannot use has to be nameable or the operator cannot fix it.
-// Its bytes are a different matter: a trust file holds no secret, but the rule
-// that file contents never reach an error message is worth keeping uniform with
-// ADR 0049 rather than reasoned about per file.
-func trustSource(path string) (*x509.CertPool, error) {
-	if path == "" {
-		return nil, nil
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, usagef("--tls-ca-file %s cannot be read: %v", path, statReason(err))
-	}
-	if info.Size() > maxCAFileSize {
-		return nil, usagef("--tls-ca-file %s is larger than %d bytes", path, maxCAFileSize)
-	}
-
-	pem, err := os.ReadFile(path) //nolint:gosec // G304: the path is the operator's own flag, bounded above.
-	if err != nil {
-		return nil, usagef("--tls-ca-file %s cannot be read: %v", path, statReason(err))
-	}
-
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, usagef("--tls-ca-file %s contains no PEM certificate", path)
-	}
-	return pool, nil
-}
-
-// statReason reduces a filesystem error to its cause without echoing the path a
-// second time or carrying anything the file held.
-func statReason(err error) string {
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return "no such file"
-	case errors.Is(err, os.ErrPermission):
-		return "permission denied"
-	default:
-		return "unreadable"
-	}
 }

@@ -261,22 +261,22 @@ func checkKafkaIdentity(user string, sources credentialSources) error {
 //
 // # The trust flags are refused rather than ignored when there is no handshake
 //
-// `--tls disable --tls-ca-file ca.pem` describes a run that has no handshake to
-// apply the trust source to. Accepting it silently would let an operator believe
-// they configured trust for a plaintext run.
+// That rule is no longer Kafka's alone. It moved to refuseInertTLSFlags in Phase
+// 6.8A, when PostgreSQL adopted it, so the two services state one contract
+// instead of two that disagreed. See ADR 0060.
 func kafkaTLSPlan(
 	mode, serverName, caFile string, insecure bool,
 ) (*transport.TLSOptions, error) {
 	switch mode {
 	case "require":
 	case "disable":
-		switch {
-		case caFile != "":
-			return nil, usagef("--tls-ca-file has no effect with --tls disable")
-		case serverName != "":
-			return nil, usagef("--tls-server-name has no effect with --tls disable")
-		case insecure:
-			return nil, usagef("--tls-insecure has no effect with --tls disable")
+		if err := refuseInertTLSFlags(tlsFlags{
+			disabled:   true,
+			caFile:     caFile,
+			serverName: serverName,
+			insecure:   insecure,
+		}); err != nil {
+			return nil, err
 		}
 		return nil, nil
 	default:

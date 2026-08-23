@@ -140,39 +140,3 @@ func TestAServerNameOverrideDoesNotChangeTheConnectionTarget(t *testing.T) {
 		t.Fatalf("ServerName = %q, want the override", got)
 	}
 }
-
-// --- the gaps ADR 0058 recorded, pinned as they stand -----------------------
-
-// TestPostgresStillAcceptsInertTLSFlags records ADR 0058 section 14's second gap
-// exactly as it is, so it cannot change without a decision.
-//
-// PostgreSQL accepts `--tls-insecure` alongside `--tls disable`, where Kafka
-// refuses the pair. This phase deliberately did **not** change it: it is a
-// released CLI behaviour and not part of the address-literal path, and altering
-// it here would be the silent semantics change the phase's own stop conditions
-// forbid. Deferred to the pre-release gate; see docs/BACKLOG.md.
-func TestPostgresStillAcceptsInertTLSFlags(t *testing.T) {
-	h := newHarness(app.Result{}, nil)
-	code := h.run("diagnose", "postgres",
-		"--host", "10.20.30.40", "--user", "svcdoctor",
-		"--tls", "disable", "--tls-insecure")
-	if code != ExitOK {
-		t.Fatalf("PostgreSQL now refuses inert TLS flags (exit %d).\n"+
-			"That may well be the right answer, but it is a released CLI behaviour "+
-			"change and needs a decision recorded in docs/BACKLOG.md rather than a "+
-			"test update.\nstderr: %s", code, h.stderr.String())
-	}
-}
-
-// TestKafkaStillRefusesInertTLSFlags is the other half of the same gap: the two
-// services disagree, and that disagreement is what makes it a gap.
-func TestKafkaStillRefusesInertTLSFlags(t *testing.T) {
-	h := newHarness(app.Result{}, nil)
-	code := h.run("diagnose", "kafka",
-		"--host", "10.20.30.40", "--sasl-mechanism", "PLAIN",
-		"--tls", "disable", "--tls-insecure")
-	if code != ExitUsage {
-		t.Fatalf("Kafka no longer refuses inert TLS flags (exit %d); the two services "+
-			"now agree, which resolves a gap docs/BACKLOG.md still records as open", code)
-	}
-}

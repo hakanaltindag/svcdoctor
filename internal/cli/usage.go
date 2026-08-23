@@ -98,8 +98,13 @@ Execution budget:
   --step-timeout duration   bound on each individual exchange (default 10s)
 
 Transport encryption:
-  --tls string              "require" or "disable" (default "require")
-  --tls-ca-file path        PEM trust source; empty uses the system store
+  --tls string              "require" or "disable" (default "require").
+                            "disable" performs no handshake, so the three flags
+                            below describe nothing and are refused rather than
+                            ignored
+  --tls-ca-file path        PEM trust source; empty uses the system store.
+                            A supplied file replaces the system roots, it does
+                            not add to them, so only its issuers are accepted
   --tls-server-name string  identity to verify and send in SNI; empty uses
                             the host. It is not applied to advertised brokers,
                             which are verified against their own names.
@@ -111,8 +116,12 @@ Transport encryption:
                             certificate is checked against its IP SANs and no
                             SNI is sent, because SNI carries names only
   --tls-insecure            do not verify the endpoint's identity. Explicit,
-                            never automatic, and recorded in the report. The
-                            resulting channel is unverified, which the
+                            never automatic, and recorded in the report and on
+                            every affected row of the terminal output. A
+                            handshake performed this way proves the channel is
+                            encrypted and proves nothing about who answered:
+                            no chain was validated and no name or address was
+                            matched. The channel is unverified, which the
                             credential transport policy refuses, so a
                             credential would be withheld rather than sent
 
@@ -178,8 +187,13 @@ Execution budget:
   --step-timeout duration   bound on each individual exchange (default 10s)
 
 Transport encryption:
-  --tls string              "require" or "disable" (default "require")
-  --tls-ca-file path        PEM trust source; empty uses the system store
+  --tls string              "require" or "disable" (default "require").
+                            "disable" performs no handshake, so the three flags
+                            below describe nothing and are refused rather than
+                            ignored
+  --tls-ca-file path        PEM trust source; empty uses the system store.
+                            A supplied file replaces the system roots, it does
+                            not add to them, so only its issuers are accepted
   --tls-server-name string  identity to verify and send in SNI; empty uses
                             the host. --host decides where svcdoctor connects
                             and this decides whose identity it expects there,
@@ -189,8 +203,12 @@ Transport encryption:
                             certificate is checked against its IP SANs and no
                             SNI is sent, because SNI carries names only
   --tls-insecure            do not verify the endpoint's identity. Explicit,
-                            never automatic, and recorded in the report. The
-                            resulting channel is unverified, which the
+                            never automatic, and recorded in the report and on
+                            every affected row of the terminal output. A
+                            handshake performed this way proves the channel is
+                            encrypted and proves nothing about who answered:
+                            no chain was validated and no name or address was
+                            matched. The channel is unverified, which the
                             credential transport policy refuses, so a
                             credential would be withheld rather than sent
 
