@@ -116,16 +116,24 @@ func (p AuthParams) validate() error {
 //
 // The order below is the contract, and it is the order of the code:
 //
-//	session.Channel()                          what this connection proved
-//	  -> policy.PermitsCredentials(channel)    may a secret cross it at all
+//	session.Mechanism()                        what the broker agreed to
+//	  -> supportedMechanism(mechanism)         can svcdoctor perform it at all
+//	  -> credential.IsZero()                   was this run given anything
+//	  -> policy.PermitsCredentials(channel)    may a secret cross this channel
 //	  -> security.NewEndpoint(session)         the logical name, never the address
 //	  -> credential.SecretFor(endpoint)        is this credential authorized here
 //	  -> wire.ExchangePLAIN                    the only layer that may reveal
 //
-// Each step is a precondition for the next. A channel the policy refuses ends
-// the call before an endpoint is even parsed; a credential bound elsewhere ends
-// it before the wire package is called. Nothing is revealed in either path,
-// because nothing reaches the only function that can reveal.
+// Each step is a precondition for the next. A mechanism svcdoctor cannot perform
+// ends the call before the credential is looked at; a run holding no credential
+// ends it before a channel or an endpoint is even considered; a channel the
+// policy refuses ends it before an endpoint is parsed; a credential bound
+// elsewhere ends it before the wire package is called. Nothing is revealed in
+// any of those paths, because nothing reaches the only function that can reveal.
+//
+// The first four steps each record their own node and return normally. They are
+// diagnostic outcomes, not invocation failures, and every one of them is a fact
+// about this run or this broker that an operator has to see.
 //
 // # Errors
 //
@@ -201,15 +209,33 @@ func Authenticate(
 		return result, nil
 	}
 
-	// The credential is required only once the mechanism is one that would use
-	// it. It is checked here rather than with the arguments above so that a
-	// mechanism svcdoctor cannot perform is reported as that, and not as a
-	// caller who forgot a credential for an exchange that was never possible.
+	// 1. Was this run given anything to present?
+	//
+	// **Second, not first.** A mechanism svcdoctor cannot perform is refused
+	// above whatever the run holds, because that refusal is true regardless: a
+	// broker demanding SCRAM-SHA-256 reports the capability gap rather than a
+	// missing credential, since supplying one would change nothing.
+	//
+	// Everything below is decided *after* this, because with nothing to present
+	// the channel policy has no question to answer and there is no endpoint
+	// binding to check. A policy refusal means *a credential existed and was
+	// deliberately not sent*; saying that when none exists would send an
+	// operator to fix TLS for a run that would still have nothing to offer.
+	//
+	// It was an invocation error until Phase 6.1c-P1, which made the caller
+	// responsible for not asking. That put a real diagnostic outcome outside the
+	// report: a run against a broker demanding PLAIN with no credential
+	// configured produced no authentication node at all, indistinguishable from
+	// a run cancelled at this exact point. See ADR 0046 for the same reasoning
+	// in internal/adapter/postgres, whose shape this follows.
 	if credential.IsZero() {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidInput, security.ErrUnboundCredential)
+		if err := recordMissingInput(builder, session, result); err != nil {
+			return nil, err
+		}
+		return result, nil
 	}
 
-	// 1. May a credential cross this channel at all? A refused channel never
+	// 2. May a credential cross this channel at all? A refused channel never
 	//    reaches the code that handles a secret.
 	if !params.TransportPolicy.PermitsCredentials(session.Channel()) {
 		if err := recordRefusal(builder, session, result); err != nil {
@@ -218,14 +244,14 @@ func Authenticate(
 		return result, nil
 	}
 
-	// 2. Which endpoint authorizes this credential? The logical name the
+	// 3. Which endpoint authorizes this credential? The logical name the
 	//    operator asked about, never the address it resolved to.
 	endpoint, err := logicalEndpoint(session)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Is this credential authorized here? A mismatch returns before the wire
+	// 4. Is this credential authorized here? A mismatch returns before the wire
 	//    package exists in the call stack.
 	secret, err := credential.SecretFor(endpoint)
 	if err != nil {
@@ -417,6 +443,106 @@ func unsupportedMechanismEvidence(session *HandshakeSession) (domain.Evidence, e
 	if err != nil {
 		return domain.Evidence{}, fmt.Errorf(
 			"building unsupported-mechanism %s evidence: %w", StepSASLAuthenticate, err)
+	}
+	return evidence, nil
+}
+
+// recordMissingInput records that the broker required an authentication
+// svcdoctor can perform, and the run held nothing to present.
+//
+// # It is SKIPPED, and the class is an execution class
+//
+// The exchange was intentionally not executed, so `SKIPPED` is the state:
+// nothing was attempted and nothing is uncertain about why. `FAIL` would assert
+// that the peer rejected something, and the peer was never asked.
+// `UNKNOWN` would claim doubt about a cause that is fully known — the run was
+// not given a credential. `AUTH_CREDENTIALS_REJECTED` would accuse a credential
+// that does not exist.
+//
+// The class is `EXEC_REQUIRED_INPUT_MISSING`, whose contract is exactly this:
+// the step could not run because a required input for it was not supplied to the
+// run. The gap is in the invocation, not in the target and not in svcdoctor's
+// capabilities.
+//
+// # Why it is not the refusal beside it
+//
+// `EXEC_SKIPPED_BY_POLICY` means *a credential existed and svcdoctor declined to
+// send it over this channel*. That reads as "establish verified TLS and this
+// will work", which is false here: with nothing configured, the run would still
+// have nothing to offer over a perfect channel. recordRefusal keeps that
+// meaning, and this function keeps the other; ADR 0030 requires the two stay
+// apart, and the ordering in Authenticate is what enforces it.
+//
+// # Why it is not the mechanism gap above it
+//
+// `AUTH_MECHANISM_UNSUPPORTED` is decided first and wins, because it is true
+// regardless of what the run holds. See Authenticate's step 1.
+//
+// # It is a node, not silence
+//
+// An absent node is indistinguishable from a step nobody requested. Until
+// Phase 6.1c-P1 this path returned an invocation error, so a run that reached
+// authentication with no credential configured produced no authentication node
+// at all and a graph that read as though the step had never come up.
+//
+// # No blocker edge
+//
+// A `BlockedBy` edge points at the evidence that made a step impossible. Nothing
+// in the graph did: the missing input is the run's own, and the handshake node
+// above passed. The refusal beside this one carries a blocker precisely because
+// there a TLS node proves the channel insufficient.
+//
+// # Attributes
+//
+// Only the mechanism, for the reason unsupportedMechanismEvidence records only
+// the mechanism: it is a protocol fact from a public registry, already on the
+// handshake node, and naming it says which authentication went unattempted.
+// Nothing credential-derived exists to record — this function receives no
+// credential, and a length or an "empty password" string would describe a secret
+// that was never supplied.
+func recordMissingInput(
+	builder *domain.GraphBuilder, session *HandshakeSession, result *AuthResult,
+) error {
+	evidence, err := missingInputEvidence(session)
+	if err != nil {
+		return err
+	}
+	if err := record(builder, evidence, session.Evidence()); err != nil {
+		return err
+	}
+	result.evidenceID = evidence.ID()
+	return nil
+}
+
+// missingInputEvidence builds the node for an authentication the run had no
+// credential for.
+//
+// The duration is zero because nothing was attempted: no request was framed, no
+// byte was written and no clock was waited on. That is the same value
+// unsupportedMechanismEvidence and refusalEvidence record for the same reason.
+func missingInputEvidence(session *HandshakeSession) (domain.Evidence, error) {
+	subject, err := domain.NewEndpointSubject(session.Address().String())
+	if err != nil {
+		return domain.Evidence{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
+	}
+
+	evidence, err := domain.NewEvidence(domain.EvidenceInput{
+		ID: probe.EvidenceID(
+			StepSASLAuthenticate, session.Endpoint(), session.Address().Addr().String()),
+		Subject:      subject,
+		Layer:        domain.LayerAuth,
+		Step:         StepSASLAuthenticate,
+		State:        domain.StateSkipped,
+		FailureClass: domain.FailureExecRequiredInputMissing,
+		Attributes: map[domain.AttributeKey]domain.AttrValue{
+			AttrSASLMechanism: domain.StringAttr(session.Mechanism()),
+		},
+		StartedAt: time.Now(),
+		Duration:  0,
+	})
+	if err != nil {
+		return domain.Evidence{}, fmt.Errorf(
+			"building missing-input %s evidence: %w", StepSASLAuthenticate, err)
 	}
 	return evidence, nil
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
-	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // --- evidence contract ----------------------------------------------------
@@ -412,14 +411,11 @@ func TestAuthenticateRejectsUnusableInput(t *testing.T) {
 				return err
 			},
 		},
-		{
-			name: "zero credential",
-			call: func() error {
-				_, err := Authenticate(context.Background(), target.builder, target.session(t),
-					security.Credential{}, AuthParams{})
-				return err
-			},
-		},
+		// A zero credential was a row here until Phase 6.1c-P1. It is no longer
+		// a caller defect: a run that reaches authentication with nothing
+		// configured is a fact about that run, and the operator has to see it.
+		// It is now evidence — SKIPPED + EXEC_REQUIRED_INPUT_MISSING — and
+		// requiredinput_test.go owns it.
 		{
 			name: "negative timeout",
 			call: func() error {
