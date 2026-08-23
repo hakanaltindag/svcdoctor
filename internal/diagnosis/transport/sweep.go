@@ -21,7 +21,14 @@ type sweep struct {
 	// about this sweep carries.
 	anchor domain.Evidence
 
-	// lookup is the sweep's single DNS root.
+	// lookup is the sweep's single DNS root, and is zero when the sweep
+	// performed no resolution.
+	//
+	// **Absent is a shape, not a gap.** A sweep of an address literal has
+	// nothing to resolve, so internal/probe/transport mints no L1 node and the
+	// connection attempts hang directly off the anchor (ADR 0059). A rule reads
+	// hasLookup to learn which of the two it is looking at, and neither answer
+	// means the graph is malformed.
 	lookup domain.Evidence
 
 	// connects are the per-address TCP measurements beneath the lookup, in
@@ -114,17 +121,12 @@ func collectSweep(g domain.Graph, anchor domain.Evidence) sweep {
 		s.wellFormed = true
 		return s
 	}
-	if len(children) > 1 {
+	connectIDs, ok := s.readRoot(g, children)
+	if !ok {
 		return sweep{}
 	}
 
-	lookup, ok := g.Node(children[0])
-	if !ok || lookup.Step() != vocabulary.StepDNSLookup {
-		return sweep{}
-	}
-	s.lookup = lookup
-
-	for _, connectID := range g.Children(lookup.ID()) {
+	for _, connectID := range connectIDs {
 		connect, ok := g.Node(connectID)
 		if !ok || connect.Step() != vocabulary.StepTCPConnect {
 			return sweep{}
@@ -150,5 +152,74 @@ func collectSweep(g domain.Graph, anchor domain.Evidence) sweep {
 	return s
 }
 
+// readRoot recognizes which of the two shapes the transport chain produced
+// beneath an anchor, records the lookup when there is one, and returns the
+// identifiers of the connection nodes.
+//
+// # The two shapes, and why the *step* decides
+//
+//	target.requested -> dns.lookup -> tcp.connect ...   a name was resolved
+//	target.requested -> tcp.connect ...                 an address was supplied
+//
+// The discriminator is the step of the anchor's children, which is a fact the
+// producer wrote into the graph. Nothing here parses a subject, inspects a
+// string for dots or colons, or asks whether a host "looks like" an address:
+// depguard denies this package `net` and `internal/probe` precisely so that the
+// question can only be answered structurally, and the structural answer is the
+// truthful one — the L1 node exists exactly when an L1 operation happened.
+//
+// # Why a resolution-free sweep may hold several connections
+//
+// It will hold one, because one literal is one address. The loop is written over
+// however many the graph holds rather than asserting one, because the assertion
+// would buy nothing: a rule that refused a second connection node would withhold
+// every claim about a shape it could otherwise read correctly, and "every
+// connection failed" is already the aggregation both shapes use.
+//
+// # A mixed shape is refused
+//
+// An anchor whose children are a lookup *and* a connection is a graph no
+// producer makes. It is rejected rather than partially read, on the same
+// principle as the multiple-lookup case below: a rule that guesses which half of
+// an unrecognized shape to believe is a rule that will eventually publish the
+// guess.
+func (s *sweep) readRoot(g domain.Graph, children []domain.EvidenceID) ([]domain.EvidenceID, bool) {
+	first, ok := g.Node(children[0])
+	if !ok {
+		return nil, false
+	}
+
+	switch first.Step() {
+	case vocabulary.StepDNSLookup:
+		// ADR 0043 section 2 fixes the aggregation unit as the anchor: one anchor
+		// yields at most one DNS finding and at most one TCP finding. A second
+		// lookup would be a second execution under one target — expressible under
+		// ADR 0032, produced by nothing today — and the rule has no policy for
+		// which one the finding is about. Withholding is the honest answer to a
+		// question no record has answered.
+		if len(children) > 1 {
+			return nil, false
+		}
+		s.lookup = first
+		return g.Children(first.ID()), true
+
+	case vocabulary.StepTCPConnect:
+		for _, id := range children[1:] {
+			node, ok := g.Node(id)
+			if !ok || node.Step() != vocabulary.StepTCPConnect {
+				return nil, false
+			}
+		}
+		return children, true
+
+	default:
+		return nil, false
+	}
+}
+
 // hasLookup reports whether a DNS root was measured at all.
+//
+// False means the sweep resolved nothing because there was nothing to resolve.
+// It never means resolution failed: a failed lookup is a present node in a FAIL
+// state, and the DNS rule reads it.
 func (s sweep) hasLookup() bool { return !s.lookup.IsZero() }

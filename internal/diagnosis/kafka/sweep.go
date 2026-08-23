@@ -21,6 +21,10 @@ type sweep struct {
 	// lookupFailures are the DNS roots that did not pass. Such a root has no
 	// paths beneath it, so it is the whole causal set for its own branch
 	// (ADR 0034 section 11.1).
+	//
+	// It is empty for an advertisement that named an address: that sweep
+	// resolved nothing, so it has no DNS root to succeed or fail, and its whole
+	// causal set is the connection beneath it (ADR 0059).
 	lookupFailures []domain.Evidence
 
 	// paths are the per-address measurements: one TCP node and, when the plan
@@ -50,52 +54,110 @@ type transportPath struct {
 
 // collectSweep reads the sweep derived from one advertisement.
 //
+// # The two shapes it recognizes
+//
+//	kafka.broker_advertised -> dns.lookup -> tcp.connect -> tls.handshake
+//	kafka.broker_advertised ->               tcp.connect -> tls.handshake
+//
+// The second is an advertisement that named an address rather than a name.
+// Nothing was resolved, so no L1 node exists, and the discriminator is the
+// child's own layer — a fact the producer wrote into the graph rather than
+// anything inferred from a subject string (ADR 0059).
+//
 // It rejects, by returning wellFormed false, any shape the transport chain does
-// not produce: a child of the advertisement that is not a DNS lookup, a child of
-// a lookup that is not a TCP connection, a child of a TCP connection that is not
-// a handshake, more than one handshake under one connection, or an edge naming a
-// node the graph does not hold. Each of those would leave the rule guessing what
-// it was looking at, and a guess is the one thing a rule may not make.
+// not produce: a child of the advertisement that is neither a DNS lookup nor a
+// TCP connection, a child of a lookup that is not a TCP connection, a child of a
+// TCP connection that is not a handshake, more than one handshake under one
+// connection, or an edge naming a node the graph does not hold. Each of those
+// would leave the rule guessing what it was looking at, and a guess is the one
+// thing a rule may not make.
 func collectSweep(g domain.Graph, advertisement domain.EvidenceID) sweep {
 	var s sweep
+	var sawLookup, sawConnection bool
 
 	for _, rootID := range g.Children(advertisement) {
 		root, ok := g.Node(rootID)
-		if !ok || root.Layer() != domain.LayerDNS {
+		if !ok {
 			return sweep{}
 		}
-		s.nodes = append(s.nodes, root)
 
-		if root.State() != domain.StatePass {
-			// A lookup that did not pass resolved nothing, so nothing hangs
-			// beneath it and the node itself carries the branch's outcome.
-			s.lookupFailures = append(s.lookupFailures, root)
-			continue
-		}
-
-		for _, connectionID := range g.Children(rootID) {
-			connection, ok := g.Node(connectionID)
-			if !ok || connection.Layer() != domain.LayerTCP {
-				return sweep{}
+		switch root.Layer() {
+		case domain.LayerDNS:
+			sawLookup = true
+			s.nodes = append(s.nodes, root)
+			if root.State() != domain.StatePass {
+				// A lookup that did not pass resolved nothing, so nothing hangs
+				// beneath it and the node itself carries the branch's outcome.
+				s.lookupFailures = append(s.lookupFailures, root)
+				continue
 			}
-			s.nodes = append(s.nodes, connection)
-
-			path := transportPath{tcp: connection}
-			for _, handshakeID := range g.Children(connectionID) {
-				handshake, ok := g.Node(handshakeID)
-				if !ok || handshake.Layer() != domain.LayerTLS || path.hasTLS {
+			for _, connectionID := range g.Children(rootID) {
+				if !s.readConnection(g, connectionID) {
 					return sweep{}
 				}
-				path.handshake = handshake
-				path.hasTLS = true
-				s.nodes = append(s.nodes, handshake)
 			}
-			s.paths = append(s.paths, path)
+
+		case domain.LayerTCP:
+			// An advertisement that named an address rather than a name. There
+			// was nothing to resolve, so the sweep has no L1 node and the
+			// connection hangs straight off the advertisement (ADR 0059).
+			//
+			// **It is the same endpoint kind, not a lesser one.** A broker that
+			// advertises 10.20.30.41 is measured exactly as one that advertises
+			// broker-1.internal: TCP, then TLS if the plan required it, then a
+			// reachability verdict from the same rules. Nothing here is
+			// credential-bearing in either case — MeasureAdvertised has nowhere
+			// to put a credential (ADR 0050) — so the two shapes differ only in
+			// whether an L1 measurement occurred.
+			sawConnection = true
+			if !s.readConnection(g, rootID) {
+				return sweep{}
+			}
+
+		default:
+			return sweep{}
 		}
+	}
+
+	// A mixed shape — a resolution *and* a resolution-free connection under one
+	// advertisement — is a graph no producer makes. It is rejected rather than
+	// partially read: an advertisement is either a name or an address, never
+	// both, and a rule that read half of an unrecognized shape would eventually
+	// publish the half it guessed at.
+	if sawLookup && sawConnection {
+		return sweep{}
 	}
 
 	s.wellFormed = true
 	return s
+}
+
+// readConnection collects one TCP node and the handshake beneath it, if any.
+//
+// It returns false for a shape the transport chain does not produce: a node the
+// graph does not hold, a child of the advertisement's transport level that is
+// not a connection, a child of a connection that is not a handshake, or more
+// than one handshake under one connection. Each would leave the rule guessing
+// what it was looking at, and a guess is the one thing a rule may not make.
+func (s *sweep) readConnection(g domain.Graph, connectionID domain.EvidenceID) bool {
+	connection, ok := g.Node(connectionID)
+	if !ok || connection.Layer() != domain.LayerTCP {
+		return false
+	}
+	s.nodes = append(s.nodes, connection)
+
+	path := transportPath{tcp: connection}
+	for _, handshakeID := range g.Children(connectionID) {
+		handshake, ok := g.Node(handshakeID)
+		if !ok || handshake.Layer() != domain.LayerTLS || path.hasTLS {
+			return false
+		}
+		path.handshake = handshake
+		path.hasTLS = true
+		s.nodes = append(s.nodes, handshake)
+	}
+	s.paths = append(s.paths, path)
+	return true
 }
 
 // terminalIsTLS reports whether reaching this endpoint required a handshake.
@@ -129,7 +191,10 @@ func (s sweep) terminalIsTLS() bool {
 // unrepresentable rather than merely undocumented.
 //
 // A sweep whose lookup produced no address mints no TCP node and therefore no
-// TLS node, so **its plan is unknowable** (ADR 0034 section 4). The verdict does
+// TLS node, so **its plan is unknowable** (ADR 0034 section 4). Only the
+// resolving shape can reach that state: an advertisement that named an address
+// always mints a connection node, so `measured` false still implies a lookup and
+// the prose below may still name one. The verdict does
 // not need it — nothing was reachable at L1 either way — but user-facing prose
 // does, and naming a layer there would state a fact the evidence does not carry:
 // a sweep that never resolved may well have required TLS. `measured` false means

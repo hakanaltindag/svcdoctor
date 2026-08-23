@@ -61,38 +61,87 @@ func Run(ctx context.Context, builder *domain.GraphBuilder, params Params) (*Res
 		}
 	}()
 
-	lookupCtx, cancel := stepContext(ctx, params.StepTimeout)
-	lookup, err := dns.Lookup(lookupCtx, params.Resolver, params.Host, params.Scope)
-	cancel()
+	addresses, parent, err := locate(ctx, builder, params)
 	if err != nil {
-		return nil, fmt.Errorf("dns lookup: %w", err)
-	}
-	if err := builder.AddEvidence(lookup); err != nil {
-		return nil, fmt.Errorf("recording dns evidence: %w", err)
-	}
-	// A sweep that was caused by an earlier observation says so. The edge is
-	// derivation, not provenance: it records that this measurement exists
-	// because that node did, and nothing about how its subject entered the run.
-	//
-	// The check happens here rather than before the lookup because the builder
-	// deliberately offers no way to ask what it holds (ADR 0013), and giving it
-	// one to save a lookup would trade a correct boundary for a cheap
-	// pre-flight. An absent parent is a caller defect and surfaces as an error.
-	if params.Parent != "" {
-		if err := builder.AddParent(lookup.ID(), params.Parent); err != nil {
-			return nil, fmt.Errorf("recording sweep parent: %w", err)
-		}
+		return nil, err
 	}
 
-	for _, address := range resolvedAddresses(lookup) {
+	for _, address := range addresses {
 		addr := netip.AddrPortFrom(address, params.Port)
-		if err := sweepAddress(ctx, builder, params, lookup.ID(), addr, result); err != nil {
+		if err := sweepAddress(ctx, builder, params, parent, addr, result); err != nil {
 			return nil, err
 		}
 	}
 
 	completed = true
 	return result, nil
+}
+
+// locate produces the addresses this sweep will attempt, and names the node the
+// first attempt derives from.
+//
+// # There are two ways to have an address, and only one of them is a measurement
+//
+// A name has to be resolved: the resolver is asked, the answer is a fact about
+// the target, and it is recorded as an L1 node whether it succeeded or not. An
+// address literal was already supplied — nothing is asked, nothing answers, and
+// there is no fact to record. **So a literal sweep produces no DNS node at all**,
+// and the connection attempts derive directly from whatever caused the sweep.
+//
+// This is the whole of ADR 0059's graph decision, and it is stated here rather
+// than distributed through the callers because this is the only function that
+// knows which of the two happened.
+//
+// # Why not a dns.lookup node saying "resolution was not required"
+//
+// Because the node would be the claim. `dns.lookup` names an operation, and
+// every state it can carry describes how that operation went: PASS says it
+// answered, FAIL says it did not, SKIPPED says something stopped it from being
+// attempted. None of them means "there was nothing to attempt", and the one the
+// chain used to emit — PASS, with the literal echoed back as an answer and a
+// measured duration — asserted a resolution that never happened. Diagnosis then
+// read it as a denominator and the TCP finding told operators that "every address
+// the hostname resolved to was tried" about a run with no hostname in it.
+//
+// Absence is the truthful representation. It needs no new state, no new step and
+// no new attribute, and every consumer that walks the graph structurally sees
+// exactly what occurred: an L0 target, and connection attempts.
+//
+// # The parent edge
+//
+// A sweep that was caused by an earlier observation says so. The edge is
+// derivation, not provenance: it records that this measurement exists because
+// that node did, and nothing about how its subject entered the run. For a name
+// the DNS node carries it and the connections hang beneath; for a literal there
+// is no DNS node, so the connections carry it directly. An empty Parent leaves
+// the first node a graph root, exactly as an unparented sweep has always been.
+//
+// The check happens after the lookup rather than before it because the builder
+// deliberately offers no way to ask what it holds (ADR 0013), and giving it one
+// to save a lookup would trade a correct boundary for a cheap pre-flight. An
+// absent parent is a caller defect and surfaces as an error.
+func locate(
+	ctx context.Context, builder *domain.GraphBuilder, params Params,
+) ([]netip.Addr, domain.EvidenceID, error) {
+	if addr, literal := params.host().Addr(); literal {
+		return []netip.Addr{addr}, params.Parent, nil
+	}
+
+	lookupCtx, cancel := stepContext(ctx, params.StepTimeout)
+	lookup, err := dns.Lookup(lookupCtx, params.Resolver, params.Host, params.Scope)
+	cancel()
+	if err != nil {
+		return nil, "", fmt.Errorf("dns lookup: %w", err)
+	}
+	if err := builder.AddEvidence(lookup); err != nil {
+		return nil, "", fmt.Errorf("recording dns evidence: %w", err)
+	}
+	if params.Parent != "" {
+		if err := builder.AddParent(lookup.ID(), params.Parent); err != nil {
+			return nil, "", fmt.Errorf("recording sweep parent: %w", err)
+		}
+	}
+	return resolvedAddresses(lookup), lookup.ID(), nil
 }
 
 // stepContext bounds one probe call, and is written as a closure so that Run
@@ -369,15 +418,25 @@ func budgetFailure(err error) domain.FailureClass {
 	return domain.FailureExecCancelled
 }
 
-// add records one node and its parent edge.
+// add records one node and, when there is one, its parent edge.
 //
 // Parent means derivation: a TCP attempt exists because the lookup produced that
 // address, and a TLS handshake exists because that connection was established.
 // It does not record how the endpoint entered the run, which is `Origin` and
 // remains deferred (ADR 0013).
+//
+// An empty parent means the node is a graph root and no edge is written. That is
+// reachable only for the first node of an unparented sweep — a literal host
+// measured with no Parent supplied, where there is no DNS node above the
+// connection to carry the edge. Every internal caller below the first node
+// passes a real identifier, so this is not a way for an edge to go missing
+// quietly; it is how a root stays a root.
 func add(builder *domain.GraphBuilder, evidence domain.Evidence, parent domain.EvidenceID) error {
 	if err := builder.AddEvidence(evidence); err != nil {
 		return fmt.Errorf("recording %s evidence: %w", evidence.Step(), err)
+	}
+	if parent == "" {
+		return nil
 	}
 	if err := builder.AddParent(evidence.ID(), parent); err != nil {
 		return fmt.Errorf("recording parent of %s: %w", evidence.ID(), err)

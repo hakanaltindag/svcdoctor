@@ -19,12 +19,19 @@ func TestUnexpectedSweepShapesWithholdEveryClaim(t *testing.T) {
 		build func(*builder, domain.EvidenceID)
 	}{
 		{
-			// The chain parents a sweep's DNS root to the advertisement. A
-			// transport node hanging directly off one means the rule cannot tell
-			// what it is looking at.
-			name: "a TCP node directly beneath the advertisement",
+			// An advertisement is either a name or an address. A lookup *and* a
+			// resolution-free connection beneath one is a graph no producer
+			// makes, and the rule cannot tell which half describes the endpoint.
+			//
+			// A TCP node alone beneath an advertisement is **not** here: since
+			// ADR 0059 that is the shape a broker advertising an address
+			// produces, it is recognized, and TestALiteralAdvertisementIsOwned
+			// pins that it yields a finding rather than silence.
+			name: "a lookup and a direct connection beneath one advertisement",
 			build: func(b *builder, ad domain.EvidenceID) {
-				b.node("tcp.connect/direct/10.20.0.1", "10.20.0.1:9093",
+				l := b.lookup(ad, "broker-2.internal", domain.StatePass, domain.FailureNone)
+				b.connect(l, "10.20.0.1", 9093, domain.StateFail, domain.FailureTCPConnectionRefused)
+				b.node("tcp.connect/direct/10.20.0.2", "10.20.0.2:9093",
 					domain.LayerTCP, "tcp.connect", domain.StateFail,
 					domain.FailureTCPConnectionRefused, ad, nil)
 			},

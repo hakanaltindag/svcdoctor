@@ -63,7 +63,32 @@ const summaryConnectionNotEstablished = "No measured TCP connection to the reque
 const detailConnectionNotEstablished = "Every address the hostname resolved to was tried " +
 	"and none accepted a connection. What each attempt observed is recorded as a failure " +
 	"class on the referenced evidence.\n" +
-	"Those classes differ in what they establish, and the difference decides where to look " +
+	detailConnectionNotEstablishedShared
+
+// detailConnectionNotEstablishedLiteral is the same claim about a run that
+// resolved nothing.
+//
+// It exists because the sentence above is false for an address literal, and was
+// printed for one: a run against `--host 127.0.0.1` told operators that "every
+// address the hostname resolved to was tried" when there was no hostname in the
+// run and no resolution had happened. The graph no longer contains a lookup node
+// for such a run, so the rule can tell the two apart structurally and say the
+// true sentence for each.
+//
+// It is a second detail rather than a second code. The claim is identical — no
+// measured connection completed — and docs/FINDINGS.md section 3.1 item 11 makes
+// "the first move differs" the test for splitting a code. It does not: an
+// operator checks the same listener either way.
+const detailConnectionNotEstablishedLiteral = "The address this run was given was tried " +
+	"and did not accept a connection. No name was resolved, because the target was supplied " +
+	"as an address. What the attempt observed is recorded as a failure class on the " +
+	"referenced evidence.\n" +
+	detailConnectionNotEstablishedShared
+
+// detailConnectionNotEstablishedShared is the part of the explanation that does
+// not depend on how the address was arrived at.
+const detailConnectionNotEstablishedShared = "Those classes differ in what they establish, " +
+	"and the difference decides where to look " +
 	"next: some record that a host answered and declined the connection, others that " +
 	"nothing answered at all. svcdoctor observed the outcome of each attempt and nothing " +
 	"about what produced it.\n" +
@@ -89,8 +114,9 @@ var authorizedTCPFailures = map[domain.FailureClass]bool{
 // TCP diagnoses the connectivity of every requested target.
 //
 // It is a diagnosis.Rule. It enumerates requested-target anchors, descends to the
-// single DNS node beneath each and then to that node's direct connection
-// children, and decides once per target.
+// connection nodes each one caused — through the single DNS node when a name was
+// resolved, and directly when an address literal made resolution unnecessary —
+// and decides once per target.
 //
 // # The aggregation rule, and why it is stated as "every node failed"
 //
@@ -102,6 +128,9 @@ var authorizedTCPFailures = map[domain.FailureClass]bool{
 //	any UNKNOWN         -> not every node failed -> withheld
 //	any SKIPPED         -> not every node failed -> withheld
 //	no connection nodes -> nothing to fail       -> withheld
+//
+// It holds identically for both sweep shapes. What changes between them is only
+// where the set of attempted addresses came from; see evaluateTCP.
 //
 // Writing it as one universal quantifier rather than four branches is deliberate:
 // there is no ordering between the cases to get wrong, and a state added to the
@@ -136,21 +165,35 @@ func TCP(g domain.Graph) []domain.Finding {
 
 // evaluateTCP decides what one sweep's connection attempts support.
 func evaluateTCP(s sweep) (domain.Finding, bool) {
-	if !s.wellFormed || !s.hasLookup() || len(s.connects) == 0 {
+	if !s.wellFormed || len(s.connects) == 0 {
 		return domain.Finding{}, false
 	}
 
-	// The lookup is part of the proof rather than decoration: it establishes
-	// which addresses existed to be tried. Without it "every path failed" has no
-	// denominator. A sweep with connection nodes always has a passing lookup —
-	// the chain mints no connection for an address it never learned — and the
-	// check is here so the reference cannot be to a node that failed.
-	if s.lookup.State() != domain.StatePass {
-		return domain.Finding{}, false
-	}
-
+	// The denominator, and where it comes from in each shape.
+	//
+	// "Every path failed" is a universal claim and needs a set to be universal
+	// over. When a name was resolved the lookup *is* that set: it establishes
+	// which addresses existed to be tried, so it is cited as a conjunct and its
+	// state is checked, because a sweep with connection nodes always has a
+	// passing lookup — the chain mints no connection for an address it never
+	// learned — and the reference must not be to a node that failed.
+	//
+	// When an address was supplied there is no lookup and none is needed. The
+	// set is closed by the input itself: one literal is one address, the anchor
+	// already records it, and the connection nodes beneath the anchor are
+	// exhaustively what was attempted. Requiring a lookup here would have left
+	// every FAIL on a literal target unowned — a reachable failing stage with no
+	// finding, which is exactly what ADR 0054 forbids shipping.
 	refs := make([]domain.EvidenceID, 0, len(s.connects)+1)
-	refs = append(refs, s.lookup.ID())
+	detail := detailConnectionNotEstablishedLiteral
+	if s.hasLookup() {
+		if s.lookup.State() != domain.StatePass {
+			return domain.Finding{}, false
+		}
+		refs = append(refs, s.lookup.ID())
+		detail = detailConnectionNotEstablished
+	}
+
 	for _, connect := range s.connects {
 		if connect.State() != domain.StateFail {
 			return domain.Finding{}, false
@@ -171,7 +214,7 @@ func evaluateTCP(s sweep) (domain.Finding, bool) {
 		// again, so the same facts always produce the same references.
 		refs:           refs,
 		summary:        summaryConnectionNotEstablished,
-		detail:         detailConnectionNotEstablished,
+		detail:         detail,
 		recommendation: recommendConnectionNotEstablished,
 	})
 }

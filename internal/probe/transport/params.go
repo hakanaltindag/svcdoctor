@@ -130,7 +130,25 @@ func (p Params) validate() error {
 	case p.StepTimeout < 0:
 		return fmt.Errorf("%w: step timeout %s must not be negative", ErrInvalidInput, p.StepTimeout)
 	}
+	if _, err := probe.ParseHost(p.Host); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidInput, err)
+	}
 	return nil
+}
+
+// host classifies the caller's Host.
+//
+// It is called only after validate has accepted the params, so the error cannot
+// arrive here; returning the zero Host on one would make an unclassifiable input
+// look like a name and hand it to a resolver. A name is what ParseHost returns
+// for anything that is not an address anyway, so the fallback is also the
+// conservative one.
+func (p Params) host() probe.Host {
+	h, err := probe.ParseHost(p.Host)
+	if err != nil {
+		return probe.Host{}
+	}
+	return h
 }
 
 // endpoint is the logical label every node of this run is scoped by.

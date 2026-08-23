@@ -197,9 +197,18 @@ var tlsClaims = map[domain.FailureClass]tlsClaim{
 // The chain the sweep already validates is the ownership predicate:
 //
 //	target.requested -> dns.lookup -> tcp.connect -> tls.handshake
+//	target.requested ->              tcp.connect -> tls.handshake
 //
-// with the anchor's layer and subject kind checked, one lookup, and handshakes
-// taken as direct children only.
+// with the anchor's layer and subject kind checked, at most one lookup, and
+// handshakes taken as direct children only.
+//
+// The second shape is a target given as an address literal, which resolves
+// nothing and therefore has no L1 node (ADR 0059). It reaches this rule through
+// the same walk and needs nothing here: ownership is "a handshake directly under
+// a connection under this anchor", and that sentence never mentioned DNS. The
+// collection is what had to learn the second shape, and it did — which is how a
+// literal TLS failure got an owner in the same change that made one reachable
+// (ADR 0054).
 //
 // # It is endpoint-scoped, and DNS and TCP beside it are not
 //

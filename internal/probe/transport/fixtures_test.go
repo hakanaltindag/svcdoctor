@@ -203,6 +203,13 @@ type tlsPeer struct {
 
 func newTLSPeer(t *testing.T, dnsNames []string) *tlsPeer {
 	t.Helper()
+	return newPeer(t, dnsNames, nil)
+}
+
+// newPeer is the shared implementation: one CA, one leaf carrying whichever
+// subject alternative names the caller asked for, and a loopback listener.
+func newPeer(t *testing.T, dnsNames []string, ips []net.IP) *tlsPeer {
+	t.Helper()
 
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -232,12 +239,17 @@ func newTLSPeer(t *testing.T, dnsNames []string) *tlsPeer {
 	if err != nil {
 		t.Fatalf("generating leaf key: %v", err)
 	}
+	commonName := "svcdoctor chain test leaf"
+	if len(dnsNames) > 0 {
+		commonName = dnsNames[0]
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: dnsNames[0]},
+		Subject:      pkix.Name{CommonName: commonName},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		DNSNames:     dnsNames,
+		IPAddresses:  ips,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -367,4 +379,20 @@ func run(t *testing.T, params Params) (*Result, domain.Graph) {
 // tcpParams is the common no-TLS setup.
 func tcpParams(resolver *fakeResolver, dialer *scriptedDialer) Params {
 	return Params{Host: testHost, Port: testPort, Resolver: resolver, Dialer: dialer}
+}
+
+// newTLSPeerWithIPs is newTLSPeer with IP SANs instead of DNS names, so an
+// address target has something legitimate to verify against.
+func newTLSPeerWithIPs(t *testing.T, addresses ...string) *tlsPeer {
+	t.Helper()
+
+	ips := make([]net.IP, 0, len(addresses))
+	for _, a := range addresses {
+		addr, err := netip.ParseAddr(a)
+		if err != nil {
+			t.Fatalf("netip.ParseAddr(%q): %v", a, err)
+		}
+		ips = append(ips, net.IP(addr.AsSlice()))
+	}
+	return newPeer(t, nil, ips)
 }
