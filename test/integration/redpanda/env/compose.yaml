@@ -1,0 +1,37 @@
+# A single Redpanda broker with SASL and a TLS listener, for the Phase 7.0b
+# SCRAM validation.
+#
+# **The version is pinned deliberately.** ADR 0061's evidence is about Redpanda
+# v25.1.9, whose SCRAM salt size is hardcoded at 130 bytes in its source. A
+# floating tag would silently change the thing under test, and the claim this
+# fixture supports is about a version, not about Redpanda in general.
+name: svcdoctor-redpanda
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:v25.1.9
+    container_name: svcd-redpanda
+    volumes:
+      - ./redpanda.yaml:/etc/redpanda/redpanda.yaml:ro
+      - ./certs:/certs:ro
+    ports:
+      # Deliberately clear of the Kafka fixture (19192/29192/39192) and the
+      # PostgreSQL one (55432/55433), so the suites cannot collide on a port.
+      - "19291:19291"   # PLAINTEXT listener
+      - "19292:19292"   # TLS listener, what svcdoctor authenticates over
+    # The admin API is deliberately **not** published. It is not SASL-gated, and
+    # it is the one interface that can create a principal — so it stays reachable
+    # only from inside the container, via `docker exec`, exactly as the Kafka
+    # fixture reaches its own admin tooling.
+    # Redpanda sizes itself for a dedicated host and refuses to start under
+    # Docker's default share. These flags are what make it run in CI and on a
+    # laptop; none of them affects the protocol behaviour under test.
+    command:
+      - redpanda
+      - start
+      - --config=/etc/redpanda/redpanda.yaml
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --check=false
