@@ -29,7 +29,28 @@ type sweep struct {
 	// mints no connection node for an address it never learned.
 	connects []domain.Evidence
 
+	// handshakes are the tls.handshake nodes that are **direct children** of a
+	// connect in this sweep, in canonical order.
+	//
+	// Direct is the whole ownership test for generic TLS (ADR 0053 section 8).
+	// The generic transport chain hangs a handshake straight off the connection
+	// it upgraded, so a node here was performed for the target the operator
+	// asked about. PostgreSQL's in-band handshake hangs off
+	// postgres.ssl_request instead — a grandchild of the connect — so it is not
+	// collected and ADR 0044 keeps it.
+	//
+	// Empty on every PostgreSQL run and on every run whose plan asked for no
+	// TLS, which is why nothing here changes what DNS and TCP already claim.
+	handshakes []upgrade
+
 	wellFormed bool
+}
+
+// upgrade pairs a handshake with the connection it was performed on, so a rule
+// never has to ask the graph what a node hangs from to cite its parent.
+type upgrade struct {
+	connect   domain.Evidence
+	handshake domain.Evidence
 }
 
 // collectSweeps reads every requested-target sweep in the graph.
@@ -69,12 +90,19 @@ func collectSweeps(g domain.Graph) []sweep {
 // nothing today — and the rule has no policy for which one the finding is about.
 // Withholding is the honest answer to a question no record has answered.
 //
-// # Why the TLS level is absent
+// # The TLS level, and why it does not tighten the shape
 //
-// The walk stops at TCP. A tls.handshake node under a requested tcp.connect would
-// be generic transport evidence, and no production run produces one; PostgreSQL's
-// handshake hangs off its own negotiation node and is the service's. See the
-// package documentation and ADR 0043 section 14.
+// A tls.handshake that is a **direct child** of a requested tcp.connect is
+// generic transport evidence, and ADR 0053 gave it an owner. It is collected
+// here so the TLS rule descends from the anchor like its siblings rather than
+// walking upward.
+//
+// **A connect child that is not a handshake is ignored, not rejected.** That is
+// deliberate and load-bearing: PostgreSQL's connect carries a
+// postgres.ssl_request child, and refusing the shape would make every PostgreSQL
+// sweep ill-formed and silence the DNS and TCP findings that already work. So an
+// unrecognized child means only "no generic handshake here", never "this sweep
+// is unreadable".
 func collectSweep(g domain.Graph, anchor domain.Evidence) sweep {
 	s := sweep{anchor: anchor}
 
@@ -102,6 +130,20 @@ func collectSweep(g domain.Graph, anchor domain.Evidence) sweep {
 			return sweep{}
 		}
 		s.connects = append(s.connects, connect)
+
+		// Direct children only, and no recursion: a deeper walk would reach a
+		// service's own negotiation and, below a Kafka bootstrap target, the
+		// advertised sweep that ADR 0034 owns.
+		for _, childID := range g.Children(connect.ID()) {
+			child, ok := g.Node(childID)
+			if !ok {
+				return sweep{}
+			}
+			if child.Step() != vocabulary.StepTLSHandshake {
+				continue
+			}
+			s.handshakes = append(s.handshakes, upgrade{connect: connect, handshake: child})
+		}
 	}
 
 	s.wellFormed = true

@@ -215,50 +215,52 @@ func TestNoServiceKnowledgeExists(t *testing.T) {
 	}
 }
 
-// TestNoTLSIsReferenced pins the phase boundary ADR 0043 section 14 drew.
+// TestNoUnproducedTLSClassIsReferenced pins what ADR 0043 section 14's ban
+// became once its reopen condition was met.
 //
-// Generic TLS has no producer, and PostgreSQL's in-band handshake is a service
-// gap with its own phase. Either would arrive here looking like a natural
-// extension of the walk, and both would be claims no record has authorized.
+// That section banned every TLS reference here, because generic TLS had no
+// producer and a claim for evidence that cannot occur is policy nobody can test.
+// **ADR 0053 satisfied the reopen condition** — Kafka bootstrap composition
+// produces a `tls.handshake` under a requested `tcp.connect` — so the six classes
+// internal/probe/tls actually emits are now authorized, and tls.go maps them.
 //
-// Comments may discuss TLS — the package documentation explains at length why it
-// is absent — so the scan reads code only.
-func TestNoTLSIsReferenced(t *testing.T) {
+// The ban survives for the part that never had a producer. Three declared classes
+// are emitted by nothing, verified against internal/probe/tls/handshake.go rather
+// than assumed, and mapping one would authorize a claim for evidence no run can
+// produce. Each would arrive here looking like a natural completion of the table.
+//
+// Comments may discuss them — tlsClaims explains at length why they are absent —
+// so the scan reads code only.
+func TestNoUnproducedTLSClassIsReferenced(t *testing.T) {
 	for _, name := range productionFiles(t) {
 		names := namesUsedIn(t, name)
 		for _, banned := range []string{
-			"StepTLSHandshake", "LayerTLS", "StepSSLRequest",
-			"FailureTLSHandshakeFailure", "FailureTLSHostnameMismatch",
-			"FailureTLSUnknownAuthority", "FailureTLSCertificateExpired",
-			"FailureTLSPeerNotTLS",
+			"FailureTLSVersionMismatch",
+			"FailureTLSClientCertificateRequired",
+			"FailureTLSClientCertificateRejected",
+			// PostgreSQL's in-band negotiation is a different owner's node, and
+			// naming it here would be the start of a service switch.
+			"StepSSLRequest",
 		} {
 			if names[banned] {
-				t.Errorf("%s names %s; generic TLS is deferred (ADR 0043 section 14)",
-					name, banned)
+				t.Errorf("%s names %s; it has no production producer, so no claim "+
+					"may be authorized for it (ADR 0053 section 9)", name, banned)
 			}
 		}
-
-		ast.Inspect(parse(t, name), func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			if strings.Contains(lit.Value, "TLS_") || strings.Contains(lit.Value, "tls.") {
-				t.Errorf("%s contains the literal %s; no TLS claim is authorized",
-					name, lit.Value)
-			}
-			return true
-		})
 	}
 }
 
-// TestExactlyThreeFindingCodesAreDeclared pins the vocabulary of this package.
+// TestExactlyEightFindingCodesAreDeclared pins the vocabulary of this package.
 //
 // The module-wide allow-list in internal/vocabulary checks that no *unauthorized*
 // generic code exists anywhere. This checks the other direction locally: that
-// this package declares three and not four, so a code added here has to be added
+// this package declares eight and not nine, so a code added here has to be added
 // to both places and cannot slip in as a local constant.
-func TestExactlyThreeFindingCodesAreDeclared(t *testing.T) {
+//
+// Three from ADR 0043 and five from ADR 0053. The five are what the six produced
+// TLS FailureClasses map to, with the two certificate-validity classes sharing
+// one code.
+func TestExactlyEightFindingCodesAreDeclared(t *testing.T) {
 	declared := map[string]bool{}
 
 	for _, name := range productionFiles(t) {
@@ -284,6 +286,12 @@ func TestExactlyThreeFindingCodesAreDeclared(t *testing.T) {
 		string(CodeNameNotResolved):          true,
 		string(CodeResolutionFailed):         true,
 		string(CodeConnectionNotEstablished): true,
+
+		string(CodeTLSEndpointDoesNotSpeakTLS): true,
+		string(CodeTLSIdentityMismatch):        true,
+		string(CodeTLSChainNotTrusted):         true,
+		string(CodeTLSCertificateNotValidNow):  true,
+		string(CodeTLSHandshakeNotCompleted):   true,
 	}
 	if len(declared) != len(want) {
 		t.Errorf("declared %v, want exactly %v", declared, want)

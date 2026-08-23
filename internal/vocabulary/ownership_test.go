@@ -191,11 +191,10 @@ func TestThisPackageHasNoBehaviour(t *testing.T) {
 //
 // What it still protects:
 //
-//   - **every TLS_ code.** Generic TLS is deferred for want of a producer
-//     (ADR 0043 section 14), and PostgreSQL's in-band handshake is a service gap
-//     with its own phase. Both would arrive here looking reasonable.
-//   - **a fourth generic code**, added without a record deciding what it may
+//   - **a ninth generic code**, added without a record deciding what it may
 //     claim — which is the invented diagnostic policy ADR 0017 exists to prevent.
+//     ADR 0053 authorized the five TLS codes below and no more; a sixth would be
+//     a claim nobody reviewed.
 //   - **TARGET_**, which contradicts the namespace convention docs/FINDINGS.md
 //     section 1 fixes: generic transport findings use the layer as the namespace.
 //
@@ -207,11 +206,21 @@ func TestOnlyTheAuthorizedGenericFindingCodesExist(t *testing.T) {
 		"DNS_NAME_NOT_RESOLVED":          true,
 		"DNS_RESOLUTION_FAILED":          true,
 		"TCP_CONNECTION_NOT_ESTABLISHED": true,
+
+		// ADR 0053, implemented in Phase 6.1b. Exactly five, for the six
+		// FailureClasses internal/probe/tls actually produces; the two
+		// certificate-validity classes share one code. The three declared
+		// classes with no producer — TLS_VERSION_MISMATCH,
+		// TLS_CLIENT_CERTIFICATE_REQUIRED, TLS_CLIENT_CERTIFICATE_REJECTED —
+		// deliberately have none.
+		"TLS_ENDPOINT_DOES_NOT_SPEAK_TLS": true,
+		"TLS_IDENTITY_MISMATCH":           true,
+		"TLS_CHAIN_NOT_TRUSTED":           true,
+		"TLS_CERTIFICATE_NOT_VALID_NOW":   true,
+		"TLS_HANDSHAKE_NOT_COMPLETED":     true,
 	}
-	// A *generic* TLS code is still rejected outright. ADR 0044 gave PostgreSQL
-	// five codes for the in-band handshake, and every one of them is namespaced
-	// POSTGRES — so none matches a prefix below, and the deferral of generic TLS
-	// keeps its mechanical guard untouched.
+	// PostgreSQL's five in-band TLS codes are namespaced POSTGRES_, so none
+	// matches a prefix below and this scan governs only the generic vocabulary.
 	prefixes := []string{"DNS_", "TCP_", "TLS_", "TARGET_"}
 
 	root := repoRoot(t)
@@ -290,6 +299,15 @@ func TestNoGenericFindingCodeMirrorsAFailureClass(t *testing.T) {
 
 	for _, code := range []string{
 		"DNS_NAME_NOT_RESOLVED", "DNS_RESOLUTION_FAILED", "TCP_CONNECTION_NOT_ESTABLISHED",
+		// The five generic TLS codes matter most here. They carry no service
+		// prefix, so a report holds failureClass and code in the same string
+		// shape — and a code that repeated its class's spelling would make the
+		// two namespaces indistinguishable to a consumer matching on strings.
+		// That hazard is why ADR 0053 rejected TLS_PEER_NOT_TLS and
+		// TLS_HANDSHAKE_FAILED as codes; this assertion is what keeps them out.
+		"TLS_ENDPOINT_DOES_NOT_SPEAK_TLS", "TLS_IDENTITY_MISMATCH",
+		"TLS_CHAIN_NOT_TRUSTED", "TLS_CERTIFICATE_NOT_VALID_NOW",
+		"TLS_HANDSHAKE_NOT_COMPLETED",
 	} {
 		if classes[code] {
 			t.Errorf("finding code %s is also a FailureClass name", code)
