@@ -18,28 +18,32 @@ has exactly one runtime dependency, added in Phase 3.1: `github.com/twmb/franz-g
 - `internal/probe/tls` — the TLS probe, which consumes and produces that ownership (Phase 2.3)
 - `internal/probe/transport` — the generic transport chain (Phase 2.4)
 - `internal/adapter/kafka` — the Kafka adapter boundary, ApiVersions evidence (Phase 3.1),
-  SASL mechanism discovery (Phase 3.2a), channel propagation (Phase 3.2b) and PLAIN
-  authentication (Phase 3.2c)
-- `internal/adapter/kafka/wire` — the only package that imports the Kafka protocol library, and
-  the only package that may call `security.Reveal`
+  SASL mechanism discovery (Phase 3.2a), channel propagation (Phase 3.2b), PLAIN
+  authentication (Phase 3.2c), the mechanism guard (6.1a) and SCRAM-SHA-256 (6.2)
+- `internal/adapter/kafka/wire` — one of the two packages that may call `security.Reveal`, and
+  the only one that imports the Kafka protocol library
+- `internal/adapter/postgres` and `internal/adapter/postgres/wire` — the PostgreSQL vertical
+  slice through `ReadyForQuery`, and the second and last `security.Reveal` call site
+- `internal/sasl/scram` — the shared SCRAM-SHA-256 core, which never receives plaintext
+  (ADR 0055, ADR 0056)
+- `internal/diagnosis/transport`, `internal/diagnosis/postgres`, `internal/diagnosis/kafka` —
+  the concrete rules, 40 finding codes between them
+- `internal/render/terminal` and `internal/render/json` — the two v0.1 output forms, derived
+  from one report
+- `internal/app` — the PostgreSQL and Kafka composition roots
+- `internal/platform/local`, `internal/service/*`, `internal/vocabulary` — vantage collection
+  and the shared step vocabulary
+- `internal/cli` and `cmd/svcdoctor` — `svcdoctor diagnose postgres` and
+  `svcdoctor diagnose kafka`
 
-No Go code exists in any of the following, and nothing in them may be assumed implemented:
+**This section was stale until Phase 6.5's audit read it.** It claimed no Go code existed in
+`internal/adapter/postgres`, `internal/render`, `internal/platform`, `internal/app` or
+`cmd/svcdoctor`, and that "the tool still cannot diagnose anything" — all true when Phase 2
+sealed and none of it true since Phase 4.5. `internal/platform/kubernetes` remains empty and
+is Phase 5 work.
 
-- `internal/adapter/postgres`
-- `internal/render`
-- `internal/platform`
-- `internal/app`
-- `cmd/svcdoctor`
-
-So the generic transport engine is complete: it sweeps an endpoint end to end and produces a
-deterministic evidence graph plus one live connection. What is still absent is everything that
-would consume it — no adapters, no Kafka, no PostgreSQL, no topology execution, no diagnosis
-rules, no renderers, no CLI. **The tool still cannot diagnose anything**: it can gather
-transport evidence for one endpoint, and nothing interprets or presents it yet.
-
-`internal/diagnosis` ships the rule contract and the engine and **no concrete rules**. That
-is a deliberate deferral with a recorded reason, not missing work; see Phase 1.5 and Phase 2
-below.
+So both vertical slices are complete and exposed: PostgreSQL BASIC is feature-frozen and
+released as v0.1.0, and Kafka BASIC closed in Phase 6.5.
 
 A checked box means the item exists and validates. A checked box in the documentation or
 bootstrap sections does **not** mean any architecture is implemented. Nothing may be assumed
@@ -2547,7 +2551,7 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 | **6.2** | Shared SCRAM core extraction + Kafka SCRAM-SHA-256 | **Complete.** ADR 0055 rejected Model A; ADR 0056 is the contract it was built to |
 | ~~6.3~~ | ~~Kafka protocol diagnosis ownership~~ | **Delivered early as Phase 6.1c-P2.** ADR 0054 required the owners before composition made their producers reachable, so this moved ahead of 6.1c rather than staying here. The number is retired, not pending |
 | **6.4** | Kafka renderer hierarchy + Kafka CLI | `collectPaths` promotes every `tcp.connect` to a top-level path, which conflates bootstrap and advertised sweeps; the tree needs a third level. Also owns the measured-zero versus unmeasured duration contract |
-| **6.5** | Kafka BASIC closure | Includes the ADR 0054 §5 closure test |
+| **6.5** | Kafka BASIC closure | **Complete.** Includes the ADR 0054 §5 closure test, re-run mechanically against the producers |
 | **6.6** | Kafka release validation | |
 
 - [x] **6.1a** mechanism guard: UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`, zero `SecretFor`,
@@ -2569,7 +2573,12 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
       `internal/render/terminal` gained a third tree level and a per-service table, ADR 0057
       settled mechanism selection, and the inherited golden flake is fixed at the product
       layer rather than in the fixture. See "Phase 6.4" below
-- [ ] **6.5** Kafka BASIC closure gate, including the per-service ownership closure test
+- [x] **6.5** Kafka BASIC closure gate, including the per-service ownership closure test —
+      **COMPLETE**. Audit only: no product surface added. 44 mutations, zero survivors after
+      three test files closed five real guard gaps — the renderer's three unasserted
+      `not measured` branches, unread finding prose, and unguarded README capability claims.
+      SCRAM production files byte-identical, `schemaVersion` 1, 40 finding codes. See
+      "Phase 6.5" below
 - [ ] **6.6** Kafka release validation against the real cluster
 
 ### Phase 6.1a — Kafka authentication mechanism guard (complete)
@@ -3129,6 +3138,116 @@ unaffected.
 step that was never timed from one that measured zero; both encode as `"0s"`. The terminal
 renderer can, because the distinction lives in the domain. Changing the JSON means a schema
 version.
+
+### Phase 6.5 — Kafka BASIC product closure: COMPLETE
+
+**KAFKA BASIC COMPLETE — FEATURE FREEZE AUTHORIZED.** An audit phase. It added no product
+surface, no finding code, no failure class, no schema field, no dependency, no flag and no
+production behaviour. Three test files and two documentation edits; `schemaVersion` stays 1,
+the finding-code count stays 40, and all 23 SCRAM production files are byte-identical to their
+pre-audit checksums.
+
+#### What Kafka BASIC is
+
+*What svcdoctor learns while attempting to behave as the Kafka client the operator asked it to
+be, against one bootstrap endpoint, plus the transport reachability of the endpoints that
+cluster advertised.*
+
+| | |
+|---|---|
+| Target | one hostname that resolves, one port, whole-run and per-step budgets |
+| Transport | DNS, TCP, and out-of-band TLS with a CA file, a server-name override or an explicit insecure opt-in |
+| Protocol | ApiVersions, SaslHandshake, SaslAuthenticate, Metadata v1 with an empty topic list |
+| Authentication | `PLAIN` and `SCRAM-SHA-256`, mechanism named explicitly by the operator, credential from a file or stdin, or no credential at all |
+| Topology | DNS, TCP and TLS for every advertised broker endpoint — **credential-free, and nothing else** |
+| Output | terminal and JSON from one report, shareable redaction, four independent Result axes, the exit-code contract |
+
+#### What Kafka BASIC does not claim
+
+Not cluster, broker, controller or quorum health. Not partition, ISR or replication state. Not
+topic availability. Not producer, consumer or consumer-group health, and no lag. Not ACL
+completeness. Not end-to-end produce or consume. No performance, latency or throughput
+interpretation — stage duration is measurement only, and no latency finding exists or is
+authorized.
+
+`Kafka metadata obtained` means an authenticated, authorized Metadata v1 call succeeded
+**against the one broker that answered**, and nothing more. `N of M advertised broker endpoints
+reached` counts transport reachability from this vantage and ranks nothing.
+
+#### What the audit found
+
+The production code was correct on every invariant tested. **Every defect found was a missing
+guard, not a missing behaviour**, which is the outcome a closure phase should have and is worth
+recording as such.
+
+1. **Three of the renderer's four `not measured` branches were unguarded.**
+   `internal/render/terminal/topology.go`'s `classify` is a deliberate second implementation of
+   ADR 0051's predicate — depguard denies a renderer the application, so they cannot share one —
+   and only the *unmeasured connection* branch was asserted anywhere. An advertisement whose
+   sweep never began, whose lookup was cut short, or whose resolved name nothing was attempted
+   against could all have been counted as **unreached** with no test failing. All three are
+   production-reachable: `MeasureAdvertised` breaks out of its loop the moment the context is
+   done. The application-side twin was fully covered by `TestADR0051AcceptanceMatrix`
+   throughout, so the two halves were guarded unequally rather than either being wrong.
+
+2. **No test read the prose of any finding.** Rewriting `summaryCredentialsRejected` to *"The
+   password configured for this Kafka endpoint is wrong"* passed the whole suite, goldens
+   included — they simply re-rendered the new sentence. That is the exact overclaim the code's
+   own documentation forbids, because Kafka returns one error code for a wrong secret, an
+   unknown principal, a disabled account and a failing backend alike.
+   `TestPeerVerificationIsNeverRenderedAsARejectedCredential` held the neighbouring direction
+   at the output boundary and nothing held the source of the words.
+
+3. **A prose guard that bans vocabulary is wrong, and failing on truthful text proved it.**
+   The first version flagged `KAFKA_METADATA_NOT_COMPLETED`'s *"says nothing about topics,
+   partitions, the controller, or whether the cluster is healthy"* — a sentence whose entire
+   purpose is to refuse the claims it names. The rule had to become *per sentence, and a
+   sentence that disclaims may name what it refuses*, with the disclaimer list itself pinned to
+   phrases production prose actually uses.
+
+4. **The README's capability claims were unguarded, and a line-level check was not enough.**
+   A planted *"supported today, including Confluent Cloud, AWS MSK and Redpanda"* survived its
+   first guard because the same README line ends *"No APM ... is required"*, and that
+   neighbouring `No` read as a denial. Sentence granularity fixed it. The IP-literal boundary
+   and the managed-compatibility backlog pointer are now both held by test, in the README and
+   in both services' `--help`.
+
+#### Mutation matrix
+
+44 mutations applied to production source and restored exactly. **Zero survived**, after the
+three test files above closed the five that did on the first pass. Every one of the thirty the
+phase brief named was exercised, several split into finer variants where one mutation would
+have proven less than it appeared to — the four `not measured` branches separately, the
+renderer half and the application half separately, and a claim's summary, detail and
+recommendation separately.
+
+#### What this phase deliberately did not do
+
+No IP-literal support, no managed or Redpanda compatibility, no `SCRAM-SHA-512`,
+`OAUTHBEARER`, `GSSAPI`, `AWS_MSK_IAM` or mTLS, no generic SASL framework, no TLS trust
+redesign, no certificate auto-discovery, no mechanism retry or fallback, no monitoring, no
+performance diagnostics, and no change to the SCRAM implementation. The SCRAM server-final
+strictness question was not touched; it remains the separate decision recorded below.
+
+#### Still open after closure
+
+These are recorded elsewhere in this document and are **not** closed by Phase 6.5:
+
+- [ ] IP literal target semantics — reproduction and the full decision list are recorded below.
+      The public contract is that `--host` expects a name that resolves, and that sentence is
+      now held by `TestTheREADMENeverClaimsIPLiteralSupport` and its `--help` sibling
+- [ ] TLS Trust & Identity Policy Review — system roots versus a supplied CA, trust
+      replacement versus augmentation, internal and enterprise PKI, `ServerName` override, IP
+      SAN verification, insecure mode, discovered-broker identity, mTLS. **No trust widening
+      was decided or implied here**
+- [ ] Managed-service protocol compatibility — Apache Kafka self-hosted is the only Kafka
+      implementation svcdoctor has ever run against. Redpanda self-hosted, Redpanda Cloud,
+      Confluent Cloud, AWS MSK SCRAM, AWS MSK IAM and Azure Event Hubs' Kafka API are all
+      **unproven**, as are RDS, Aurora, Cloud SQL and Azure Database for PostgreSQL
+- [ ] Redpanda compatibility specifically, as the most valuable single addition: it is the
+      only item that tests the Kafka protocol against a non-Apache implementation
+- [ ] SCRAM server-final strictness hardening — the four-row table below is pinned at
+      first-wins behaviour and row three is the one worth revisiting
 
 ## Standing design items opened by Phase 6.2 — NOT STARTED
 

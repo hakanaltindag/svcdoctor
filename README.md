@@ -587,12 +587,12 @@ cross-package and environment-dependent tests.
 
 ## Roadmap
 
-PostgreSQL-only v0.1.0 is tagged. Kafka BASIC is implemented and exposed on `main`, pending
-its own closure and release validation.
+PostgreSQL-only v0.1.0 is tagged. Kafka BASIC is implemented, exposed and closed on `main`,
+pending release validation.
 
 Next, in no committed order:
 
-- Kafka BASIC closure and release validation
+- Kafka BASIC release validation
 - literal IPv4/IPv6 target semantics, for both services
 - a TLS trust and identity policy review — trust replacement versus augmentation, IP SAN
   verification, client certificates
