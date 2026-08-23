@@ -787,6 +787,40 @@ belongs to the handshake step. §12 states the general rule: an unsupported capa
 gap in svcdoctor, not a defect in the target. The node carries no blocker edge, because
 nothing in the graph obstructed the step.
 
+### 5.7b Generic requested-target TLS belongs to the transport that caused it
+
+**Decided in ADR 0053, implemented in Phase 6.1b.**
+
+A `tls.handshake` that is a **direct child** of a `tcp.connect` in a requested-target sweep is
+generic transport evidence, and `internal/diagnosis/transport` owns it:
+
+```text
+target.requested -> dns.lookup -> tcp.connect -> tls.handshake     generic (ADR 0053)
+tcp.connect -> postgres.ssl_request -> tls.handshake               PostgreSQL (ADR 0044)
+kafka.broker_advertised -> dns.lookup -> tcp.connect -> tls.handshake   Kafka (ADR 0034)
+```
+
+The three are **structurally disjoint** and need no suppression, precedence or service-name
+check. PostgreSQL's handshake is a grandchild of its connection; a Kafka advertised sweep's
+lookup hangs off an advertisement rather than an anchor — even though it sits transitively
+below a bootstrap target and is otherwise the identical shape, which is why the walk takes
+direct children only and never recurses.
+
+**Endpoint-scoped, and deliberately unlike DNS and TCP beside it.** Those aggregate at the
+anchor and withhold on partial success, because a reachability claim is about the address set
+and one working path falsifies the negative. A certificate is presented by *one* endpoint, so
+a sibling succeeding cannot falsify what this one presented — and a client selecting the
+failing address gets the failure. Each failing endpoint therefore carries its own finding.
+This matches ADR 0044, which keeps scope from becoming a property of whether a service
+negotiates TLS in band.
+
+**Five codes over six produced classes**, none of them mirroring a `FailureClass` spelling:
+generic codes carry no service prefix, so a code repeating its class would make
+`failureClass` and `code` indistinguishable to a consumer matching on strings. The three
+declared classes with no producer gain no code, and an unrecognized class produces nothing —
+a default branch folding the unknown into the floor would grant a new producer a claim nobody
+reviewed.
+
 ### 5.8 Kafka BASIC: decided in Phase 6.0, not implemented
 
 Five records fix Kafka's prerequisites before any composition root exists. Each is

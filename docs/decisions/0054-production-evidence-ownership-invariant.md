@@ -4,6 +4,14 @@
 
 **Accepted as policy. Enforcement is deferred and partial.**
 
+**First applied in Phase 6.1b**, which implemented ADR 0053's generic
+requested-target TLS owner *before* Phase 6.1c introduces the producer that makes
+those outcomes reachable from a production run. Ordering, not cleanup: after
+6.1b the owner exists and the producer is still not product-reachable; after
+6.1c they become reachable together. That is §4 in practice.
+
+The closure test of §5 still does not exist, so enforcement remains by review.
+
 The invariant below binds every service phase from now on. No mechanical test
 enforces it yet; §5 specifies the closure test each service must add, and until
 that exists the invariant is enforced by review. This record is deliberately

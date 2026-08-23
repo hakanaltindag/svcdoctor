@@ -2,7 +2,24 @@
 
 ## Status
 
-**Accepted.** Not implemented, and no code changes with this record.
+**Accepted, and implemented in Phase 6.1b.**
+
+`internal/diagnosis/transport` holds the rule and the five codes, wired by a
+caller as `diagnosis.NewEngine(transport.DNS, transport.TCP, transport.TLS)`.
+Repository finding codes went 24 → 29; no `FailureClass`, `schemaVersion`,
+`Reveal` count or dependency changed.
+
+**One implementation detail differs from section 8, and the predicate is
+unchanged.** That section states ownership as a walk *upward* from the handshake.
+`internal/diagnosis/transport` bans `Graph.Parents` outright — asking what a node
+hangs from is the provenance question `Origin` was deferred to avoid — so the
+rule descends from the anchor like the two beside it, and the sweep collects a
+handshake only as a **direct child** of a connection it already reached from an
+anchor. The relation checked is identical; the direction of travel is the
+package's, not this record's.
+
+It landed **before** Phase 6.1c introduces the Kafka bootstrap producer, which is
+ADR 0054's ordering applied for the first time.
 
 It closes the gap ADR 0043 §14 deferred, whose reopen condition it satisfies:
 *"Reopen when a production run produces a `tls.handshake` node whose direct

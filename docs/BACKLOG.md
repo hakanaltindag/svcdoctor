@@ -2552,7 +2552,7 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 
 - [x] **6.1a** mechanism guard: UNKNOWN + `AUTH_MECHANISM_UNSUPPORTED`, zero `SecretFor`,
       zero `Reveal`, zero bytes written, proven by test — **COMPLETE**
-- [ ] **6.1b** generic requested-target TLS rule and its five codes (24 → 29)
+- [x] **6.1b** generic requested-target TLS rule and its five codes (24 → 29) — **COMPLETE**
 - [ ] **6.1c** `DiagnoseKafka`, requested-target anchor, ADR 0051 completeness predicate
 - [ ] **6.2** SCRAM extraction security review, then extraction and Kafka SCRAM-SHA-256
 - [ ] **6.3** Kafka protocol diagnosis ownership
@@ -2598,10 +2598,38 @@ policy for the same reason (`docs/ARCHITECTURE.md` §5.7).
   6.3, before Kafka becomes product-reachable, and the Phase 6.5 closure gate must verify it
   mechanically.**
 
-### Phase 6.1b — generic requested-target TLS diagnosis: NEXT
+### Phase 6.1b — generic requested-target TLS diagnosis (complete)
 
-Implements ADR 0053. It must land before 6.1c, so the owner exists before composition makes
-the producer reachable.
+Implements ADR 0053, and is **ADR 0054's ordering applied for the first time**: the owner
+landed before Phase 6.1c introduces the producer. After 6.1b the owner exists and the
+producer is still not product-reachable; after 6.1c they become reachable together.
+
+- [x] `internal/diagnosis/transport.TLS`, beside `DNS` and `TCP`
+- [x] Five codes, 24 → 29: `TLS_ENDPOINT_DOES_NOT_SPEAK_TLS`, `TLS_IDENTITY_MISMATCH`,
+      `TLS_CHAIN_NOT_TRUSTED`, `TLS_CERTIFICATE_NOT_VALID_NOW`, `TLS_HANDSHAKE_NOT_COMPLETED`
+- [x] Closed mapping over the **six** classes `internal/probe/tls` produces; the three
+      declared-but-unproduced classes gain nothing, and an unrecognized class produces nothing
+- [x] Endpoint-scoped, **no partial-success withholding** — a passing sibling address does not
+      suppress a failing endpoint's finding
+- [x] UNKNOWN (`EXEC_LOCAL_TIMEOUT`, `EXEC_CANCELLED`) and SKIPPED produce no claim
+- [x] Real-socket coverage in `test/security` for identity mismatch and unknown authority,
+      plus the redaction projection
+
+**Two implementation notes worth carrying forward.**
+
+The rule **descends from the anchor** rather than walking up from the handshake, which is how
+ADR 0053 §8 states the predicate. `internal/diagnosis/transport` bans `Graph.Parents` — asking
+what a node hangs from is the provenance question `Origin` was deferred to avoid — so
+`collectSweep` collects a handshake only as a **direct child** of a connection it already
+reached from an anchor. The relation checked is identical.
+
+`collectSweep` **ignores** a connect child it does not recognize rather than rejecting it.
+Rejecting would make every PostgreSQL sweep ill-formed — its connect carries a
+`postgres.ssl_request` child — and silence the DNS and TCP findings that already work. That
+is also what keeps PostgreSQL's in-band handshake outside this rule: it is a grandchild of the
+connection, never a direct child.
+
+### Phase 6.1c — `DiagnoseKafka` application composition: NEXT
 
 ### Phase 6.2 — BLOCKED until 6.2a is Accepted
 

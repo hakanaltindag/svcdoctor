@@ -426,11 +426,12 @@ See ADR 0040 for the trigger, claim, must-not-claim list, evidence set and recom
 boundary of each, and `docs/validation/POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` for the evidence.
 
 
-## 7. The three generic transport findings
+## 7. The eight generic transport findings
 
-Fixed by **ADR 0043** and **implemented in Phase 4.9b** as `internal/diagnosis/transport` —
-two rules, `DNS` and `TCP`, wired into the run beside the four PostgreSQL rules. They are the
-first findings that speak about the operator's target rather than about a service.
+Three fixed by **ADR 0043** and implemented in Phase 4.9b, five by **ADR 0053** and
+implemented in Phase 6.1b — `internal/diagnosis/transport`, three rules, `DNS`, `TCP` and
+`TLS`. They are the findings that speak about the operator's target rather than about a
+service.
 
 They are possible because ADR 0042 records the requested target as an L0 evidence node and
 parents the sweep it caused to it. A rule enumerates those anchors and descends by typed step
@@ -465,6 +466,53 @@ nothing listening and a filtered IPv6 address produce both in one run, and every
 would make the public code depend on address family. The distribution stays in `FailureClass`
 on the cited evidence, which is the vocabulary that exists to carry it; a consumer that needs
 refused-versus-timeout reads there, never the finding code.
+
+### 7.1 The five generic TLS findings
+
+**ADR 0053, implemented in Phase 6.1b.** They own a `tls.handshake` that is a **direct child**
+of a `tcp.connect` in a requested-target sweep, and nothing else.
+
+| Code | Triggering `FailureClass` | Severity | `vantageDependent` |
+|---|---|---|---|
+| `TLS_ENDPOINT_DOES_NOT_SPEAK_TLS` | `TLS_PEER_NOT_TLS` | ERROR | true |
+| `TLS_IDENTITY_MISMATCH` | `TLS_HOSTNAME_MISMATCH` | ERROR | true |
+| `TLS_CHAIN_NOT_TRUSTED` | `TLS_UNKNOWN_AUTHORITY` | ERROR | true |
+| `TLS_CERTIFICATE_NOT_VALID_NOW` | `TLS_CERTIFICATE_EXPIRED`, `TLS_CERTIFICATE_NOT_YET_VALID` | ERROR | true |
+| `TLS_HANDSHAKE_NOT_COMPLETED` | `TLS_HANDSHAKE_FAILURE` (floor) | ERROR | true |
+
+All five are `CONFIRMED` / `HIGH`. **The mapping is closed**: the three declared classes with
+no producer — `TLS_VERSION_MISMATCH`, `TLS_CLIENT_CERTIFICATE_REQUIRED`,
+`TLS_CLIENT_CERTIFICATE_REJECTED` — gain no code, and a class added later produces nothing
+until somebody decides what it may claim.
+
+**They take the endpoint's subject, not the anchor's**, which is the one place they differ
+from the three above. A reachability claim is about the address set and one PASS falsifies it;
+a certificate is presented by one endpoint, and a sibling succeeding cannot falsify what this
+one presented. So **there is no partial-success withholding**, and two failing addresses
+produce two findings.
+
+**No code mirrors its `FailureClass` spelling.** Generic codes carry no service prefix, so a
+report holds `failureClass` and `code` in the same shape — and `TLS_PEER_NOT_TLS` as a code
+would have been indistinguishable from the class of the same name. That is why the peer code
+and the floor were renamed during review.
+
+**What they refuse to say:**
+
+- `TLS_ENDPOINT_DOES_NOT_SPEAK_TLS` says this endpoint answered with something that was not
+  TLS, **on this attempt, from this vantage**. It never says the endpoint cannot speak TLS,
+  that the port is wrong, or that a proxy or firewall intervened.
+- `TLS_CHAIN_NOT_TRUSTED` is a claim about a *pairing*, and names the local half first: the
+  trust context is this run's, and a missing or wrong CA on this side produces exactly this
+  observation. It never says the certificate is objectively invalid.
+- `TLS_CERTIFICATE_NOT_VALID_NOW` compares a window against **this host's clock** and blames
+  neither. A certificate outside its window and a host with a wrong clock are
+  indistinguishable from here.
+- `TLS_HANDSHAKE_NOT_COMPLETED` is certain that no handshake completed and says nothing about
+  why — not the version, the cipher suites, a client certificate, or anything on the path.
+
+**UNKNOWN and SKIPPED produce no TLS finding.** A cancelled or budget-exhausted handshake
+learned nothing about the endpoint, and a blocked step is never a cause; those reach
+`Result.Incomplete()` through the application boundary instead.
 
 **Withheld, and the evidence stays in the report either way:**
 
