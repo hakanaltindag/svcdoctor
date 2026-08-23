@@ -37,6 +37,10 @@ type builder struct {
 	// is what the header line reads to announce itself.
 	shareable bool
 
+	// requested overrides the report's target. Empty keeps the per-service
+	// default, which is what every fixture predating IP literals expects.
+	requested string
+
 	// inputs and edges are held until report(), so a fixture can describe a
 	// graph in whatever order reads best and the builder still adds every node
 	// before any parent edge that names it.
@@ -193,6 +197,9 @@ func (b *builder) report(findings ...domain.Finding) domain.Report {
 	requested := "db.internal:5432"
 	if b.service == "kafka" {
 		requested = kafkaTarget
+	}
+	if b.requested != "" {
+		requested = b.requested
 	}
 	target, err := domain.NewTarget(requested, requested)
 	if err != nil {

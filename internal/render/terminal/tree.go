@@ -31,9 +31,16 @@ type advertisement struct {
 	// said something usable.
 	node domain.Evidence
 
-	// lookup is the resolution of the advertised name, when a sweep ran.
-	lookup   domain.Evidence
-	resolved bool
+	// lookup is the resolution of the advertised name, and hasLookup says
+	// whether there is one to show.
+	//
+	// **hasLookup false does not mean resolution failed.** A failed resolution is
+	// a present node in a FAIL state. False means no resolution happened, which
+	// is either an advertisement that named an address — nothing to resolve, so
+	// no L1 node (ADR 0059) — or a sweep the budget stopped before it began. The
+	// two are told apart by whether any path exists beneath the advertisement.
+	lookup    domain.Evidence
+	hasLookup bool
 
 	// paths are the concrete addresses the sweep measured.
 	paths []path
@@ -115,9 +122,24 @@ func collectAdvertisements(g domain.Graph, view serviceView) []advertisement {
 		// Exactly one lookup, never the first of several. The sweep mints one
 		// per advertisement; two is a shape this renderer does not recognize,
 		// and picking one would present an arbitrary half of the evidence.
-		if lookups := childrenWithStep(g, node.ID(), vocabulary.StepDNSLookup); len(lookups) == 1 {
-			a.lookup, a.resolved = lookups[0], true
+		lookups := childrenWithStep(g, node.ID(), vocabulary.StepDNSLookup)
+		switch {
+		case len(lookups) == 1:
+			a.lookup, a.hasLookup = lookups[0], true
 			for _, connection := range childrenWithStep(g, a.lookup.ID(), vocabulary.StepTCPConnect) {
+				a.paths = append(a.paths, readPath(g, connection, advertisedView(view), nil))
+			}
+		case len(lookups) == 0:
+			// An advertisement that named an address. There was nothing to
+			// resolve, so the sweep has no L1 node and its connections hang
+			// straight off the advertisement (ADR 0059).
+			//
+			// `hasLookup` stays false, which is exactly right: it means "a
+			// resolution of the advertised name is available to show", and here
+			// there is none because none happened. The paths still render, so a
+			// literal advertisement appears in the topology beside a named one
+			// with the same transport detail and no DNS row invented for it.
+			for _, connection := range childrenWithStep(g, node.ID(), vocabulary.StepTCPConnect) {
 				a.paths = append(a.paths, readPath(g, connection, advertisedView(view), nil))
 			}
 		}

@@ -198,7 +198,7 @@ func writeAdvertisements(out *bytes.Buffer, advertisements []advertisement, view
 			note:     failureNote(a.node),
 			duration: formatElapsed(a.node.Elapsed()),
 		})
-		if a.resolved {
+		if a.hasLookup {
 			writeStageRow(tw, "    ", stageLine{
 				state:    stateGlyph(a.lookup.State()),
 				label:    stepLabel(a.lookup.Step()),

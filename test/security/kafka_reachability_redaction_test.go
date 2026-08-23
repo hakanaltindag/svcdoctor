@@ -372,10 +372,15 @@ func TestReachabilityStructureSurvivesRedaction(t *testing.T) {
 		t.Fatalf("advertisements = %d, want 4", len(advertisements))
 	}
 
+	// The transport root of a sweep is its DNS node when the advertisement named
+	// a name, and its connection node when it named an address: node 3 advertises
+	// 10.71.72.73, nothing was resolved for it, and no L1 node exists (ADR 0059).
+	// Both roots carry the derivation edge, so the relationship survives for
+	// either kind of advertisement.
 	measured := map[int64]bool{}
 	layers := map[domain.Layer]int{}
 	for _, evidence := range graph.Nodes() {
-		if evidence.Layer() != domain.LayerDNS {
+		if evidence.Layer() != domain.LayerDNS && evidence.Layer() != domain.LayerTCP {
 			continue
 		}
 		for _, parent := range graph.Parents(evidence.ID()) {
@@ -436,9 +441,12 @@ func TestBootstrapAndAdvertisedMeasurementsBothSurvive(t *testing.T) {
 		t.Errorf("dns nodes = %d after redaction, want the %d the local report had",
 			after, before)
 	}
-	// One bootstrap lookup plus one per advertised broker.
-	if before != 5 {
-		t.Fatalf("dns nodes = %d, want 5: the fixture did not measure what this test needs",
+	// One bootstrap lookup plus one per advertised broker that named a *name*.
+	// Node 3 advertises 10.71.72.73 and resolves nothing, so it contributes no
+	// L1 node at all (ADR 0059) — which is the point: the count is 4 rather than
+	// 5 because no lookup was invented for an address that was already in hand.
+	if before != 4 {
+		t.Fatalf("dns nodes = %d, want 4: the fixture did not measure what this test needs",
 			before)
 	}
 

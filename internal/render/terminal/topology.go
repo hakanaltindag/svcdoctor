@@ -110,20 +110,28 @@ func classify(a advertisement) advertisementVerdict {
 	if a.node.State() != domain.StatePass {
 		return advertisementNotReached
 	}
-	if !a.resolved {
-		return advertisementNotMeasured
-	}
-	if unknownLocal(a.lookup) {
-		return advertisementNotMeasured
-	}
-	if a.lookup.State() == domain.StateFail {
-		// Resolution produced nothing to connect to, which is a complete
-		// negative on its own: there is no address a client could have selected
-		// instead.
-		return advertisementNotReached
+	if a.hasLookup {
+		if unknownLocal(a.lookup) {
+			return advertisementNotMeasured
+		}
+		if a.lookup.State() == domain.StateFail {
+			// Resolution produced nothing to connect to, which is a complete
+			// negative on its own: there is no address a client could have
+			// selected instead.
+			return advertisementNotReached
+		}
 	}
 	if len(a.paths) == 0 {
-		// The name resolved and nothing was attempted against it.
+		// Either the name resolved and nothing was attempted against it, or
+		// there was neither a lookup nor a connection — a sweep the budget
+		// stopped before it began. Both are shapes nobody measured.
+		//
+		// **An advertisement that named an address is not one of them.** It has
+		// no lookup and never will (ADR 0059), and it reaches here with its
+		// connection nodes intact, so it is classified by the same existential
+		// and universal rules below as a name that resolved. Reading "no lookup"
+		// as "not measured" would have counted every reachable literal broker as
+		// unmeasured and made the topology line understate a working cluster.
 		return advertisementNotMeasured
 	}
 
