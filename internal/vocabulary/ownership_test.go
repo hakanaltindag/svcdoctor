@@ -42,6 +42,16 @@ func TestTheValuesAreTheReportContract(t *testing.T) {
 			t.Errorf("%q is not a valid step name", c.got)
 		}
 	}
+
+	// The one attribute key this package owns. It arrived in Phase 6.8A on the
+	// trigger the doc comment names — a reader outside the producing package —
+	// and it is a report contract in exactly the same way a step name is.
+	if string(AttrTLSVerified) != "tls.verified" {
+		t.Errorf("AttrTLSVerified = %q, want %q", AttrTLSVerified, "tls.verified")
+	}
+	if !AttrTLSVerified.Valid() {
+		t.Errorf("%q is not a valid attribute key", AttrTLSVerified)
+	}
 }
 
 // TestEachCanonicalStringHasExactlyOneOwner is the reason the package exists.
@@ -59,6 +69,7 @@ func TestEachCanonicalStringHasExactlyOneOwner(t *testing.T) {
 		"dns.lookup":       true,
 		"tcp.connect":      true,
 		"tls.handshake":    true,
+		"tls.verified":     true,
 	}
 
 	root := repoRoot(t)
@@ -109,6 +120,7 @@ func TestTheProbesAliasRatherThanRedeclare(t *testing.T) {
 		{filepath.Join("internal", "probe", "dns", "lookup.go"), "StepLookup", "StepDNSLookup"},
 		{filepath.Join("internal", "probe", "tcp", "connect.go"), "StepConnect", "StepTCPConnect"},
 		{filepath.Join("internal", "probe", "tls", "handshake.go"), "StepHandshake", "StepTLSHandshake"},
+		{filepath.Join("internal", "probe", "tls", "handshake.go"), "AttrVerified", "AttrTLSVerified"},
 	} {
 		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, c.file), nil,
 			parser.SkipObjectResolution)

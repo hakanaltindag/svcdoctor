@@ -39,3 +39,25 @@ const (
 	// that asked for it (ADR 0042 section 7).
 	StepTLSHandshake domain.Step = "tls.handshake"
 )
+
+// AttrTLSVerified reports whether one TLS handshake established the peer's
+// identity.
+//
+// It is false when verification was disabled and false when the handshake
+// failed, so a PASS node carrying false means exactly one thing: an encrypted
+// channel to a peer nobody identified. It is always recorded, because "identity
+// was not verified" is a statement rather than an absence.
+//
+// # Why this key is here and the other transport keys are not
+//
+// The rule this package's doc comment states is that a generic transport
+// attribute key moves here when something outside the producing package
+// genuinely reads it, and not before. That trigger fired for this one and for no
+// other: internal/render/terminal has to distinguish a verified handshake from
+// an unverified one in the row it prints, and depguard denies a renderer the
+// probe import — correctly, because a renderer that could reach a probe could
+// run one.
+//
+// dns.answers, tls.cipher_suite and the rest still have exactly one reader each,
+// inside the package that produces them, and stay there.
+const AttrTLSVerified domain.AttributeKey = "tls.verified"

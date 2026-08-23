@@ -43,7 +43,12 @@ const (
 	// It is false when verification was disabled and false when the handshake
 	// failed. It is always recorded, because "identity was not verified" is a
 	// statement rather than an absence.
-	AttrVerified domain.AttributeKey = "tls.verified"
+	//
+	// It is an alias. The canonical spelling moved to internal/vocabulary in
+	// Phase 6.8A, when internal/render/terminal became a reader outside this
+	// package and depguard denied it the probe import. Every caller here is
+	// unchanged, and there is still exactly one spelling of the string.
+	AttrVerified = vocabulary.AttrTLSVerified
 
 	// AttrTrustSource says where the roots came from: system or custom. It is
 	// absent when verification was disabled, because no trust source was used.
