@@ -490,6 +490,18 @@ A deferral is a decision too, and each names the condition that should reopen it
   gate guard is not deleted on acceptance but swapped atomically for the positive guards in the
   commit that introduces the package.
 
+- **[0057](0057-kafka-cli-mechanism-selection.md) — The operator names one Kafka SASL
+  mechanism, and svcdoctor never picks one.** `--sasl-mechanism` is required and has no
+  default, because a default is a silent decision about the framing that carries the
+  operator's password. One mechanism per run, presented at most once: no auto-probe from the
+  broker's list, no fallback in either direction, no inference from the credential's shape or
+  the port. Names are taken verbatim in RFC 4422's uppercase grammar and are **never folded**,
+  because a looser matching rule at the CLI beside the exact-match guard that gates the
+  credential is how that guard fails quietly. The command deliberately accepts mechanisms
+  svcdoctor cannot perform — naming one sends no secret, and the truthful `UNKNOWN` + INFO at
+  exit 0 is the only way to ask what a broker offers. `--user` is required with a credential
+  source and refused without one, because Kafka's identity travels only inside SASL.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention
