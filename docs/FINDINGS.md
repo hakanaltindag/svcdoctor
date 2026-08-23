@@ -336,6 +336,66 @@ section 1.
 
 ---
 
+### The ten Kafka protocol findings
+
+**Implemented in Phase 6.1c-P2** as `internal/diagnosis/kafka.Protocol`, one rule over four
+steps. They exist because ADR 0054 stopped Phase 6.1c: until they landed, every Kafka protocol
+outcome — a rejected credential included — would have reached a report as `findings: []`,
+`status: OK`, exit 0 the moment a composition root existed.
+
+| Code | Anchor step | State | Severity | `vantageDependent` |
+|---|---|---|---|---|
+| `KAFKA_API_VERSIONS_VERSION_REJECTED` | `kafka.api_versions` | FAIL | ERROR | false |
+| `KAFKA_API_VERSIONS_NOT_COMPLETED` | `kafka.api_versions` | FAIL | ERROR | true |
+| `KAFKA_AUTH_MECHANISM_NOT_OFFERED` | `kafka.sasl_handshake`, `kafka.sasl_authenticate` | FAIL | ERROR | false |
+| `KAFKA_SASL_HANDSHAKE_NOT_COMPLETED` | `kafka.sasl_handshake` | FAIL | ERROR | true |
+| `KAFKA_CREDENTIALS_REJECTED` | `kafka.sasl_authenticate` | FAIL | ERROR | false |
+| `KAFKA_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR` | `kafka.sasl_authenticate` | UNKNOWN | INFO | false |
+| `KAFKA_CREDENTIAL_WITHHELD` | `kafka.sasl_authenticate` | SKIPPED | WARN | true |
+| `KAFKA_CREDENTIAL_NOT_CONFIGURED` | `kafka.sasl_authenticate` | SKIPPED | WARN | false |
+| `KAFKA_AUTHENTICATION_NOT_COMPLETED` | `kafka.sasl_authenticate` | FAIL | ERROR | true |
+| `KAFKA_METADATA_NOT_COMPLETED` | `kafka.metadata` | FAIL | ERROR | true |
+
+All ten are `CONFIRMED` with `HIGH` confidence: each restates a positively recorded outcome
+with no inferential step, so none carries a discriminator. The subject is always the **concrete
+endpoint** the exchange ran against, never the logical bootstrap target — a protocol outcome is
+a fact about the peer that produced it.
+
+**Three floors, not one.** "The exchange did not complete" is a different sentence at L4, L5
+and L6: *this may not be a Kafka broker*, *the negotiation broke down*, and *the cluster
+answered nothing about itself*. Each floor names the conclusions it is **not** drawing, and
+those denials are asserted by test rather than trusted.
+
+**Five authentication outcomes stay disjoint** — the distinction `docs/ARCHITECTURE.md` §5.7c
+fixes. Disjointness comes from the evidence `State` and `FailureClass`, never from runtime
+precedence or suppression:
+
+| Fact | State | Class | Code |
+|---|---|---|---|
+| the peer does not offer the mechanism | FAIL | `AUTH_MECHANISM_NOT_OFFERED` | `KAFKA_AUTH_MECHANISM_NOT_OFFERED` |
+| svcdoctor cannot perform the mechanism | UNKNOWN | `AUTH_MECHANISM_UNSUPPORTED` | `..._UNSUPPORTED_BY_SVCDOCTOR` |
+| a credential existed and policy withheld it | SKIPPED | `EXEC_SKIPPED_BY_POLICY` | `KAFKA_CREDENTIAL_WITHHELD` |
+| the run configured no credential | SKIPPED | `EXEC_REQUIRED_INPUT_MISSING` | `KAFKA_CREDENTIAL_NOT_CONFIGURED` |
+| the peer evaluated a credential and refused it | FAIL | `AUTH_CREDENTIALS_REJECTED` | `KAFKA_CREDENTIALS_REJECTED` |
+
+**`vantageDependent` diverges from PostgreSQL deliberately, and the divergence is the point.**
+`internal/diagnosis/postgres` sets `true` on its comparable claims because `pg_hba.conf`
+selects the authentication method by **source address**, so what the endpoint required is partly
+a fact about who asked. Kafka has no such rule: `sasl.enabled.mechanisms` is configured per
+**listener**, and one address and port is one listener. So the Kafka claims that name what a
+listener required are `false`, and only the three floors — which attribute no cause and
+therefore cannot exclude a path-keyed one — plus the channel-dependent withheld claim are
+`true`. Copying PostgreSQL's answer would have been wrong in five places.
+
+**The table is closed.** A `(step, state, failureClass)` triple absent from it produces no
+finding, including a class a later phase adds. `UNKNOWN` with `EXEC_LOCAL_TIMEOUT` or
+`EXEC_CANCELLED` is deliberately unmapped at every step: svcdoctor's own budget ended the
+measurement and nothing was learned about the endpoint, so those reach the operator through
+`Result.Incomplete()` and exit code 4. No `PASS` produces a finding — ADR 0052 makes the success
+line a renderer concern.
+
+---
+
 ### The twelve PostgreSQL findings
 
 Fixed by ADR 0040 as ADR 0034 did for Kafka, and **implemented in Phase 4.6b** as

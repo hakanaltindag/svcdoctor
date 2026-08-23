@@ -867,6 +867,54 @@ None of the three carries credential-derived attributes — not a length, not an
 an "empty password" string. Each describes a secret that was never supplied, and a length is
 a genuine disclosure.
 
+### 5.7d Kafka protocol ownership: every outcome a producer emits has a claim
+
+**Implemented in Phase 6.1c-P2** as `internal/diagnosis/kafka.Protocol`.
+
+The owner-before-producer invariant of ADR 0054 is what this section records being satisfied
+for Kafka. The matrix below is the whole production surface of the four protocol steps:
+
+| Step | State | FailureClass | Owner |
+|---|---|---|---|
+| `kafka.api_versions` | FAIL | `PROTOCOL_UNSUPPORTED_VERSION` | `KAFKA_API_VERSIONS_VERSION_REJECTED` |
+| `kafka.api_versions` | FAIL | `PROTOCOL_UNEXPECTED_RESPONSE`, `PROTOCOL_MALFORMED_RESPONSE`, `PROTOCOL_PEER_CLOSED` | `KAFKA_API_VERSIONS_NOT_COMPLETED` |
+| `kafka.sasl_handshake` | FAIL | `AUTH_MECHANISM_NOT_OFFERED` | `KAFKA_AUTH_MECHANISM_NOT_OFFERED` |
+| `kafka.sasl_handshake` | FAIL | the four protocol classes | `KAFKA_SASL_HANDSHAKE_NOT_COMPLETED` |
+| `kafka.sasl_authenticate` | FAIL | `AUTH_CREDENTIALS_REJECTED` | `KAFKA_CREDENTIALS_REJECTED` |
+| `kafka.sasl_authenticate` | FAIL | `AUTH_MECHANISM_NOT_OFFERED` | `KAFKA_AUTH_MECHANISM_NOT_OFFERED` |
+| `kafka.sasl_authenticate` | FAIL | the four protocol classes | `KAFKA_AUTHENTICATION_NOT_COMPLETED` |
+| `kafka.sasl_authenticate` | UNKNOWN | `AUTH_MECHANISM_UNSUPPORTED` | `KAFKA_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR` |
+| `kafka.sasl_authenticate` | SKIPPED | `EXEC_SKIPPED_BY_POLICY` | `KAFKA_CREDENTIAL_WITHHELD` |
+| `kafka.sasl_authenticate` | SKIPPED | `EXEC_REQUIRED_INPUT_MISSING` | `KAFKA_CREDENTIAL_NOT_CONFIGURED` |
+| `kafka.metadata` | FAIL | `PROTOCOL_UNEXPECTED_RESPONSE`, `PROTOCOL_MALFORMED_RESPONSE`, `PROTOCOL_PEER_CLOSED` | `KAFKA_METADATA_NOT_COMPLETED` |
+| any of the four | UNKNOWN | `EXEC_LOCAL_TIMEOUT`, `EXEC_CANCELLED` | `Result.Incomplete()`, deliberately not a finding |
+| any of the four | PASS | — | the renderer's outcome line (ADR 0052), deliberately not a finding |
+
+Two rows were found by re-deriving the surface from source rather than trusting the earlier
+audit, and both matter. `AUTH_MECHANISM_NOT_OFFERED` reaches `kafka.sasl_authenticate` because
+`authenticationFailure` falls through to `handshakeFailure`; it keeps the specific code rather
+than falling into the floor. And `PROTOCOL_UNSUPPORTED_VERSION` is *unreachable* at
+`kafka.metadata`, because that step consults no broker error code — so no mapping exists for
+it, since a dead mapping authorizes a claim for evidence that cannot occur.
+
+**The table is closed and has no default branch.** A triple absent from it produces nothing,
+including a `FailureClass` a later phase adds. Folding the unrecognized into a floor would
+grant a new producer the floor's claim — "svcdoctor could not attribute why" — which may be
+false for a class that is perfectly attributable.
+
+**No anchor walk, and that is not an oversight.** The generic transport rules descend from
+`target.requested` because a `tls.handshake` node is service-neutral and only provenance
+distinguishes a bootstrap sweep from an advertised one. A `kafka.sasl_authenticate` node has no
+such ambiguity: the step name *is* the anchor, which is the case §5.5 describes. So the rule
+walks no edges, needs no `Origin` and parses no identifier — with one exception, the policy
+refusal, which reads its `blockedBy` edge because its claim is *why nothing was attempted* and
+that answer lives on another node.
+
+**One node, at most one finding.** Disjointness is structural: the table is keyed on the node's
+own step, state and class, so nothing needs precedence, suppression or a second pass. The
+advertised-broker rules cannot compete, because they anchor at `kafka.broker_advertised` and
+require a *passing* `kafka.metadata`.
+
 ### 5.8 Kafka BASIC: decided in Phase 6.0, not implemented
 
 Five records fix Kafka's prerequisites before any composition root exists. Each is

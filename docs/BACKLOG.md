@@ -2629,7 +2629,7 @@ Rejecting would make every PostgreSQL sweep ill-formed — its connect carries a
 is also what keeps PostgreSQL's in-band handshake outside this rule: it is a grandchild of the
 connection, never a direct child.
 
-### Phase 6.1c — `DiagnoseKafka` application composition: STOPPED by the ADR 0054 gate
+### Phase 6.1c — first attempt: STOPPED by the ADR 0054 gate (history)
 
 Composition was attempted and **declined**. `internal/diagnosis/kafka` owns only the two
 advertised-broker findings, and both anchor on `kafka.broker_advertised`. Nothing owns
@@ -2683,26 +2683,56 @@ that: zero production importers of `internal/adapter/kafka`, and no `DiagnoseKaf
 point. It is the ADR 0054 gate in executable form, and it must fail on the first composition
 commit.
 
-### Phase 6.1c-P2 — Kafka protocol diagnosis ownership: NEXT, and required before composition
+### Phase 6.1c-P2 — Kafka protocol diagnosis ownership: COMPLETE
 
-Formerly Phase 6.3. It must own every production-reachable Kafka outcome before `DiagnoseKafka`
-exists:
+Formerly Phase 6.3, moved ahead of composition because ADR 0054 made the original order unsafe.
 
-- `kafka.api_versions` FAIL — `PROTOCOL_UNEXPECTED_RESPONSE`, `PROTOCOL_PEER_CLOSED`,
-  `PROTOCOL_MALFORMED_RESPONSE`, `PROTOCOL_UNSUPPORTED_VERSION`
-- `kafka.sasl_handshake` FAIL — including `AUTH_MECHANISM_NOT_OFFERED`
-- `kafka.sasl_authenticate` — all four outcomes in the table above
-- `kafka.metadata` FAIL
+`internal/diagnosis/kafka.Protocol` is one rule over four steps, keyed on a **closed**
+`(step, state, failureClass)` table with no default branch. Ten codes; see `docs/FINDINGS.md`
+for the full table and the reasoning behind each `vantageDependent` value.
 
-A candidate for the missing-input owner is recorded so the decision is not re-derived:
-`KAFKA_CREDENTIAL_NOT_CONFIGURED`, CONFIRMED/WARN/HIGH, mirroring
-`POSTGRES_CREDENTIAL_NOT_CONFIGURED`. Its `vantageDependent` value is **open and must be
-reasoned about rather than copied**: PostgreSQL's `true` reflects `pg_hba.conf` varying by
-client address, while Kafka's authentication requirement varies by *listener*, which is a
-property of the endpoint dialled rather than of the vantage it was dialled from.
+Every outcome the four producers can emit now has an owner, and the mapping is checked against
+a list derived by reading `internal/adapter/kafka` — so a producer that gains an outcome fails
+the build until the table gains an owner. Two facts found by re-deriving rather than trusting
+the earlier audit:
 
-`Result.Incomplete()` must not widen to cover it. A missing credential is a complete execution
-with an explicit run-side limitation, not a cancellation or a local timeout.
+- `AUTH_MECHANISM_NOT_OFFERED` is reachable at `kafka.sasl_authenticate` as well as at
+  `kafka.sasl_handshake`, because `authenticationFailure` falls through to `handshakeFailure`.
+  Both map to the same code rather than the later one falling into the authentication floor.
+- `PROTOCOL_UNSUPPORTED_VERSION` is **not** reachable at `kafka.metadata`: its `classify`
+  consults no broker error code, because Metadata carries a top-level one only from v13 and
+  svcdoctor sends v1. Writing that mapping would have authorized a claim for evidence that
+  cannot occur.
+
+The question P1 left open is settled: `KAFKA_CREDENTIAL_NOT_CONFIGURED` is
+CONFIRMED/WARN/HIGH with **`vantageDependent: false`**. PostgreSQL's `true` rests on
+`pg_hba.conf` selecting the method by source address, so its compound claim inherits the weaker
+half. Neither Kafka half is source-keyed: a listener's SASL requirement is fixed per listener,
+and that the run held nothing is svcdoctor's own configuration.
+
+Three shared constants moved to `internal/service/kafka` on the trigger that package's doc
+comment always named — a second reader outside the producing package. `StepAPIVersions`,
+`StepSASLHandshake` and `StepSASLAuthenticate`, plus `AttrSASLMechanism`,
+`AttrRequestAPIVersion` and `AttrErrorCode`. The strings are unchanged and the adapter
+re-exports them, so no identifier and no serialized report moved.
+
+`Result.Incomplete()` is unchanged, `SummaryStatus` is unchanged, and no schema field, no
+`FailureClass`, no dependency and no `Origin` was added.
+
+### Phase 6.1c — `DiagnoseKafka` application composition: NEXT, and no longer blocked by ownership
+
+The ADR 0054 gate that stopped it is closed. Every generic and Kafka-specific owner it needs
+now exists: generic DNS and TCP (Phase 4.9b), generic requested-target TLS (6.1b), the Kafka
+protocol stages (6.1c-P2) and the advertised-broker rules (Phase 3.4).
+
+What composition must still implement is unchanged and is recorded in its own ADRs: ADR 0050's
+credential authority — a credential is presented only on the selected bootstrap path, and
+Metadata-discovered brokers get credential-free DNS/TCP/TLS — and ADR 0051's completeness
+algorithm, whose ten cases are listed there.
+
+`test/security/kafka_production_reachability_test.go` will fail on the first composition
+commit. That is intentional: it is the ADR 0054 gate, and the commit that composes Kafka is the
+commit that should retire it.
 
 ### Phase 6.2 — BLOCKED until 6.2a is Accepted
 

@@ -10,14 +10,31 @@ those outcomes reachable from a production run. Ordering, not cleanup: after
 6.1b the owner exists and the producer is still not product-reachable; after
 6.1c they become reachable together. That is §4 in practice.
 
-The closure test of §5 still does not exist, so enforcement remains by review.
+**Enforced mechanically for Kafka as of Phase 6.1c-P2**, in two tests that
+together are the closure test §5 asks for:
 
-The invariant below binds every service phase from now on. No mechanical test
-enforces it yet; §5 specifies the closure test each service must add, and until
-that exists the invariant is enforced by review. This record is deliberately
-**not** marked implemented — a policy with no enforcement is a policy, not a
-mechanism, and saying otherwise would be the same overclaiming the invariant
-exists to prevent.
+- `internal/diagnosis/kafka`'s `TestTheAuthorizedTableIsExactlyTheProducedOutcomes`
+  holds a list of every outcome the four Kafka protocol producers can emit,
+  derived by reading `internal/adapter/kafka`, and fails in **both** directions:
+  a produced outcome with no owner, and an owner for an outcome no producer
+  emits.
+- `test/security/kafka_production_reachability_test.go` asserts that
+  `internal/adapter/kafka` has zero production importers and that no
+  `DiagnoseKafka` entry point exists, which is what made it safe for Phase
+  6.1c-P1 to land a producer whose owner arrived one phase later.
+
+The record of that ordering is worth keeping, because it is §4 in practice and it
+cost a phase. Phase 6.1c was **stopped** by this invariant: composition would have
+made six classes of Kafka failure reachable with no owner, including a rejected
+credential arriving as `findings: []`, `status: OK`, exit 0. The response was to
+move the ownership phase ahead of composition rather than to waive the rule —
+"the Kafka CLI does not exist yet" was rejected, because this invariant is about
+production application reachability rather than user routing.
+
+PostgreSQL has no equivalent mechanical closure test yet; there, enforcement is
+still by review. So this record stays **not** marked implemented: the invariant
+binds every service, and one service having a mechanism is not the same as the
+policy having one everywhere.
 
 It is service-neutral and applies to PostgreSQL, Kafka and every service after
 them.
