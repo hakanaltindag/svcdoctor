@@ -2545,8 +2545,8 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
 | **6.1b** | Generic requested-target TLS diagnosis (ADR 0053) | The owner must exist before 6.1c makes the producer reachable, or `tls.handshake` FAIL lands with `findings: []` and `status: OK` |
 | **6.1c** | `DiagnoseKafka` application composition | Anchor, bootstrap sweep, ApiVersions, handshake, one authenticated path, Metadata, advertised sweep, ADR 0051's predicate. Existing rules wired; no new findings |
 | **6.2** | Shared SCRAM core extraction + Kafka SCRAM-SHA-256 | **Complete.** ADR 0055 rejected Model A; ADR 0056 is the contract it was built to |
-| **6.3** | Kafka protocol diagnosis ownership | ApiVersions, SASL handshake, authentication, Metadata. Closes the reachable outcomes Phase 5.6 enumerated as unowned |
-| **6.4** | Kafka renderer hierarchy + Kafka CLI | `collectPaths` promotes every `tcp.connect` to a top-level path, which conflates bootstrap and advertised sweeps; the tree needs a third level |
+| ~~6.3~~ | ~~Kafka protocol diagnosis ownership~~ | **Delivered early as Phase 6.1c-P2.** ADR 0054 required the owners before composition made their producers reachable, so this moved ahead of 6.1c rather than staying here. The number is retired, not pending |
+| **6.4** | Kafka renderer hierarchy + Kafka CLI | `collectPaths` promotes every `tcp.connect` to a top-level path, which conflates bootstrap and advertised sweeps; the tree needs a third level. Also owns the measured-zero versus unmeasured duration contract |
 | **6.5** | Kafka BASIC closure | Includes the ADR 0054 §5 closure test |
 | **6.6** | Kafka release validation | |
 
@@ -2561,8 +2561,15 @@ composition* (`docs/ARCHITECTURE.md` §12.1).
       callback contract, eight bounds, SASLprep refused, atomic gate transition
 - [x] **6.2** extraction under ADR 0056 — `internal/sasl/scram`, SASLname escaping, Kafka
       SCRAM-SHA-256, the two new `Reveal` guards, the atomic guard swap — **COMPLETE**
-- [ ] **6.3** Kafka protocol diagnosis ownership
-- [ ] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka`
+- [x] **6.3** Kafka protocol diagnosis ownership — **delivered as 6.1c-P2**; the number is
+      retired. Phase 6.2 added the two owners SCRAM made newly reachable, in the same
+      change-set as their producer
+- [ ] **6.4** renderer path hierarchy, `outcome` / `topology` lines, `diagnose kafka`, and the
+      **duration contract decision**: whether a *measured* zero-length step may render
+      identically to one that was never timed. `domain.Evidence` carries no "was this measured"
+      bit, so the renderer cannot distinguish them today. See the `internal/cli` golden flake
+      note above — it is the symptom, and the fixture is made deterministic *after* the
+      contract is decided
 - [ ] **6.5** Kafka BASIC closure gate, including the per-service ownership closure test
 - [ ] **6.6** Kafka release validation against the real cluster
 
@@ -2601,7 +2608,8 @@ policy for the same reason (`docs/ARCHITECTURE.md` §5.7).
 - **`AUTH_MECHANISM_UNSUPPORTED` has no diagnosis owner.** ADR 0054 permits this only while the
   outcome is not product-reachable, and it is not: `internal/adapter/kafka` still has zero
   production importers, no `DiagnoseKafka`, no CLI. **Ownership must land no later than Phase
-  6.3, before Kafka becomes product-reachable, and the Phase 6.5 closure gate must verify it
+  6.1c-P2 — which is where it landed — before Kafka becomes product-reachable, and the Phase
+  6.5 closure gate must verify it
   mechanically.**
 
 ### Phase 6.1b — generic requested-target TLS diagnosis (complete)
@@ -2792,56 +2800,64 @@ have, and it is not in Kafka BASIC's scope.
 line, no SCRAM, no new `FindingCode`, no new `FailureClass`, no schema field, no
 dependency, and no change to `Reveal`'s two production call sites.
 
-**REOPENED in the Phase 6.2 closure pass, and no longer unexplained.**
+**REOPENED in the Phase 6.2 closure pass. Root cause proven in R1; the fix is deferred to
+Phase 6.4, which owns renderer semantics.**
 
-Phase 6.1c observed one one-off `internal/cli` test failure under load, which did not
-reproduce across subsequent full/race runs or in the Phase 6.2a and 6.2 baselines. **It
-reproduced during the Phase 6.2 closure baseline**, in `go test ./...`, while
-`go test -race` and `make check` passed in the same sweep.
+Phase 6.1c recorded this as a one-off `internal/cli` failure under load. It is not one-off.
 
-**The failing case is `TestGoldenTerminalOutput/local_budget_exhausted`, and the mechanism is
-now known.** The golden output differed by one token:
+**Measured.** ~6 failures in 25 runs of `TestGoldenTerminalOutput` on the Phase 6.2 tree, and
+**3 failures in 20 runs in a clean worktree at `fdc2c3a`** — the commit before any Phase 6.2
+change. Same subtests, same rate, none of this phase's code present. **It predates Phase 6.2
+and this was measured rather than assumed.**
+
+**It is per-process, not per-iteration.** `-count=50` in one process passes; 50 separate
+invocations of the single subtest passed 50/50; the full package fails ~1 run in 4. Whatever
+varies, varies across process warm-up, which is why it looked random.
+
+**More than one golden case is affected.** Captured failures include
+`TestGoldenTerminalOutput/local_budget_exhausted` and `.../no_credential`. Every observed
+failure has the same shape, one token on the DNS row:
 
 ```text
 want   ✓ PASS  DNS  <duration>
 got    ✓ PASS  DNS
 ```
 
-`resultOKIncomplete` in `internal/cli/cli_test.go` builds its fixture with `runReal` over a
-`stubResolver`, so the DNS step measures **real wall-clock elapsed time** for a resolver that
-returns a slice. On a fast enough machine that measurement is `0`, and
-`internal/render/terminal/duration.go`'s `formatDuration` renders `d <= 0` as the empty
-string — deliberately, so that a SKIPPED node or the requested-target anchor does not print
-`0s` and invite a reader to think something was measured and took no time.
+**Root cause, measured from source and from the running fixture.** The golden fixtures build
+their reports with `runReal`, so `internal/probe/dns`'s `observe` measures a genuine
+`time.Since` around a `stubResolver` that returns a preallocated slice. Sampled across
+processes the DNS step measures **42–834 ns**, and every value is a multiple of ~41.67 ns —
+the Apple Silicon monotonic tick. One tick below the floor is **zero**, and `0s` was directly
+observed in failing runs. `internal/render/terminal/duration.go` renders `d <= 0` as the empty
+string, deliberately, so that a SKIPPED node or the requested-target anchor does not print
+`0s`. So a measured-but-sub-tick DNS step renders exactly like a step that was never timed.
 
-So the test is nondeterministic by construction: a genuinely measured near-zero duration is
-rendered identically to a step that was never timed.
+An earlier draft of this note guessed the mechanism was a sub-microsecond value falling below
+a formatting floor. That is wrong and the guess is recorded here because it was wrong: the
+formatter renders `<1µs` for anything under a microsecond, and the golden normalizer already
+matches that token. Only exact zero renders empty.
 
-**It is not "one-off", and that part of the original note was wrong.** Measured during the
-closure pass: **6 failures in 25 runs** of `TestGoldenTerminalOutput` on the Phase 6.2 working
-tree. It looked like a one-off in Phase 6.1c because a ~25% per-run failure rate on one
-subtest disappears for several consecutive full-suite runs often enough to look settled.
+**Why R1 did not fix it.** The classification is *both* a fixture problem and a product
+ambiguity:
 
-**This is not a Phase 6.2 regression, and that was measured rather than assumed.** The same
-test was run 20 times in a clean worktree at `fdc2c3a` — the commit before any Phase 6.2
-change — and failed **3 times**. Same rate, same subtest, none of this phase's code present.
-The fixture is PostgreSQL, the renderer is the terminal one, and the step is DNS; Phase 6.2
-touched none of them.
+- *Fixture* — a golden test that pins rendered layout has no reason to measure a real clock
+  around a synthetic resolver.
+- *Product* — `domain.Evidence` stores a bare `time.Duration` with **no "was this measured" bit**,
+  and there is no injectable clock anywhere in `internal/probe`, `internal/app` or
+  `internal/domain`. So *measured zero* and *never measured* are genuinely indistinguishable in
+  the model, and the renderer cannot tell them apart even in principle. ADR 0052 already fixed
+  the principle that `not measured` must never be collapsed into another outcome; this is that
+  collapse one layer down.
 
-**It is deliberately not fixed in the closure pass, because there are two legitimate fixes and
-they mean different things:**
+The clean test-only fixes are all blocked. `app.Result` has unexported fields and no exported
+constructor, so a golden test cannot consume a fixed report without a production affordance;
+making the stub resolver consume measurable time is a sleep wearing a different hat; and
+normalizing an absent duration to `<duration>` would erase the SKIPPED-versus-measured
+distinction the golden exists to pin.
 
-1. *Test-only* — give the fixture a deterministic clock, or a resolver whose measured step
-   cannot be zero. Cheap, and it makes the flake go away.
-2. *Product semantics* — decide whether a **measured** zero-length step may render the same as
-   an **unmeasured** one. ADR 0052 already fixed the principle that `not measured` must never
-   be collapsed into another outcome, and rendering a measured `0` as blank is arguably the
-   same collapse one layer down. `formatDuration`'s comment states the current choice and its
-   reason, so changing it is a decision rather than a patch.
-
-Option 2 is a renderer-contract question and belongs to **Phase 6.4**, which owns the renderer
-hierarchy. Reopen it there, decide, and then fix the fixture to match the decision rather than
-the other way round.
+**Deferred to Phase 6.4** with the renderer contract, which is the phase that owns it. It must
+decide whether a measured zero may render identically to an unmeasured step, and *then* the
+fixture is made deterministic to match the decision — not the other way round.
 
 ### Phase 6.2 — AUTHORIZED by ADR 0056. Gate transition is atomic
 
@@ -3006,6 +3022,69 @@ Constraints already fixed (`docs/ARCHITECTURE.md` §5.8): the shared core must n
 plaintext in errors or retain connection state; plaintext enters only as a short-lived
 argument; `Reveal` stays in wire packages and its call-site count is unchanged by extraction.
 
+## Standing design items opened by Phase 6.2 — NOT STARTED
+
+### SCRAM server-final strictness hardening
+
+**Do not change this inside an extraction or refactor phase.** Phase 6.2 deliberately carried
+PostgreSQL's released `verifyServerFinal` behaviour into `internal/sasl/scram` unaltered: the
+**first** relevant attribute decides, and RFC 5802's trailing extensions after it are ignored.
+That is what `v=<valid>,x=ignored` being accepted means, and it is pinned by test.
+
+The shapes a stricter reader would refuse are currently resolved by first-wins and are pinned
+at that behaviour rather than left undefined:
+
+| Server-final | Today |
+|---|---|
+| `v=<valid>,v=<other>` | accepted — first wins |
+| `e=invalid-proof,e=other` | rejected as a credential refusal — first wins |
+| `v=<valid>,e=invalid-proof` | **accepted** — the verifier decides |
+| `e=invalid-proof,v=<valid>` | rejected — the error decides |
+
+Row three is the one worth revisiting: a peer sending both is malformed, and svcdoctor accepts
+on the verifier. It is defensible — a matching verifier proves the peer holds `ServerKey` — and
+no PostgreSQL or pgBouncer version observed sends either shape, so the change would be
+invisible against real servers. That is exactly why it was **not** made during extraction: a
+behaviour change invisible in integration is one nobody can validate, and ADR 0056 §8 forbids
+altering PostgreSQL semantics during the move.
+
+A separate decision must settle it, and must bring:
+
+- [ ] RFC 5802 §5.1 strictness read against the `server-final-message` production
+- [ ] what PostgreSQL, pgBouncer and Kafka actually send for each row above
+- [ ] whether rejecting row three could refuse a real peer that today authenticates
+- [ ] real integration evidence for both services before, not after, the change
+- [ ] whether the two services may diverge here at all, given one shared core
+
+### IP literal target semantics — a product requirement, not an edge case
+
+**PostgreSQL and Kafka must support literal IPv4 and IPv6 targets as first-class input.**
+Operators diagnose by address routinely — a broker that only advertises an IP, a database
+behind a load-balancer VIP, a host with no DNS entry at all — and today the graph is shaped
+around a name that resolves.
+
+Nothing here is implemented, and none of it should be attempted piecemeal:
+
+- [ ] how the requested-target anchor represents a literal
+- [ ] whether `dns.lookup` remains a graph stage for a literal at all
+- [ ] if it remains, how it records *resolution was not required* — which is neither PASS nor
+      SKIPPED-for-policy, and must not read as either
+- [ ] **no DNS finding may be produced for a literal target**, in any state
+- [ ] IPv4 canonicalization
+- [ ] IPv6 canonicalization, including zone identifiers
+- [ ] IPv6 bracket-and-port formatting, everywhere a subject is rendered
+- [ ] TLS verification against IP SANs rather than DNS SANs
+- [ ] interaction with an explicit `--tls-server-name`
+- [ ] a Kafka bootstrap target given as a literal
+- [ ] a Kafka **advertised** broker endpoint that is a literal
+- [ ] redaction and pseudonymization of literals, which today are hostnames' problem
+- [ ] a deterministic graph shape, so a literal and a name that resolves to it do not produce
+      structurally different reports for the same endpoint
+- [ ] what run completeness means when there was nothing to resolve
+
+This overlaps the TLS item below at IP SAN verification, and the two must be sequenced
+together rather than each assuming the other decided.
+
 ## Standing security-sensitive design items — NOT STARTED, deliberately separate
 
 Both were identified during the Phase 6.2a and 6.2a-R2 SCRAM reviews and both were kept out
@@ -3022,6 +3101,9 @@ implicit. A dedicated review must settle, at minimum:
 - [ ] `--tls-ca-file`: trust **replacement** versus **augmentation** — the two have different
       failure modes and only one can be the default
 - [ ] hostname verification, and an explicit `ServerName` override
+- [ ] **IP SAN verification** — what identity a certificate must carry when the target is a
+      literal address rather than a name. Shared with the IP literal item above, and the two
+      must be decided together rather than each assuming the other settled it
 - [ ] bootstrap `ServerName` versus advertised-endpoint `ServerName` semantics
 - [ ] client certificates / mTLS, and where that credential's authority lives
 - [ ] managed-service CA bundles
