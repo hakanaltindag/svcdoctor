@@ -537,6 +537,23 @@ A deferral is a decision too, and each names the condition that should reopen it
   `SchemaVersion` stays 1; no code, class, state or dependency was added. ADR 0058 §14's three
   gaps proved to be one coupled defect and are deferred together in §14.
 
+- **[0060](0060-tls-option-validity-and-verification-state-projection.md) — A TLS-only flag on a
+  run with no handshake is a usage error, and a security fact the operator chose is stated
+  rather than buried.** Closes ADR 0058 §14's three gaps as the one coupled defect Phase 6.7
+  measured them to be, in its fix order. PostgreSQL now **refuses** `--tls-ca-file`,
+  `--tls-server-name` and `--tls-insecure` under `--tls disable`, as Kafka always did — a
+  released-CLI tightening, with the compatibility packet in §5 and the reasoning that
+  `--tls disable --tls-insecure` reads as *a small deliberate compromise* while being a total
+  one. `tlsVerificationDisabled` is gated on the run's TLS **plan** in both composition roots,
+  so a plaintext run no longer reports a TLS fact; the three states stay distinguishable
+  across two existing fields, so `SchemaVersion` stays 1. The terminal states disabled
+  verification in the header from the run and on each handshake row from that node's own
+  `tls.verified` — read from two places on purpose, so a renderer inventing either from the
+  other fails a test. It is **not a finding**: the operator asked for it, the status and exit
+  code are unchanged. `tls.verified` moved to `internal/vocabulary` on the trigger that package
+  already named, because a renderer cannot import a probe. No code, class, flag or dependency
+  was added.
+
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 
 ## Convention

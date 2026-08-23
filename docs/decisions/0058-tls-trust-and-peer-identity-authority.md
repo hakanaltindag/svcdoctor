@@ -412,9 +412,9 @@ Per-clause regression status:
 | stdlib version defaults | YES | YES |
 | advertised identity per endpoint | n/a | YES |
 | override does not propagate to advertised | n/a | YES |
-| terminal states verification was disabled | **NO** (§14.1) | **NO** (§14.1) |
-| TLS flags refused when TLS is disabled | **NO** (§14.2) | YES |
-| plaintext run reports `tlsVerificationDisabled: false` | **NO** (§14.3) | YES |
+| terminal states verification was disabled | **NO** (§14.1) → YES (ADR 0060) | **NO** (§14.1) → YES (ADR 0060) |
+| TLS flags refused when TLS is disabled | **NO** (§14.2) → YES (ADR 0060) | YES |
+| plaintext run reports `tlsVerificationDisabled: false` | **NO** (§14.3) → YES (ADR 0060) | YES |
 
 **No released PostgreSQL semantics change in Phase 6.6.**
 
@@ -439,7 +439,12 @@ certificates by §4.
 supported because its TLS works; it is unsupported because no exchange in
 `internal/adapter/kafka/wire` performs `AWS_MSK_IAM`. Validation is Phase 6.8.
 
-## 14. Recorded gaps — all deferred to Phase 6.7
+## 14. Recorded gaps — deferred to Phase 6.7, closed by ADR 0060 in Phase 6.8A
+
+> **All three are closed.** Phase 6.7 measured them and found them to be one coupled defect
+> with one fix order; Phase 6.8A reproduced each against a release-shaped binary and then
+> closed them together. See [ADR 0060](0060-tls-option-validity-and-verification-state-projection.md).
+> The reproductions below stand as the record of what was wrong.
 
 ### 14.1 The terminal never says verification was disabled
 
@@ -581,10 +586,10 @@ and a `CN`-only certificate).
 
 ## 16. Implementation requirements for Phase 6.7
 
-- [ ] terminal surfaces disabled verification (§14.1) — annotation, not a finding
-- [ ] PostgreSQL refuses inert TLS flags under `--tls disable` (§14.2), with a
-      regression test pinning the exit code and the message
-- [ ] PostgreSQL's `tlsVerificationDisabled` gated on a TLS plan (§14.3)
+- [x] terminal surfaces disabled verification (§14.1) — annotation, not a finding *(ADR 0060, Phase 6.8A)*
+- [x] PostgreSQL refuses inert TLS flags under `--tls disable` (§14.2), with a
+      regression test pinning the exit code and the message *(ADR 0060, Phase 6.8A)*
+- [x] PostgreSQL's `tlsVerificationDisabled` gated on a TLS plan (§14.3) *(ADR 0060, Phase 6.8A)*
 - [ ] IP-literal graph semantics — the `dns.lookup` question; **no TLS change**
 - [ ] a guard that `advertisedTLSPlan` clears `ServerName` and only `ServerName`
 - [ ] a guard that production sets no `MinVersion`/`MaxVersion`
