@@ -3978,10 +3978,44 @@ for a string that survives partial deletion. Replacing each condition with `if F
 every error message in place. The guards now assert on the **comparison expressions**
 themselves.
 
-### Still open
+### Result: PASSED, on real infrastructure
 
-- [ ] **Remote re-validation on the new commit.** The corrected supply chain has not yet been
-      published. Until it is, the one-SBOM claim is about the recipe, not the artifact.
+`validate-oci.yml` ran against GHCR on a GitHub-hosted runner and passed every gate.
+
+| | |
+|---|---|
+| Commit | `cf3f12309010478f71378ea7db0087e3bdc9a8a7` |
+| Staging tag | `sha-cf3f12309010478f71378ea7db0087e3bdc9a8a7` |
+| Index digest | `sha256:b8ccb1ae36031b587bb9b248a167535622559ff925e61d18b29230521034cdc7` |
+| `linux/amd64` | `sha256:7947aebfa160301d210de82d71e897a9de8979f7ec1b2a94f24011287471e96e` |
+| `linux/arm64` | `sha256:1111cb04652f6bdae9957bf2f18d07c59bcc4765bb42f0ed06a1d472896f8a4c` |
+| cosign | v3.1.3 |
+
+**The one-SBOM proof, read back off the published image:** two attestation manifests, each
+carrying exactly one predicate, `https://slsa.dev/provenance/v1`. No SPDX. Under the previous
+configuration each carried two. The CycloneDX SBOM — 10 components, spec 1.7 — is attached by
+cosign to the index digest and verifies against it.
+
+- **The SBOM flag does not move the image.** Measured directly rather than inferred: the same
+  source built with `--sbom=true` and `--sbom=false`, same VERSION, REVISION and epoch,
+  produces **identical** platform digests, and those digests are the ones CI published. The
+  attestation manifest *count* is unchanged too — SPDX was a layer *inside* the existing
+  manifest, not a manifest of its own. Only the index digest moves, which §16 already permits.
+- Reproducible: both platform digests IDENTICAL across two cold-cache builds.
+- 0 CRITICAL, 0 HIGH, nothing suppressed; Trivy scanned `debian 12.15` and the `gobinary`.
+- Provenance 60 458 bytes, names this repository and commit, contains no `refs/tags/vX.Y.Z`.
+- Keyless sign, `cosign verify` and `cosign verify-attestation` all pass against the pinned
+  identity. Rekor `2579323300` (signature) and `2579323317` (attestation).
+- Native amd64: `x86_64`, `RUNNER_ARCH=X64`, Docker `amd64`. Native arm64 also passed.
+- System CA: 8/16 handshakes verified — 8 IPv4 PASS, 8 IPv6
+  `TCP_NETWORK_UNREACHABLE` → `SKIPPED`, correctly not read as a trust failure.
+- Content audit: 1444 entries, 970 regular files, no shell, no package-manager executable.
+- `:latest`, `:v0`, `:v0.3`, `:v0.3.0`, `:0.3.0` all absent. Git tags: `v0.1.0`, `v0.2.0`.
+
+Four SHA staging artifacts are retained: `a4a835a`, `769371c` and `66e277f` record the
+two-SBOM configuration, `9abdc6d` and `cf3f123` the corrected one.
+
+### Still open
 - [ ] **`validate-oci.yml` is registered on `main`** so GitHub lists the `workflow_dispatch`;
       the run executes the file from the dispatched ref. Operational debt, retained.
 - [ ] **`release-oci.yml` has still never been triggered by a semver tag.** Its authority path
