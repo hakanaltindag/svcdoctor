@@ -26,11 +26,12 @@ GitHub-hosted amd64 runner and could never be demonstrated from an arm64
 workstation.
 
 **No semver release has been published** means exactly that, and it is the
-property the identity split exists to guarantee: no `v0.3.0` Git tag and no
-`:v0.3.0`, `:v0.3`, `:v0` or `:latest` OCI tag exists. GHCR holds `sha-<commit>`
-staging tags and their cosign referrers, and nothing else. `release-oci.yml`
-itself has still never run — only the machinery it shares with the validation
-path.
+property the identity split exists to guarantee: no `:v0.3.0`, `:v0.3`, `:v0` or
+`:latest` OCI tag exists. GHCR holds `sha-<commit>` staging tags and their cosign
+referrers, and nothing else.
+
+A `v0.3.0` **Git** tag does exist and is a mis-tag; see §21c. It published
+nothing, and `v0.3.0` is retired rather than reused.
 
 Phase 7.1 built and measured the runtime. Phase 7.1-R reviewed it, resolved the
 four questions Phase 7.1 left open, and added the release contract in §12–§19.
@@ -836,8 +837,9 @@ Full evidence is in `docs/BACKLOG.md` under Phase 7.1-V. The four §21 obligatio
 - **Pull-by-digest** — the published digest pulls and runs hardened on a native amd64 runner,
   and anonymously with no credentials at all.
 
-**[FACT] Still no release.** No `v0.3.0` Git tag and no `:v0.3.0`, `:v0.3`, `:v0` or `:latest`
-OCI tag exists. The registry holds staging tags and cosign referrers only.
+**[FACT] Still no release at that point.** No `:v0.3.0`, `:v0.3`, `:v0` or `:latest` OCI tag
+existed; the registry held staging tags and cosign referrers only. A `v0.3.0` Git tag was
+created afterwards, on the wrong commit, and published nothing — §21c.
 
 **[FACT] Publishing found four defects that review had not**, every one of them in code that
 builds or observes the image rather than in the image. The one that matters: neither
@@ -930,6 +932,45 @@ empty. Both went silent, and because both tolerate failure GitHub reported the s
 is failure. Evidence that can go quiet unnoticed is worse than no evidence. Both parsers now
 handle both shapes and fail loudly when they read nothing, and they remain incapable of
 blocking a gate.
+
+## 21c. The v0.3.0 mis-tag, and why the release is v0.3.1
+
+**[FACT]** A `v0.3.0` annotated Git tag exists on `origin` and points at
+`6b843eb77666cffa812b5109e132607690e2a989`. That commit is the `validate-oci.yml`
+default-branch registration stub on `main` (§21a). Its tree contains no `Dockerfile`, no
+`release-oci.yml`, no `oci-stage-verify.yml` and no `scripts/build-image.sh`.
+
+**[FACT] Nothing was published.** `release-oci.yml` did not exist at the tagged commit, so the
+tag push triggered no workflow. There is no run for `refs/tags/v0.3.0`, no `:v0.3.0` OCI tag
+and no GitHub Release. The tagged source cannot build the image at all.
+
+**[FACT] The tag is nevertheless immutable, and not by policy.** The Go module ecosystem
+consumed it: `proxy.golang.org` serves `v0.3.0` (recording commit `6b843eb`), and
+`sum.golang.org` has recorded
+
+```
+github.com/hakanaltindag/svcdoctor v0.3.0 h1:7TAgxyP7TP18SWJZpbZ8wGO3IzfTrNuVdwFjHdagdc4=
+```
+
+in its append-only transparency log. Deleting or re-pointing the Git tag would not remove that
+record; it would leave a published checksum for a tag that no longer resolves to it, and
+`go install ...@v0.3.0` would fail verification for anyone who had already fetched it.
+
+**[POLICY] `v0.3.0` is retired. The first OCI release is `v0.3.1`.** This is the general rule
+in §13 applied to its first real case: a semver tag is never moved, and a broken release is
+succeeded, not repaired.
+
+**[GUIDANCE] The cause was structural and is worth naming.** Pushing the registration stub to
+`main` gave the default branch a commit that looked release-ready while the release content sat
+unmerged on a feature branch. A tag placed on `main` therefore named a tree that could not
+build. Two things follow, both adopted:
+
+- the release branch is merged into `main` **before** tagging, and the tag is placed on the
+  merge result — never on a `main` that lacks the release content;
+- `docs/RELEASE_CHECKLIST.md` makes "the tagged commit contains `release-oci.yml`,
+  `oci-stage-verify.yml`, `Dockerfile` and `scripts/build-image.sh`" an explicit pre-tag check,
+  because this failure is silent: a tag on a tree without the workflow produces no run, no
+  error and no artifact.
 
 ## 22. Validation
 

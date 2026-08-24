@@ -1043,3 +1043,114 @@ func TestCosignIsPinnedAndForwardCompatible(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Release ceremony
+// ---------------------------------------------------------------------------
+
+// TestTheReleaseCeremonyIsDocumented pins the two documents that exist because
+// this project has lost a release.
+//
+// `v0.3.0` was tagged on a commit that contained no `release-oci.yml`. The tag
+// push triggered nothing: no workflow, no error, no artifact. The failure was
+// entirely silent, and silence is the reason it needs a written check rather
+// than care.
+//
+// The guard is deliberately about the *presence of the check*, not about prose
+// quality. A checklist that has lost its machinery-presence step has lost the
+// only step that would have caught the one failure it was written for.
+func TestTheReleaseCeremonyIsDocumented(t *testing.T) {
+	checklist, ok := readRepoFileOptional(t, "docs/RELEASE_CHECKLIST.md")
+	if !ok {
+		t.Fatal("docs/RELEASE_CHECKLIST.md is missing. The release ceremony is not " +
+			"something to rediscover per release.")
+	}
+	for _, g := range []struct{ needle, what string }{
+		{"git ls-tree", "the check that the tagged commit contains the release machinery"},
+		{"release-oci.yml", "naming the workflow that must be present"},
+		{"oci-stage-verify.yml", "naming the shared machinery that must be present"},
+		{"Dockerfile", "naming the build input that must be present"},
+		{"never moved", "the immutable-tag rule"},
+		{"sum.golang.org", "why a pushed tag cannot be withdrawn"},
+		{"sequentially", "running the integration suites without contention"},
+		{"last actual GitHub Release", "choosing the release-notes baseline correctly"},
+	} {
+		if !strings.Contains(checklist, g.needle) {
+			t.Errorf("the release checklist no longer covers %s (looked for %q)", g.what, g.needle)
+		}
+	}
+
+	playbook, ok := readRepoFileOptional(t, "docs/RELEASE_FAILURE_PLAYBOOK.md")
+	if !ok {
+		t.Fatal("docs/RELEASE_FAILURE_PLAYBOOK.md is missing")
+	}
+	for _, g := range []struct{ needle, what string }{
+		{"never moved", "the immutable-tag rule"},
+		{"succeeded, not repaired", "the patch-release rule"},
+		{"never ran", "the silent-failure case that lost v0.3.0"},
+		{"Do not rebuild the image", "the missing-GitHub-Release case"},
+	} {
+		if !strings.Contains(playbook, g.needle) {
+			t.Errorf("the failure playbook no longer covers %s (looked for %q)", g.what, g.needle)
+		}
+	}
+}
+
+// TestNoDocumentPresentsTheRetiredVersionAsReleased pins ADR 0062 §21c.
+//
+// `v0.3.0` is a Git tag that published nothing, and it is retired rather than
+// reused because the Go checksum database recorded it permanently. A document
+// that offers it as an install target is offering a command that fails.
+func TestNoDocumentPresentsTheRetiredVersionAsReleased(t *testing.T) {
+	const retired = "v0.3.0"
+
+	for _, name := range []string{
+		"README.md",
+		"docs/COMPATIBILITY.md",
+		"examples/kubernetes/README.md",
+		"examples/kubernetes/job-postgres.yaml",
+		"examples/kubernetes/job-kafka.yaml",
+	} {
+		doc, ok := readRepoFileOptional(t, name)
+		if !ok {
+			continue
+		}
+		for _, line := range strings.Split(doc, "\n") {
+			if !strings.Contains(line, retired) {
+				continue
+			}
+			lower := strings.ToLower(line)
+			// Explaining that it was retired is the document doing its job.
+			if strings.Contains(lower, "retired") || strings.Contains(lower, "never") ||
+				strings.Contains(lower, "not ") || strings.Contains(lower, "cannot") ||
+				strings.Contains(lower, "published nothing") {
+				continue
+			}
+			t.Errorf("%s references the retired version %s as if it were usable:\n  %s\n\n"+
+				"ADR 0062 §21c: v0.3.0 was tagged on a commit with no release workflow, "+
+				"published nothing, and is succeeded by v0.3.1.",
+				name, retired, strings.TrimSpace(line))
+		}
+	}
+
+	// And the release notes must name the correct baseline. The last public
+	// GitHub Release was v0.1.0, not the last Git tag.
+	notes, ok := readRepoFileOptional(t, "docs/releases/v0.3.1.md")
+	if !ok {
+		t.Fatal("docs/releases/v0.3.1.md is missing")
+	}
+	// The baseline *statement*, not any mention of the version: the notes name
+	// v0.1.0 in several places, so a whole-file check stayed green when the
+	// headline baseline was changed. Found by mutation.
+	if !strings.Contains(notes, "The last public release was **v0.1.0**") {
+		t.Error("the release notes do not state v0.1.0 as the baseline.\n\n" +
+			"v0.2.0 and v0.3.0 are Git tags, not published releases — writing notes " +
+			"as though either shipped would describe changes users never received.")
+	}
+	// And they must say why the intervening tags are not releases.
+	for _, needle := range []string{"v0.2.0", "v0.3.0"} {
+		if !strings.Contains(notes, needle) {
+			t.Errorf("the release notes do not account for the %s tag", needle)
+		}
+	}
+}
