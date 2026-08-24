@@ -39,6 +39,22 @@ const CodeCommandNotPermitted domain.FindingCode = "REDIS_COMMAND_NOT_PERMITTED"
 // This is the discipline `internal/adapter/postgres` applies to `53300` and
 // `57P03`, arriving here through one shared class with the endpoint's own
 // normalized prefix recorded beside it.
+//
+// # Every non-PONG condition except NOPERM arrives here, and the prose says only
+// what that supports
+//
+// The predicate is the failure class, not a list of prefixes, so `NOAUTH`, a
+// generic `ERR`, `DENIED`, `WRONGPASS` and an unrecognized prefix reach this
+// finding alongside `LOADING`, `MASTERDOWN` and `BUSY`. That is deliberate — a
+// probe the endpoint refused for a reason svcdoctor did not anticipate is worth
+// exactly as much attention as one it did — but it constrains the wording.
+//
+// Phase 7.6B corrected that wording. The detail previously said the refusal was
+// "the endpoint's own statement about its readiness rather than a connectivity
+// or credential problem", which is false for `NOAUTH`: that *is* a credential
+// condition, and the sentence excluded the one cause it was most likely to be
+// read against. The text now names the endpoint's condition without classifying
+// it, which is true for every prefix that can arrive.
 const CodeEndpointNotServing domain.FindingCode = "REDIS_ENDPOINT_NOT_SERVING"
 
 // CodePingNotCompleted is the floor: the usability probe did not complete.
@@ -64,8 +80,8 @@ const (
 		"condition itself"
 
 	detailEndpointNotServing = "The connection was established and the endpoint answered, so " +
-		"the refusal is the endpoint's own statement about its readiness rather than a " +
-		"connectivity or credential problem.\n" +
+		"the refusal is the endpoint's own statement about its condition rather than a " +
+		"connectivity problem.\n" +
 		"svcdoctor restates the condition the endpoint named and infers no cause from it."
 
 	recommendEndpointNotServing = "Check this endpoint's own logs and current state for the " +
