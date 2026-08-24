@@ -71,6 +71,15 @@ something that exists. That is intentional, and they are binding when that work
 starts: **0008** (Kafka wire client), **0009** (service registration), **0011**
 (CLI shape).
 
+**0063 to 0066 are the current occupants of this list.** Phase 7.4 froze the Redis/Valkey BASIC
+contract before any Redis code exists, so all four decide work not yet written and all four bind
+from Phase 7.5: **0063** (the BASIC journey, the three-command allowlist, RESP2-only, and what
+`PING` is allowed to prove), **0064** (zero-argument `HELLO`, one credential-bearing command per
+run, and the unchanged plaintext policy), **0065** (cluster observed and not traversed, Sentinel
+detected and not diagnosed), **0066** (prefix-only error classification, observed implementation
+identity, one adapter and one CLI command). Between them they add three `Step` values and nothing
+else: no finding code, no failure class, no `SchemaVersion` change and no dependency.
+
 **0039 has left this list.** Phase 4.5b implemented it, so it now describes code. Two of its
 sections were settled by that implementation and the settlements are recorded inside it.
 

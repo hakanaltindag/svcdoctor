@@ -91,6 +91,8 @@ condition that should reopen it.
 | **A `SKIPPED` protocol node for a transport path that failed** | The adapter receives completed paths only, so it cannot know an address it was never handed exists. Nothing today knows a service step was *requested* for one: the transport chain must not know Kafka, and the layer that would is the orchestration boundary Phase 3.1 did not build. The subject rule does not forbid the node — `ip:port` is known — so this is an open question, not a settled shape (ADR 0025 §9) | Phase 3 orchestration sequences transport and an adapter for one endpoint, or a rule needs to tell "L4 was never reached here" from "no L4 node here" |
 | **Execution mode** in run metadata | No vocabulary is defined, and both plausible meanings already have owners: `vantage` and the summary | A real execution mode exists that neither already expresses |
 | **`affectedResources`, recommendation reference / risk** | Listed as "recommended when relevant"; nothing consumes them and no renderer exists | A renderer or a finding catalog needs them |
+| **An unsafe transport opt-in, and the second `CredentialTransportPolicy` member** | **ADR 0029 §7's reopen condition is now technically satisfied and was deliberately not acted on.** It required a layer that can carry an explicit per-run decision into the report; `internal/cli` and `domain.ReportSecurity` both exist. Phase 7.4 declined to widen the policy inside a Redis phase, because a second member applies to Kafka and PostgreSQL the instant it exists, and a Redis-only exception would be conditional sprawl at a security boundary. **The cost is now measurable rather than theoretical**: plaintext-plus-password is a large share of self-hosted Redis, and in that segment BASIC cannot reach `PING` (ADR 0064 §7) | A product-wide phase that lands the override, the second policy member and the report projection **together for all three services**, with its own security review and its own ADR. Never as a side effect of a service phase |
+| **Generic TLS client certificates (mTLS)** | Not implemented anywhere: `internal/probe/tls.Params` has no certificate field, the CLI exposes four TLS flags and none is one, and `FailureTLSClientCertificateRequired` / `FailureTLSClientCertificateRejected` are declared with **no producer** and banned from production code by `internal/diagnosis/transport/boundary_test.go`. `docs/SCOPE.md` lists mTLS as a Kafka target capability, which is a scope statement rather than an inventory. Phase 7.4 found Redis raises the *frequency* sharply — `tls-auth-clients` defaults to **yes** (`redis/src/config.c:3514`) — but not the *reachability*: `ssl.client.auth=required` and `clientcert=verify-full` already reach it today, and both land truthfully-but-imprecisely on `TLS_HANDSHAKE_FAILURE` | A generic-transport phase, not a service phase. It must decide the **private-key redaction owner** — a key is not a `security.Secret` — and give both banned failure classes an owner under ADR 0054 in the change-set that makes them precise. Redis `tls-auth-clients-user CN` (certificate-as-credential) is an input to that phase |
 
 The first three converge on the same question and will likely be answered together. See
 `docs/ARCHITECTURE.md` section 18 and `docs/PHASE1_HANDOFF.md` sections 13 and 15.
@@ -4318,6 +4320,134 @@ No finding may depend on "expected primary", "expected writable", "cluster shoul
 
 **Reopening requires a deliberate decision recorded here**, with the expected-state contract that
 makes the claim meaningful. It is not reopened by adding a rule.
+
+## Phase 7.4 — Redis/Valkey BASIC architecture and contract freeze: COMPLETE
+
+**No Go was written.** The phase produced four ADRs and this entry. `SchemaVersion` **1**,
+**40** finding codes, **41** failure classes, **2** `Reveal` sites, **2** `SecretFor` sites and
+**1** dependency, all unchanged and all re-derived mechanically at the start and confirmed at the
+end.
+
+Start-state note: Phase 7.3B was committed but **not pushed** when 7.4 began. The working tree
+was clean and the freeze was recorded, so the handoff content was intact; the publication gap is
+recorded here rather than absorbed.
+
+### Two claims from the prior Redis second review were false
+
+Both were treated as hypotheses and both failed verification. Both corrections made the frozen
+scope **smaller**.
+
+**"svcdoctor already has mTLS for Kafka; reuse it."** It does not.
+`internal/probe/tls.Params` carries `Endpoint`, `Scope`, `Address`, `ServerName`, `RootCAs`,
+`MinVersion`, `MaxVersion` and `InsecureSkipVerify`, and nothing else. The two client-certificate
+failure classes have no producer and are banned from production code by a test. The review had
+read `docs/SCOPE.md`'s Kafka target-capability list as an inventory.
+
+**"Plaintext credential transport is refused by default and requires an acknowledgement flag."**
+There is no such flag and no such default. `security.CredentialTransportPolicy` has exactly one
+member, `RequireVerifiedTLS`, and svcdoctor cannot authenticate to a plaintext PostgreSQL or
+Kafka today either. The review proposed a policy the repository does not have and described it as
+reuse.
+
+### The frozen contract
+
+The journey, in full:
+
+```text
+requested target (hostname | IPv4 | IPv6)
+  → DNS resolution        [omitted entirely for a literal — ADR 0059]
+  → TCP connect
+  → TLS handshake         [out-of-band, --tls require default]
+  → HELLO                 [zero arguments]
+  → Sentinel guard        [mode == sentinel ⇒ stop]
+  → AUTH [<user>] <pass>  [at most once per run, policy-gated]
+  → HELLO                 [zero arguments; only if the first returned -NOAUTH]
+  → PING
+```
+
+Allowlist **`HELLO`, `AUTH`, `PING`** and nothing else. **RESP2 only** — RESP3 is not attempted,
+which makes push and attribute frames unreachable rather than merely handled. **Zero keyspace
+access**, stronger than zero writes: Redis BASIC names no key. Three new `Step` values —
+`redis.hello`, `redis.authentication`, `redis.ping` — and no other vocabulary.
+
+Four upstream facts, read from `redis/redis@unstable` and `valkey-io/valkey@unstable` rather than
+from documentation, carry most of the weight:
+
+| Fact | Source | What it decided |
+|---|---|---|
+| An unknown command echoes up to 128 bytes of its **arguments** back to the caller and into the log, and `HELLO`'s AUTH redaction runs only when `HELLO` is known | `server.c:4378`-`4389`; `networking.c:5055` | `HELLO` carries zero arguments |
+| `CMD_NO_AUTH` skips the ACL command-permission check | `acl.c:1726` | `HELLO` success proves nothing about authorization, so it cannot be the usability proof |
+| `PING` carries no `NO_AUTH`, no `LOADING`, no `STALE` | `ping.json` | `PING` is the only keyless command gated on all four of auth, ACL, loading and stale |
+| `helloCommand` returns before `c->resp = ver` on the `NOAUTH` path | `networking.c:5089`-`5100` | The second `HELLO` is *necessary*, not convenient |
+| A keyless command is never cluster-redirected | `server.c:4609`-`4616` | `MOVED`/`ASK`/`CLUSTERDOWN` are structurally unreachable, so they get no owner |
+| `-WRONGPASS` is a single reply site for unknown user, wrong password and disabled user | `acl.c:1511` | svcdoctor never names an authentication cause |
+| `nopass` returns `C_OK` before examining the password | `acl.c:1485` | `AUTH` `+OK` never claims the credential is valid |
+| Valkey parameterizes shared error text by server name; prefixes are identical | `valkey/server.c:2138` | Classification is prefix-only |
+| Valkey's `HELLO` identity is configurable via `extended_redis_compat` | `valkey/networking.c:5937` | Identity is what the endpoint said, never proof |
+
+### Records
+
+- **ADR 0063** — the BASIC journey and what `PING` is allowed to prove. Also freezes RESP2-only,
+  the three-command allowlist, zero keyspace access, the graph shape for nine cases, and the
+  hostile-peer bound *strategy* (one byte budget, strictly incremental allocation, **no numeric
+  constant before a measurement** — ADR 0061's method, not its numbers).
+- **ADR 0064** — capability discovery precedes authentication and carries no credential. One
+  credential-bearing command per run; the operator's `AUTH` form verbatim; `RequireVerifiedTLS`
+  unchanged; mTLS deferred with the reasoning.
+- **ADR 0065** — cluster observed and not traversed; Sentinel detected and not diagnosed. Applies
+  ADR 0054 in the negative direction: an unreachable producer must not have an owner.
+- **ADR 0066** — prefix-only error classification; observed implementation identity; **no
+  cross-implementation version arithmetic**; one adapter, one CLI command.
+
+### The Sentinel guard is the cheapest correctness win in the phase
+
+`PING`, `HELLO` and `AUTH` all carry `CMD_SENTINEL`, so a Sentinel completes the whole journey and
+answers `PONG` while holding no keys. Without the guard svcdoctor reports a healthy Redis endpoint
+for a process that stores nothing — a confident, specific, wrong answer, while the operator's real
+problem is the port in their configuration. One branch over evidence already collected.
+
+### What Phase 7.5 must catch
+
+The mutation matrix is the deliverable that makes 7.5 boring. Security: any argument added to
+`HELLO` (asserted on the exact frame `*1\r\n$5\r\nHELLO\r\n`), a second `AUTH`, `AUTH` after a
+re-dial, `AUTH` to a discovered endpoint, raw error text reaching canonical evidence, plaintext
+`AUTH`, `AUTH` under `--tls-insecure`, `RESET` appearing at all. Protocol: silent RESP3 fallback,
+`WRONGPASS` rendered as "wrong password", `NOPERM` rendered as a service failure, `PONG` rendered
+as "Redis healthy", a Sentinel `PONG` accepted as a Redis server, `role=replica` becoming a
+finding, `mode=cluster` becoming a healthy cluster, a `MOVED` finding existing, an IP literal
+producing DNS evidence, the second `HELLO` becoming unconditional, an unknown `HELLO` aborting the
+run, an unknown reply field aborting the parser. Keyspace: any command outside the allowlist.
+Resource safety: allocation on a declared length, unbounded array, nested-depth bomb, a `>` frame
+parsed rather than refused. Compatibility: Redis error **text** used for classification (the
+Valkey `-LOADING Valkey is loading…` fixture must classify identically), version arithmetic, and
+the CLI verb used as implementation identity (a Valkey fixture under `diagnose redis` must report
+`valkey`).
+
+### Validation designed, not executed
+
+29 Redis scenarios and 7 Valkey ones, each with ground truth, expected evidence, allowed claim,
+forbidden claim and expected exit/incomplete semantics. Injected conditions are labelled injected
+and are never described as organic. The rows that exist specifically to pin this freeze:
+`nopass` + one-argument `AUTH` versus `nopass` + two-argument `AUTH`; wrong password versus
+unknown user versus disabled user producing **byte-identical** `WRONGPASS`; `NOPERM` on `PING`
+resolving to UNKNOWN + OK + exit 0; a cluster-mode node producing **no** `MOVED` and no topology
+node; a Sentinel target stopping before `AUTH`; a pre-`HELLO` endpoint proving the echoed args
+contain no credential; and the Valkey error-prefix row that proves prefix-only was right.
+
+No provider support is claimed. Every managed provider stays Level 1 in `docs/COMPATIBILITY.md`
+until a real instance is exercised.
+
+### Deliberately not done
+
+No adapter, no CLI route, no service vocabulary, no finding code, no failure class, no
+dependency, no `SchemaVersion` change, no change to Kafka or PostgreSQL semantics, and no widening
+of `CredentialTransportPolicy`. Two open-decision rows were added above — the unsafe transport
+opt-in and generic mTLS — rather than resolved inside a service phase.
+
+**A third service is authorized to start.** The gate below required Kafka and PostgreSQL to
+produce real validation signals first: Kafka has Phase 3's three-broker KRaft validation and Phase
+6.8's Redpanda study, and PostgreSQL has Phase 7.3A's real-world and Patroni validation with 7.3B's
+closure. Redis/Valkey is that third service, and RabbitMQ is the one after it.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
