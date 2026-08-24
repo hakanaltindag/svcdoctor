@@ -1,0 +1,259 @@
+# Remote OCI publication validation — SHA staging identity only.
+#
+# # What this is for
+#
+# ADR 0062 section 21 records four things the release pipeline could not prove
+# without publishing: GHCR authentication and tag behaviour, native `linux/amd64`
+# execution, keyless cosign signing and verification, and pull-by-digest after a
+# real push. Every one of them needs a real registry and a real OIDC identity.
+#
+# This workflow closes them by running the *same* machinery a release runs —
+# `oci-stage-verify.yml`, not a copy of it — under an identity that cannot
+# become a release. What it validates is therefore evidence about
+# `release-oci.yml` rather than about a parallel implementation that happens to
+# resemble it.
+#
+# # What this is NOT
+#
+# It is not a release and it cannot become one:
+#
+#   * It has **no inputs**. There is nothing to pass, so there is no version to
+#     pass. The identity is derived from the checked-out commit and from nothing
+#     else.
+#   * It publishes exactly one reference, `:sha-<full commit>`, and there is no
+#     step anywhere that writes a second tag. `:vX.Y.Z`, `:v0.3`, `:v0` and
+#     `:latest` are not suppressed by a condition — no code exists that could
+#     produce them.
+#   * It refuses to run on a tag ref, and it refuses to build if the derived
+#     version resembles a semver release.
+#
+# ADR 0062 section 12's rule is untouched: the Git semver tag remains the only
+# public version authority, and it is exercised by `release-oci.yml` alone.
+#
+# # The staging tag is immutable
+#
+# `sha-<commit>` is an identity claim — this source produced these bits — and
+# the shared workflow refuses to re-point it. Re-running this workflow on the
+# same commit reuses the identical digest or stops; it never overwrites. That is
+# what makes recovery from a mid-run failure safe.
+
+name: Validate OCI publication (SHA staging only)
+
+on:
+  workflow_dispatch:
+
+# Read-only by default. Jobs escalate only what they need, where they need it.
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-validate-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Validation identity
+  # ---------------------------------------------------------------------------
+  #
+  # Establishes what is being validated, and refuses every way it could be
+  # mistaken for a release.
+  identity:
+    name: Validation identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      revision: ${{ steps.derive.outputs.revision }}
+      source_date_epoch: ${{ steps.derive.outputs.source_date_epoch }}
+      sha_tag: ${{ steps.derive.outputs.sha_tag }}
+      certificate_identity: ${{ steps.derive.outputs.certificate_identity }}
+    steps:
+      - name: Refuse to run on a tag
+        run: |
+          set -eu
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "::error::this workflow validates a commit, never a tag."
+            echo "::error::a tag is release authority and belongs to release-oci.yml."
+            exit 1
+          fi
+          echo "ref: ${GITHUB_REF} (${GITHUB_REF_TYPE}) — not a release ref"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      # The version comes from `scripts/build-image.sh --dev`, the same script
+      # that derives a release version — so there is one derivation, not a
+      # second one invented here that could drift from it.
+      #
+      # The staging tag uses the **full** 40-character commit SHA rather than an
+      # abbreviation. An abbreviated SHA is a registry identity that can collide
+      # as the repository grows, and a collision here would mean two different
+      # sources claiming one immutable tag.
+      - name: Derive validation identity from Git
+        id: derive
+        run: |
+          set -eu
+          ./scripts/build-image.sh --dev --emit >> "$GITHUB_OUTPUT"
+
+          version="$(./scripts/build-image.sh --dev --emit | sed -n 's/^version=//p')"
+          revision="$(git rev-parse HEAD)"
+
+          # A validation build must not be able to name itself like a release,
+          # whatever the script does. This is the check that makes "no semver
+          # leakage" a property of the workflow rather than of a convention.
+          if printf '%s' "$version" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::derived version '$version' has release shape. A SHA validation build may not claim one."
+            exit 1
+          fi
+          case "$version" in
+            0.0.0-dev+*) ;;
+            *) echo "::error::derived version '$version' is not a development version"; exit 1 ;;
+          esac
+
+          if [ "$revision" != "${GITHUB_SHA}" ]; then
+            echo "::error::checked out $revision but GITHUB_SHA is ${GITHUB_SHA}"
+            exit 1
+          fi
+          if ! printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::revision '$revision' is not a full commit SHA"
+            exit 1
+          fi
+
+          echo "sha_tag=sha-${revision}" >> "$GITHUB_OUTPUT"
+          echo "certificate_identity=https://github.com/${GITHUB_REPOSITORY}/.github/workflows/oci-stage-verify.yml@${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+
+          echo "version:   $version"
+          echo "revision:  $revision"
+          echo "staging:   sha-${revision}"
+
+  # ---------------------------------------------------------------------------
+  # 2. Source gates
+  # ---------------------------------------------------------------------------
+  #
+  # An image is not validated if the source it was built from is not. This is
+  # the same gate the release path runs; the integration suites are not repeated
+  # here because they exercise the product, not the publication path this
+  # workflow exists to prove.
+  source:
+    name: Source gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26'
+      - name: Quality gate
+        run: make check
+
+  # ---------------------------------------------------------------------------
+  # 3. The shared machinery — the same file release-oci.yml calls
+  # ---------------------------------------------------------------------------
+  #
+  # Build, reproducibility, staging, index validation, label validation,
+  # vulnerability scan, SBOM, provenance, keyless signing, constrained
+  # verification, pull-by-digest and the hardened runtime smoke all live in
+  # `oci-stage-verify.yml`. Neither caller reimplements any of it, so a change
+  # to the release path is a change to what this workflow validates.
+  #
+  # What stays here is authority: the identity above, and the absence of a
+  # publish job below.
+  stage-and-verify:
+    name: OCI
+    needs: [identity, source]
+    uses: ./.github/workflows/oci-stage-verify.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    with:
+      version: ${{ needs.identity.outputs.version }}
+      revision: ${{ needs.identity.outputs.revision }}
+      source_date_epoch: ${{ needs.identity.outputs.source_date_epoch }}
+      sha_tag: ${{ needs.identity.outputs.sha_tag }}
+      certificate_identity: ${{ needs.identity.outputs.certificate_identity }}
+      # Unconditionally on, unlike the release path, which gates it behind a
+      # repository variable. This repository is public, so arm64 runners cost
+      # nothing, and validation is precisely where the extra evidence is worth
+      # having: the remote index is checked for arm64 either way, but only this
+      # proves the arm64 image the index names actually runs.
+      run_arm64_smoke: true
+
+  # ---------------------------------------------------------------------------
+  # 4. Negative proof
+  # ---------------------------------------------------------------------------
+  #
+  # The validation is only worth anything if it published nothing else. Asserted
+  # against the registry after the fact rather than trusted, because "the
+  # workflow contains no publish step" is a claim about the file and this is a
+  # claim about GHCR.
+  no-semver:
+    name: No semver artifact exists
+    runs-on: ubuntu-latest
+    needs: [identity, stage-and-verify]
+    if: always() && needs.identity.result == 'success'
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: No semver or floating tag was created
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          repo="${GITHUB_REPOSITORY,,}"
+          token="$(curl -fsSL -u "x:${GH_TOKEN}" \
+            "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+
+          bad=0
+          for tag in latest v0 v0.3 v0.3.0; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $token" -H "Accept: $accept" \
+              "https://ghcr.io/v2/${repo}/manifests/${tag}")"
+            if [ "$code" = "200" ]; then
+              echo "::error::${tag} exists in GHCR. This workflow must never create one."
+              bad=1
+            else
+              echo "  :${tag} absent (HTTP $code)"
+            fi
+          done
+          exit "$bad"
+
+  # ---------------------------------------------------------------------------
+  # 5. Evidence record
+  # ---------------------------------------------------------------------------
+  summary:
+    name: Validation summary
+    runs-on: ubuntu-latest
+    needs: [identity, stage-and-verify, no-semver]
+    if: always()
+    steps:
+      - name: Write summary
+        run: |
+          {
+            echo "## OCI publication validation — SHA staging only"
+            echo
+            echo "**This is not a release.** No semver tag was created."
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Commit | \`${{ needs.identity.outputs.revision }}\` |"
+            echo "| Version | \`${{ needs.identity.outputs.version }}\` |"
+            echo "| Staging tag | \`${{ needs.identity.outputs.sha_tag }}\` |"
+            echo "| Index digest | \`${{ needs.stage-and-verify.outputs.digest }}\` |"
+            echo "| linux/amd64 | \`${{ needs.stage-and-verify.outputs.amd64_digest }}\` |"
+            echo "| linux/arm64 | \`${{ needs.stage-and-verify.outputs.arm64_digest }}\` |"
+            echo "| Reused existing staging digest | \`${{ needs.stage-and-verify.outputs.reused }}\` |"
+            echo "| Certificate identity | \`${{ needs.identity.outputs.certificate_identity }}\` |"
+            echo "| Stage + verify | ${{ needs.stage-and-verify.result }} |"
+            echo "| Semver negative proof | ${{ needs.no-semver.result }} |"
+            echo
+            echo "Pull by digest:"
+            echo
+            echo '```'
+            echo "docker pull ghcr.io/${GITHUB_REPOSITORY}@${{ needs.stage-and-verify.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

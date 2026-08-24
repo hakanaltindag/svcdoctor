@@ -30,7 +30,28 @@ import (
 // written so those are hard failures at release time; these guards only ensure
 // the steps that produce them cannot quietly disappear from the file.
 
-const releaseWorkflow = ".github/workflows/release-oci.yml"
+const (
+	releaseWorkflow = ".github/workflows/release-oci.yml"
+
+	// The build, scan, SBOM, provenance, signing, verification and runtime-smoke
+	// machinery, extracted in Phase 7.1-V so `validate-oci.yml` could rehearse
+	// the *release* path rather than a copy of it. See sharedMachineryTest.go's
+	// drift guards in validateworkflow_test.go.
+	sharedWorkflow = ".github/workflows/oci-stage-verify.yml"
+)
+
+// releasePipeline is everything a release tag actually executes: the caller that
+// owns identity and semver authority, plus the shared machinery it invokes.
+//
+// Guards about *what a release does* must read this, not the caller alone.
+// After the extraction, a guard scoped to `release-oci.yml` would pass happily
+// while cosign, Trivy and the SBOM had been deleted from the file that performs
+// them — the exact blindness the extraction could have introduced.
+func releasePipeline(t *testing.T) string {
+	t.Helper()
+	return withoutComments(readRepoFile(t, releaseWorkflow)) + "\n" +
+		withoutComments(readRepoFile(t, sharedWorkflow))
+}
 
 // TestTheReleaseWorkflowTriggersOnlyOnTags pins ADR 0062 sections 12 and 13.
 //
@@ -91,7 +112,7 @@ func TestTheReleaseWorkflowUsesMinimalPermissions(t *testing.T) {
 	// legitimately names the permissions it holds — a guard that read the
 	// comments would report a permission that had been removed from every job
 	// but was still described in a sentence. Found by mutation, not by review.
-	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	wf := releasePipeline(t)
 
 	for _, required := range []string{"packages: write", "id-token: write"} {
 		if !strings.Contains(wf, required) {
@@ -103,8 +124,20 @@ func TestTheReleaseWorkflowUsesMinimalPermissions(t *testing.T) {
 		t.Error("the release workflow requests contents: write. Publishing an image " +
 			"needs no write access to the repository.")
 	}
-	if !strings.HasPrefix(strings.TrimSpace(afterLine(wf, "permissions:")), "contents: read") {
-		t.Error("the workflow's default permission block is not contents: read")
+	// Every file in the pipeline must default to read-only and escalate per job.
+	for _, name := range []string{releaseWorkflow, sharedWorkflow, validateWorkflow} {
+		doc := withoutComments(readRepoFile(t, name))
+		if !strings.HasPrefix(strings.TrimSpace(afterLine(doc, "permissions:")), "contents: read") {
+			t.Errorf("%s: the default permission block is not contents: read", name)
+		}
+		if strings.Contains(doc, "contents: write") {
+			t.Errorf("%s requests contents: write; publishing an image needs no repository write access", name)
+		}
+		for _, never := range []string{"actions: write", "administration:", "packages: admin"} {
+			if strings.Contains(doc, never) {
+				t.Errorf("%s requests %q, which nothing in this pipeline needs", name, never)
+			}
+		}
 	}
 }
 
@@ -114,7 +147,7 @@ func TestTheReleaseWorkflowUsesMinimalPermissions(t *testing.T) {
 // long-lived exists to be stolen. Each name below is a specific way that
 // property gets given away for convenience.
 func TestTheReleaseWorkflowUsesNoLongLivedCredential(t *testing.T) {
-	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	wf := releasePipeline(t) + "\n" + withoutComments(readRepoFile(t, validateWorkflow))
 
 	forbidden := []struct{ needle, why string }{
 		{"COSIGN_PRIVATE_KEY", "keyless signing needs no private key"},
@@ -143,7 +176,7 @@ func TestTheReleaseWorkflowUsesNoLongLivedCredential(t *testing.T) {
 // And an unconstrained `cosign verify` accepts any valid Sigstore signature from
 // anyone on earth — it looks like verification and is close to none.
 func TestTheReleaseWorkflowSignsAndVerifiesTheDigest(t *testing.T) {
-	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	wf := releasePipeline(t)
 
 	if !strings.Contains(wf, `cosign sign --yes "${IMAGE}@${{ needs.stage.outputs.digest }}"`) {
 		t.Error("the release workflow does not sign the staged digest. " +
@@ -173,8 +206,20 @@ func TestTheReleaseWorkflowSignsAndVerifiesTheDigest(t *testing.T) {
 			"binds the signature to one workflow at one tag; a pattern invites " +
 			"a permissive one.")
 	}
-	if !strings.Contains(wf, "refs/tags/${GITHUB_REF_NAME}") {
-		t.Error("the verified identity is not constrained to this release tag")
+	// The identity is computed by the caller and passed in, so the shared
+	// machinery cannot decide whose signature it will accept. For a release that
+	// value embeds ${GITHUB_REF}, and the trigger guard above proves ${GITHUB_REF}
+	// can only ever be a semver tag — together those pin the release signature to
+	// refs/tags/vX.Y.Z without the shared file naming a tag at all.
+	caller := withoutComments(readRepoFile(t, releaseWorkflow))
+	if !strings.Contains(caller, "certificate_identity=https://github.com/${GITHUB_REPOSITORY}/.github/workflows/oci-stage-verify.yml@${GITHUB_REF}") {
+		t.Error("the release workflow does not compute the exact certificate identity it requires")
+	}
+	if !strings.Contains(wf, `--certificate-identity "${{ inputs.certificate_identity }}"`) {
+		t.Error("cosign verify is not constrained to the identity the caller demanded")
+	}
+	if !strings.Contains(wf, "--certificate-github-workflow-sha") {
+		t.Error("cosign verify does not bind the signature to the commit being released")
 	}
 	if !strings.Contains(wf, "https://token.actions.githubusercontent.com") {
 		t.Error("the verified identity is not constrained to the GitHub OIDC issuer")
@@ -183,7 +228,7 @@ func TestTheReleaseWorkflowSignsAndVerifiesTheDigest(t *testing.T) {
 
 // TestTheReleaseWorkflowKeepsEverySupplyChainGate pins ADR 0062 sections 17 and 19.
 func TestTheReleaseWorkflowKeepsEverySupplyChainGate(t *testing.T) {
-	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	wf := releasePipeline(t)
 
 	gates := []struct{ needle, what string }{
 		{"trivy-action", "vulnerability scan"},
@@ -220,11 +265,15 @@ func TestTheReleaseWorkflowKeepsEverySupplyChainGate(t *testing.T) {
 // every dependency has succeeded. This checks that the dependency graph still
 // says so, and that the semver tag is written nowhere else.
 func TestTheSemverTagIsAppliedLast(t *testing.T) {
-	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	caller := withoutComments(readRepoFile(t, releaseWorkflow))
+	shared := withoutComments(readRepoFile(t, sharedWorkflow))
+	wf := releasePipeline(t)
 
-	needs := jobNeeds(wf)
-	required := []string{"identity", "stage", "verify", "smoke-amd64"}
-	for _, r := range required {
+	// A reusable-workflow call succeeds only when every job inside it succeeds,
+	// so `publish -> stage-and-verify` is a stronger edge than the four separate
+	// edges it replaced: it cannot be satisfied by a subset.
+	needs := jobNeeds(caller)
+	for _, r := range []string{"identity", "stage-and-verify", "source", "integration"} {
 		if !reaches(needs, "publish", r) {
 			t.Errorf("job 'publish' does not depend on '%s'.\n\n"+
 				"Without that edge GitHub may schedule the semver tag before %s has "+
@@ -232,33 +281,129 @@ func TestTheSemverTagIsAppliedLast(t *testing.T) {
 				r, r)
 		}
 	}
-	// And those gates must themselves sit behind the source and integration gates.
-	for _, r := range []string{"source", "integration", "reproducibility"} {
-		if !reaches(needs, "publish", r) {
-			t.Errorf("job 'publish' does not transitively depend on '%s'", r)
+	// And that edge only means anything if the shared workflow still contains the
+	// gates. A call to a machinery file that no longer verifies anything is a
+	// dependency on nothing.
+	sharedGraph := jobNeeds(shared)
+	for _, job := range []string{"reproducibility", "stage", "verify", "smoke-amd64"} {
+		if _, ok := sharedGraph[job]; !ok {
+			t.Errorf("the shared machinery no longer defines job %q, so depending on it proves nothing", job)
 		}
 	}
+	// A gate that cannot fail the call is not a gate.
+	if strings.Contains(shared, "continue-on-error") {
+		t.Error("a job in the shared machinery is continue-on-error; its failure would not block publication")
+	}
+	if strings.Contains(caller, "uses: ./.github/workflows/oci-stage-verify.yml") &&
+		strings.Contains(caller, "if: always()\n    uses:") {
+		t.Error("the release workflow calls the shared machinery unconditionally on failure")
+	}
 
-	// The semver tag must be created exactly once, and by an actual command
-	// rather than a comment describing one.
+	// The semver tag must be created exactly once, in the caller, by an actual
+	// command rather than a comment describing one.
 	invocations := regexp.MustCompile(`(?m)^\s*docker buildx imagetools create`).FindAllString(wf, -1)
 	if len(invocations) != 1 {
 		t.Errorf("expected exactly one `docker buildx imagetools create` invocation "+
 			"(the semver tag); found %d", len(invocations))
 	}
+	// And it must live in the caller. The shared machinery is invoked by a
+	// dispatch-triggered validation workflow too; a semver tag written there
+	// would be reachable from a branch.
+	if strings.Contains(shared, "imagetools create") {
+		t.Error("the shared machinery creates a registry tag. Public identity is the " +
+			"caller's authority: validate-oci.yml runs this same file from a branch.")
+	}
+
 	// The staged push must use the SHA tag, never the semver tag.
 	if strings.Contains(wf, "push=true") && !strings.Contains(wf, "sha_tag }},push=true") {
 		t.Error("the staging push does not use the sha-<commit> tag. " +
 			"Pushing the semver tag during staging would publish it before validation.")
 	}
-	if !strings.Contains(wf, "already exists. Semver tags are immutable") {
+	if !strings.Contains(caller, "already exists. Semver tags are immutable") {
 		t.Error("the workflow no longer refuses to overwrite an existing semver tag")
+	}
+}
+
+// TestTheStagingTagIsAFullCommitAndImmutable pins ADR 0062 section 21.
+//
+// `sha-<commit>` is an identity claim — this source produced these bits — and
+// Phase 7.1-V made it enforceable rather than conventional. Two separate
+// properties:
+//
+//   - **Full SHA.** An abbreviated SHA is a registry identity that can collide,
+//     and a collision means two sources claiming one immutable tag. The
+//     abbreviation was what the pipeline used before this phase.
+//   - **No silent overwrite.** If the tag exists, the run compares its platform
+//     manifests against a fresh reproducible build and either reuses the
+//     identical digest or stops. Overwriting would falsify the claim for every
+//     signature already made against it.
+func TestTheStagingTagIsAFullCommitAndImmutable(t *testing.T) {
+	for _, name := range []string{releaseWorkflow, validateWorkflow} {
+		wf := withoutComments(readRepoFile(t, name))
+		if strings.Contains(wf, "sha_tag=sha-$(git rev-parse --short") {
+			t.Errorf("%s builds the staging tag from an abbreviated SHA. "+
+				"An abbreviation can collide, and this tag is an immutable identity.", name)
+		}
+		if !regexp.MustCompile(`sha_tag=sha-(\$\(git rev-parse HEAD\)|\$\{revision\})`).MatchString(wf) {
+			t.Errorf("%s does not derive the staging tag from the full commit SHA", name)
+		}
+	}
+
+	shared := withoutComments(readRepoFile(t, sharedWorkflow))
+
+	// The push must be conditional on the pre-flight check. Without the
+	// condition the check is advice and the tag is mutable again.
+	if !strings.Contains(shared, "if: steps.preflight.outputs.exists != 'true'") {
+		t.Error("the staged push is not gated on the staging-tag pre-flight check, " +
+			"so an existing tag would be silently overwritten")
+	}
+
+	// Scoped to the pre-flight step, and it must *exit*. A mismatch that only
+	// prints is a tag that gets overwritten with a warning: mutation testing
+	// showed a whole-file check for the error message stayed green after the
+	// `sys.exit(1)` beneath it was deleted.
+	pre := stepBlock(t, shared, "Staging tag is absent, or already holds exactly these bits")
+	if !strings.Contains(pre, "refusing to re-point it") {
+		t.Error("a staging-tag digest mismatch is not reported")
+	}
+	if !strings.Contains(pre, "sys.exit(1)") {
+		t.Error("a staging-tag digest mismatch does not stop the run. Printing a warning " +
+			"and continuing would re-point an immutable identity at different bits.")
+	}
+	// Comparison must be at the platform level. ADR 0062 §16: the index digest is
+	// not reproducible while provenance is enabled, so comparing indexes would
+	// report every honest re-run as tampering. Scoped, because these names also
+	// appear in the verification job.
+	if !strings.Contains(pre, "got != want") {
+		t.Error("the staging-tag pre-flight does not compare the published platform digests " +
+			"against the rebuilt ones")
+	}
+	// The digests must be *declared* to the step, not merely named inside its
+	// script. A heredoc referencing an environment variable nothing exports is a
+	// runtime failure, and a guard that reads the script body alone cannot see it.
+	env, _, _ := strings.Cut(pre, "run: |")
+	for _, want := range []string{
+		"WANT_AMD64: ${{ needs.reproducibility.outputs.amd64_digest }}",
+		"WANT_ARM64: ${{ needs.reproducibility.outputs.arm64_digest }}",
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("the staging-tag pre-flight is not given the reproduced platform "+
+				"digests (looked for %q)", want)
+		}
+	}
+
+	// And the reproducibility proof itself must fail the run, not merely report.
+	repro := stepBlock(t, shared, "Build twice and compare platform digests")
+	if !strings.Contains(repro, "::error::platform image digests are not reproducible") ||
+		!strings.Contains(repro, "sys.exit(1)") {
+		t.Error("a non-reproducible build does not fail the run. Every immutability " +
+			"decision downstream compares against the digests this step produces.")
 	}
 }
 
 // TestTheReleaseWorkflowBuildsExactlyTheOfficialArchitectures pins ADR 0062 §9.
 func TestTheReleaseWorkflowBuildsExactlyTheOfficialArchitectures(t *testing.T) {
-	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	wf := releasePipeline(t)
 
 	if !strings.Contains(wf, "--platform linux/amd64,linux/arm64") {
 		t.Error("the release workflow does not build both official architectures")
@@ -278,7 +423,9 @@ func TestTheReleaseWorkflowBuildsExactlyTheOfficialArchitectures(t *testing.T) {
 // itself. A tag is mutable; this workflow holds packages: write and an OIDC
 // identity, so a compromised action tag would be a release-signing compromise.
 func TestTheReleaseWorkflowPinsEveryAction(t *testing.T) {
-	wf := readRepoFile(t, releaseWorkflow)
+	wf := readRepoFile(t, releaseWorkflow) + "\n" +
+		readRepoFile(t, sharedWorkflow) + "\n" +
+		readRepoFile(t, validateWorkflow)
 
 	uses := regexp.MustCompile(`uses:\s*(\S+)`)
 	sha := regexp.MustCompile(`^[^@]+@[a-f0-9]{40}$`)
@@ -303,7 +450,7 @@ func TestTheReleaseWorkflowPinsEveryAction(t *testing.T) {
 // Registry authentication happens at the client layer. Nothing secret should
 // reach the build, because anything that reaches the build can reach a layer.
 func TestTheReleaseWorkflowCarriesNoBuildSecrets(t *testing.T) {
-	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	wf := releasePipeline(t)
 
 	for _, forbidden := range []string{"--secret", "mount=type=secret", "--build-arg TOKEN", "--build-arg SECRET"} {
 		if strings.Contains(wf, forbidden) {
@@ -323,14 +470,15 @@ func TestTheReleaseWorkflowCarriesNoBuildSecrets(t *testing.T) {
 
 // TestTheReleaseWorkflowDoesNotRaceOrPublishLatest pins ADR 0062 section 13.
 func TestTheReleaseWorkflowDoesNotRaceOrPublishLatest(t *testing.T) {
-	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	wf := releasePipeline(t) + "\n" + withoutComments(readRepoFile(t, validateWorkflow))
+	caller := withoutComments(readRepoFile(t, releaseWorkflow))
 
-	if !strings.Contains(wf, "cancel-in-progress: false") {
+	if !strings.Contains(caller, "cancel-in-progress: false") {
 		t.Error("the release workflow may be cancelled mid-publication. " +
 			"Interrupting a run that is pushing artifacts is not an improvement " +
 			"on two runs racing.")
 	}
-	if !strings.Contains(wf, "concurrency:") {
+	if !strings.Contains(caller, "concurrency:") {
 		t.Error("the release workflow has no concurrency group; two runs could race on one tag")
 	}
 	if regexp.MustCompile(`--tag\s+"?\$\{IMAGE\}:latest`).MatchString(wf) ||
@@ -428,16 +576,23 @@ func reaches(graph map[string][]string, from, target string) bool {
 // TestTheReleaseWorkflowGuardsCanFail proves every guard above is load-bearing.
 func TestTheReleaseWorkflowGuardsCanFail(t *testing.T) {
 	t.Run("job graph is parsed correctly", func(t *testing.T) {
-		wf := readRepoFile(t, releaseWorkflow)
-		graph := jobNeeds(wf)
-		if len(graph) < 8 {
-			t.Fatalf("parsed only %d jobs from the workflow: %v", len(graph), graph)
+		graph := jobNeeds(readRepoFile(t, releaseWorkflow))
+		if len(graph) < 5 {
+			t.Fatalf("parsed only %d jobs from the release workflow: %v", len(graph), graph)
 		}
 		if !reaches(graph, "publish", "source") {
 			t.Error("the parser cannot see that publish depends transitively on source")
 		}
 		if reaches(graph, "source", "publish") {
 			t.Error("the parser reports a cycle that does not exist")
+		}
+
+		shared := jobNeeds(readRepoFile(t, sharedWorkflow))
+		if len(shared) < 5 {
+			t.Fatalf("parsed only %d jobs from the shared machinery: %v", len(shared), shared)
+		}
+		if !reaches(shared, "verify", "reproducibility") {
+			t.Error("the parser cannot see that verify depends transitively on reproducibility")
 		}
 	})
 

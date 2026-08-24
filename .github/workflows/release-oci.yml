@@ -67,6 +67,7 @@ jobs:
       revision: ${{ steps.derive.outputs.revision }}
       source_date_epoch: ${{ steps.derive.outputs.source_date_epoch }}
       sha_tag: ${{ steps.derive.outputs.sha_tag }}
+      certificate_identity: ${{ steps.derive.outputs.certificate_identity }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -100,7 +101,17 @@ jobs:
             echo "::error::derived version '$version' != triggering tag '${GITHUB_REF_NAME}'"
             exit 1
           fi
-          echo "sha_tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          # The **full** 40-character SHA, not an abbreviation. The staging
+          # tag is an immutable identity and an abbreviated SHA is a registry
+          # identity that can collide as the repository grows; a collision
+          # would mean two sources claiming one immutable tag.
+          echo "sha_tag=sha-$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+          # The exact Fulcio SAN this release must produce. Computed here
+          # because identity is this workflow's authority: the shared machinery
+          # is told what it must be, and `cosign verify` is pinned to it rather
+          # than to a pattern.
+          echo "certificate_identity=https://github.com/${GITHUB_REPOSITORY}/.github/workflows/oci-stage-verify.yml@${GITHUB_REF}" >> "$GITHUB_OUTPUT"
 
       # ADR 0062 section 13: a published semver tag is immutable. Checking
       # before building means a re-release attempt fails in seconds rather than
@@ -161,401 +172,67 @@ jobs:
         run: make integration-${{ matrix.suite }}
 
   # ---------------------------------------------------------------------------
-  # 4. Reproducibility proof
+  # 4. The shared OCI machinery
   # ---------------------------------------------------------------------------
   #
-  # ADR 0062 section 15 requires official images to be reproducible, so the
-  # release proves it rather than asserting it. Built twice with no cache, and
-  # compared at the platform manifest level — never the index, which references
-  # attestations that legitimately differ (ADR 0062 section 16).
-  reproducibility:
-    name: Reproducibility proof
-    runs-on: ubuntu-latest
-    needs: [identity]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Build twice and compare platform digests
-        env:
-          SOURCE_DATE_EPOCH: ${{ needs.identity.outputs.source_date_epoch }}
-          VERSION: ${{ needs.identity.outputs.version }}
-          REVISION: ${{ needs.identity.outputs.revision }}
-        run: |
-          set -eu
-          build() {
-            docker buildx build \
-              --platform linux/amd64,linux/arm64 \
-              --build-arg "VERSION=${VERSION}" \
-              --build-arg "REVISION=${REVISION}" \
-              --provenance=false --sbom=false --no-cache \
-              --output "type=oci,dest=$1,rewrite-timestamp=true" .
-          }
-          build /tmp/a.tar
-          build /tmp/b.tar
-          python3 - <<'PY'
-          import json, tarfile, sys
-
-          def platform_digests(path):
-              with tarfile.open(path) as t:
-                  index = json.load(t.extractfile('index.json'))
-                  top = index['manifests'][0]['digest'].replace(':', '/')
-                  listing = json.load(t.extractfile(f'blobs/{top}'))
-              out = {}
-              for m in listing['manifests']:
-                  p = m.get('platform', {})
-                  if p.get('architecture') != 'unknown':
-                      out[f"{p['os']}/{p['architecture']}"] = m['digest']
-              return out
-
-          a, b = platform_digests('/tmp/a.tar'), platform_digests('/tmp/b.tar')
-          ok = True
-          for k in sorted(set(a) | set(b)):
-              same = a.get(k) == b.get(k)
-              ok &= same
-              print(f"{k:14} {'IDENTICAL' if same else 'DIFFER'}  {a.get(k)}")
-          if not ok:
-              print('::error::platform image digests are not reproducible')
-              sys.exit(1)
-          PY
-
-  # ---------------------------------------------------------------------------
-  # 5. Stage under an immutable SHA tag
-  # ---------------------------------------------------------------------------
+  # Reproducibility, staging under the immutable `sha-<commit>` tag, index and
+  # label validation, the vulnerability scan, the CycloneDX SBOM, provenance,
+  # keyless signing, constrained verification, pull-by-digest and the native
+  # hardened runtime smoke all live in `oci-stage-verify.yml`.
   #
-  # The only push of image content in this workflow. It lands under
-  # `sha-<commit>`, which names the source and can never be mistaken for a
-  # release. The semver tag is applied by the final job, to this exact digest,
-  # and only after every gate below has passed.
-  stage:
-    name: Stage image
-    runs-on: ubuntu-latest
-    needs: [identity, source, integration, reproducibility]
-    # No id-token here: this job pushes, it does not sign. BuildKit's provenance
-    # and SBOM attestations are generated from the build itself and need no OIDC
-    # identity. Signing happens in `verify`, which is the only job that gets one.
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      # GITHUB_TOKEN, not a PAT. Nothing long-lived is stored for the registry.
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push by SHA tag
-        id: push
-        env:
-          SOURCE_DATE_EPOCH: ${{ needs.identity.outputs.source_date_epoch }}
-        run: |
-          set -eu
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --build-arg "VERSION=${{ needs.identity.outputs.version }}" \
-            --build-arg "REVISION=${{ needs.identity.outputs.revision }}" \
-            --provenance=mode=max \
-            --sbom=true \
-            --output "type=image,name=${IMAGE}:${{ needs.identity.outputs.sha_tag }},push=true,rewrite-timestamp=true" \
-            --metadata-file /tmp/meta.json \
-            .
-          digest="$(python3 -c 'import json;print(json.load(open("/tmp/meta.json"))["containerimage.digest"])')"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "staged ${IMAGE}@${digest}"
-
-  # ---------------------------------------------------------------------------
-  # 6. Validate the staged digest
-  # ---------------------------------------------------------------------------
+  # They live there because `validate-oci.yml` runs the same file. Duplicating
+  # this machinery so a validation workflow could rehearse it would have
+  # rehearsed the duplicate: the two copies drift on the first edit that touches
+  # only one, and the release path would be the one nobody ever exercised. As
+  # written, every remote behaviour Phase 7.1-V proved — GHCR authentication,
+  # native amd64 execution, keyless signing, referrer binding, pull-by-digest —
+  # was proven about *this* code path.
   #
-  # Everything here addresses the digest, never a tag. A tag can be re-pointed;
-  # a digest is the artifact.
-  verify:
-    name: Verify staged image
-    runs-on: ubuntu-latest
-    needs: [identity, stage]
+  # What the shared workflow is not allowed to do is decide identity. It is
+  # handed a version, a revision, an epoch, a staging tag and the exact
+  # certificate identity it must produce, and it contains no step that writes a
+  # semver tag. Release authority stays here: the tag trigger above, and the
+  # `publish` job below.
+  stage-and-verify:
+    name: OCI
+    needs: [identity, source, integration]
+    uses: ./.github/workflows/oci-stage-verify.yml
     permissions:
       contents: read
       packages: write
       id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Exactly two runtime platforms. BuildKit attestations appear in the same
-      # index as `unknown/unknown` manifests; counting one as an architecture
-      # would report a three-architecture release that does not exist.
-      - name: Multi-arch index contains exactly amd64 and arm64
-        run: |
-          set -eu
-          docker buildx imagetools inspect "${IMAGE}@${{ needs.stage.outputs.digest }}" --raw > /tmp/index.json
-          python3 - <<'PY'
-          import json, sys
-          idx = json.load(open('/tmp/index.json'))
-          plats, attest = [], 0
-          for m in idx['manifests']:
-              p = m.get('platform', {})
-              if p.get('architecture') == 'unknown':
-                  attest += 1
-              else:
-                  plats.append(f"{p['os']}/{p['architecture']}")
-          print('runtime platforms:', sorted(plats))
-          print('attestation manifests:', attest)
-          if sorted(plats) != ['linux/amd64', 'linux/arm64']:
-              print('::error::index must expose exactly linux/amd64 and linux/arm64')
-              sys.exit(1)
-          PY
-
-      # ADR 0062 section 11: labels are projections of the Git tag. They are not
-      # authority, which is exactly why they must be checked against it.
-      - name: OCI labels match the release identity
-        run: |
-          set -eu
-          docker buildx imagetools inspect "${IMAGE}@${{ needs.stage.outputs.digest }}" \
-            --format '{{json .Image}}' > /tmp/cfg.json
-          python3 - <<'PY'
-          import json, os, sys
-          cfg = json.load(open('/tmp/cfg.json'))
-          # Multi-platform inspect returns one config per platform.
-          configs = list(cfg.values()) if isinstance(cfg, dict) and 'config' not in cfg else [cfg]
-          want = {
-              'org.opencontainers.image.version': os.environ['VERSION'],
-              'org.opencontainers.image.revision': os.environ['REVISION'],
-              'org.opencontainers.image.source': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}",
-          }
-          required = ['org.opencontainers.image.title',
-                      'org.opencontainers.image.description',
-                      'org.opencontainers.image.licenses']
-          bad = False
-          for c in configs:
-              labels = (c.get('config') or {}).get('Labels') or {}
-              for k, v in want.items():
-                  if labels.get(k) != v:
-                      print(f"::error::{k} is {labels.get(k)!r}, expected {v!r}")
-                      bad = True
-              for k in required:
-                  if not labels.get(k):
-                      print(f"::error::{k} is missing")
-                      bad = True
-          sys.exit(1 if bad else 0)
-          PY
-        env:
-          VERSION: ${{ needs.identity.outputs.version }}
-          REVISION: ${{ needs.identity.outputs.revision }}
-
-      # ADR 0062 section 19. Blocks on HIGH/CRITICAL. An exception is a
-      # deliberate, reviewed edit to .trivyignore naming the CVE and why it is
-      # unreachable in an image with no shell and no package manager — not a
-      # blanket --ignore-unfixed.
-      - name: Vulnerability scan
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
-        with:
-          image-ref: ${{ env.IMAGE }}@${{ needs.stage.outputs.digest }}
-          format: table
-          severity: HIGH,CRITICAL
-          exit-code: '1'
-          ignore-unfixed: false
-          trivyignores: .trivyignore
-
-      # BuildKit binds each attestation to the platform image it describes via
-      # the `vnd.docker.reference.digest` annotation. Generating an attestation
-      # is not the claim; being attached to *this* release is.
-      - name: SBOM and provenance are bound to this digest
-        run: |
-          set -eu
-          python3 - <<'PY'
-          import json, sys
-          idx = json.load(open('/tmp/index.json'))
-          images = {m['digest'] for m in idx['manifests']
-                    if m.get('platform', {}).get('architecture') != 'unknown'}
-          attached = set()
-          for m in idx['manifests']:
-              ann = m.get('annotations') or {}
-              ref = ann.get('vnd.docker.reference.digest')
-              if ann.get('vnd.docker.reference.type') == 'attestation-manifest' and ref:
-                  if ref not in images:
-                      print(f'::error::attestation references {ref}, which is not in this index')
-                      sys.exit(1)
-                  attached.add(ref)
-          missing = images - attached
-          if missing:
-              print(f'::error::platform images without attestations: {sorted(missing)}')
-              sys.exit(1)
-          print(f'every platform image ({len(images)}) carries an attestation bound to its digest')
-          PY
-
-      # A CycloneDX SBOM for the release record, describing this digest.
-      - name: Export CycloneDX SBOM
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
-        with:
-          image-ref: ${{ env.IMAGE }}@${{ needs.stage.outputs.digest }}
-          format: cyclonedx
-          output: sbom.cdx.json
-          severity: HIGH,CRITICAL
-          skip-setup-trivy: true
-
-      - name: SBOM is non-empty and names the expected components
-        run: |
-          set -eu
-          python3 - <<'PY'
-          import json, sys
-          sbom = json.load(open('sbom.cdx.json'))
-          names = {c.get('name', '') for c in sbom.get('components', [])}
-          print(f"SBOM components: {len(names)}")
-          missing = [w for w in ('svcdoctor', 'ca-certificates') if not any(w in n for n in names)]
-          if not any('kmsg' in n or 'franz-go' in n for n in names):
-              missing.append('franz-go/kmsg')
-          if missing:
-              print(f'::error::SBOM is missing expected components: {missing}')
-              sys.exit(1)
-          PY
-
-      # ADR 0062 section 17: keyless, over the digest, never over a tag.
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
-
-      - name: Sign the digest (keyless, GitHub OIDC)
-        run: cosign sign --yes "${IMAGE}@${{ needs.stage.outputs.digest }}"
-
-      # Signing succeeding is not the gate. Verification against a *constrained*
-      # identity is: an unconstrained `cosign verify` accepts any valid Sigstore
-      # signature from anyone, which is close to no check at all.
-      - name: Verify the signature against this repository and tag
-        run: |
-          cosign verify \
-            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-oci.yml@refs/tags/${GITHUB_REF_NAME}" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "${IMAGE}@${{ needs.stage.outputs.digest }}"
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sbom-${{ needs.identity.outputs.version }}
-          path: sbom.cdx.json
+    with:
+      version: ${{ needs.identity.outputs.version }}
+      revision: ${{ needs.identity.outputs.revision }}
+      source_date_epoch: ${{ needs.identity.outputs.source_date_epoch }}
+      sha_tag: ${{ needs.identity.outputs.sha_tag }}
+      certificate_identity: ${{ needs.identity.outputs.certificate_identity }}
+      run_arm64_smoke: ${{ vars.ENABLE_ARM64_SMOKE == 'true' }}
 
   # ---------------------------------------------------------------------------
-  # 7. Native runtime smoke, by digest
+  # 5. Publish the semver tag — LAST
   # ---------------------------------------------------------------------------
   #
-  # Closes the evidence gap Phase 7.1 left open: amd64 was previously built and
-  # run only under emulation. `ubuntu-latest` is native amd64, and the image is
-  # pulled by digest so what is tested is exactly what will be tagged.
-  smoke-amd64:
-    name: Native amd64 smoke
-    runs-on: ubuntu-latest
-    needs: [identity, stage]
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull by digest and verify the runtime contract
-        run: |
-          set -eu
-          ref="${IMAGE}@${{ needs.stage.outputs.digest }}"
-          docker pull --platform linux/amd64 "$ref"
-
-          echo "== architecture is genuinely amd64 =="
-          arch="$(docker image inspect "$ref" --format '{{.Architecture}}')"
-          [ "$arch" = "amd64" ] || { echo "::error::pulled $arch, expected amd64"; exit 1; }
-
-          echo "== version matches the release tag =="
-          got="$(docker run --rm --platform linux/amd64 "$ref" --version)"
-          [ "$got" = "${{ needs.identity.outputs.version }}" ] \
-            || { echo "::error::binary reports '$got', tag is '${{ needs.identity.outputs.version }}'"; exit 1; }
-
-          echo "== runs hardened: non-root, read-only rootfs, no capabilities =="
-          docker run --rm --platform linux/amd64 \
-            --read-only --cap-drop=ALL --security-opt=no-new-privileges --user=65532:65532 \
-            "$ref" --version > /dev/null
-
-          echo "== image config: nonroot user, direct entrypoint, no exposed port =="
-          docker image inspect "$ref" --format '{{.Config.User}} {{json .Config.Entrypoint}} {{json .Config.ExposedPorts}}'
-          [ "$(docker image inspect "$ref" --format '{{.Config.User}}')" = "65532:65532" ] \
-            || { echo "::error::image does not run as 65532:65532"; exit 1; }
-
-          echo "== system CA roots are present and usable (no --tls-ca-file) =="
-          docker run --rm --platform linux/amd64 \
-            --read-only --cap-drop=ALL --user=65532:65532 "$ref" \
-            diagnose kafka --host www.google.com --port 443 --sasl-mechanism PLAIN \
-            --tls require --timeout 20s --output json > /tmp/tls.json || true
-          python3 - <<'PY'
-          import json, sys
-          d = json.load(open('/tmp/tls.json'))
-          tls = [n for n in d['evidence']['nodes'] if n['step'] == 'tls.handshake']
-          if not tls or not all(n['state'] == 'PASS' for n in tls):
-              print('::error::TLS did not verify against the image system trust store')
-              sys.exit(1)
-          attrs = tls[0].get('attributes') or {}
-          print('trust source:', attrs.get('tls.trust_source', {}).get('value'))
-          PY
-
-  # Optional native arm64 smoke. GitHub's arm64 runners are free for public
-  # repositories; they are not free for private ones, and ADR 0062 does not
-  # require paid infrastructure. Enable by setting the repository variable
-  # ENABLE_ARM64_SMOKE=true rather than by editing this file.
-  smoke-arm64:
-    name: Native arm64 smoke
-    if: vars.ENABLE_ARM64_SMOKE == 'true'
-    runs-on: ubuntu-24.04-arm
-    needs: [identity, stage]
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull by digest and run
-        run: |
-          set -eu
-          ref="${IMAGE}@${{ needs.stage.outputs.digest }}"
-          docker pull --platform linux/arm64 "$ref"
-          [ "$(docker image inspect "$ref" --format '{{.Architecture}}')" = "arm64" ]
-          got="$(docker run --rm --platform linux/arm64 --read-only --cap-drop=ALL \
-                   --user=65532:65532 "$ref" --version)"
-          [ "$got" = "${{ needs.identity.outputs.version }}" ]
-
-  # ---------------------------------------------------------------------------
-  # 8. Publish the semver tag — LAST
-  # ---------------------------------------------------------------------------
+  # `needs` is the enforcement. This job cannot run unless identity, the source
+  # and integration gates and every gate inside the shared machinery have
+  # succeeded, because GitHub will not schedule it. There is no ordering to get
+  # wrong inside a script.
   #
-  # `needs` is the enforcement. This job cannot run unless identity, source,
-  # integration, reproducibility, staging, verification and the native amd64
-  # smoke have all succeeded, because GitHub will not schedule it. There is no
-  # ordering to get wrong inside a script.
+  # This is also the one thing the shared workflow deliberately cannot do. A
+  # semver tag is created here, in a workflow whose only trigger is a semver tag
+  # push — so an artifact built from a branch has no path to this step.
   #
-  # `imagetools create --tag` re-points the tag at the digest that was validated;
-  # it does not rebuild or re-index. Measured in Phase 7.1-P.
+  # `imagetools create --tag` re-points the tag at the digest that was
+  # validated; it does not rebuild or re-index. Measured in Phase 7.1-P.
   publish:
     name: Publish semver tag
     runs-on: ubuntu-latest
-    needs: [identity, stage, verify, smoke-amd64]
+    needs: [identity, stage-and-verify]
     permissions:
       contents: read
       packages: write
     outputs:
-      digest: ${{ needs.stage.outputs.digest }}
+      digest: ${{ needs.stage-and-verify.outputs.digest }}
     steps:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -585,7 +262,7 @@ jobs:
           set -eu
           docker buildx imagetools create \
             --tag "${IMAGE}:${GITHUB_REF_NAME}" \
-            "${IMAGE}@${{ needs.stage.outputs.digest }}"
+            "${IMAGE}@${{ needs.stage-and-verify.outputs.digest }}"
 
       # The tag must resolve to the digest that passed every gate. If it does
       # not, something re-indexed the image and the release is not what was
@@ -595,17 +272,17 @@ jobs:
           set -eu
           got="$(docker buildx imagetools inspect "${IMAGE}:${GITHUB_REF_NAME}" \
                   --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          want="${{ needs.stage.outputs.digest }}"
+          want="${{ needs.stage-and-verify.outputs.digest }}"
           [ "$got" = "$want" ] || { echo "::error::tag resolves to $got, expected $want"; exit 1; }
           echo "${IMAGE}:${GITHUB_REF_NAME} -> $got"
 
   # ---------------------------------------------------------------------------
-  # 9. Release summary
+  # 6. Release summary
   # ---------------------------------------------------------------------------
   summary:
     name: Release summary
     runs-on: ubuntu-latest
-    needs: [identity, stage, verify, smoke-amd64, publish]
+    needs: [identity, stage-and-verify, publish]
     if: always()
     steps:
       - name: Write summary
@@ -618,18 +295,17 @@ jobs:
             echo "| Version | \`${{ needs.identity.outputs.version }}\` |"
             echo "| Commit | \`${{ needs.identity.outputs.revision }}\` |"
             echo "| Image | \`${IMAGE}:${{ needs.identity.outputs.version }}\` |"
-            echo "| Digest | \`${{ needs.stage.outputs.digest }}\` |"
+            echo "| Digest | \`${{ needs.stage-and-verify.outputs.digest }}\` |"
+            echo "| linux/amd64 | \`${{ needs.stage-and-verify.outputs.amd64_digest }}\` |"
+            echo "| linux/arm64 | \`${{ needs.stage-and-verify.outputs.arm64_digest }}\` |"
             echo "| Staging tag | \`${{ needs.identity.outputs.sha_tag }}\` |"
             echo "| Architectures | linux/amd64, linux/arm64 |"
-            echo "| Vulnerability scan | ${{ needs.verify.result }} |"
-            echo "| SBOM + provenance | ${{ needs.verify.result }} |"
-            echo "| Signature verified | ${{ needs.verify.result }} |"
-            echo "| Native amd64 smoke | ${{ needs.smoke-amd64.result }} |"
+            echo "| Scan, SBOM, provenance, signature | ${{ needs.stage-and-verify.result }} |"
             echo "| Semver tag published | ${{ needs.publish.result }} |"
             echo
             echo "Pin the digest in production:"
             echo
             echo '```'
-            echo "${IMAGE}@${{ needs.stage.outputs.digest }}"
+            echo "${IMAGE}@${{ needs.stage-and-verify.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
