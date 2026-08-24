@@ -28,7 +28,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: svcdoctor
-          # The semver tag is the readable reference and is immutable: :v0.3.1
+          # The semver tag is the readable reference and is immutable: :v0.3.2
           # will always resolve to the digest that was signed and scanned.
           #
           # Production should pin the digest instead. A tag is a name resolved at
@@ -37,9 +37,9 @@ spec:
           # verified with `cosign verify` is provably the image that ran:
           #   image: ghcr.io/hakanaltindag/svcdoctor@sha256:<release digest>
           # Resolve it once with:
-          #   docker buildx imagetools inspect ghcr.io/hakanaltindag/svcdoctor:v0.3.1 \
+          #   docker buildx imagetools inspect ghcr.io/hakanaltindag/svcdoctor:v0.3.2 \
           #     --format '{{json .Manifest.Digest}}'
-          image: ghcr.io/hakanaltindag/svcdoctor:v0.3.1
+          image: ghcr.io/hakanaltindag/svcdoctor:v0.3.2
           imagePullPolicy: IfNotPresent
           args:
             - diagnose

@@ -34,6 +34,11 @@ import (
 
 const validateWorkflow = ".github/workflows/validate-oci.yml"
 
+// releaseNotes is the notes file for the release candidate currently being
+// prepared. Named once because it moves every time a tag burns: v0.3.0's notes
+// became v0.3.1's, and v0.3.1's became these.
+const releaseNotes = "docs/releases/v0.3.2.md"
+
 // stepBlock returns the body of the named workflow step.
 //
 // Whole-file substring guards are not enough here, and mutation testing is what
@@ -1105,11 +1110,25 @@ func TestTheReleaseCeremonyIsDocumented(t *testing.T) {
 
 // TestNoDocumentPresentsTheRetiredVersionAsReleased pins ADR 0062 §21c.
 //
-// `v0.3.0` is a Git tag that published nothing, and it is retired rather than
-// reused because the Go checksum database recorded it permanently. A document
-// that offers it as an install target is offering a command that fails.
+// `v0.3.0` and `v0.3.1` are Git tags that published nothing, and they are
+// retired rather than reused because the Go checksum database records a tag
+// permanently once it is fetched. A document that offers either as an install
+// target is offering a command that fails.
+//
+// They failed differently, and the second failure is the reason this is a list
+// rather than a constant. `v0.3.0` was tagged on a tree with no release
+// workflow, so nothing ran. `v0.3.1` ran and was stopped by its own integration
+// gate. Both leave an immutable tag and no artifact, so both need the same
+// treatment in documentation — and a guard written for one version does not
+// notice the next one.
 func TestNoDocumentPresentsTheRetiredVersionAsReleased(t *testing.T) {
-	const retired = "v0.3.0"
+	for _, retired := range []string{"v0.3.0", "v0.3.1"} {
+		assertRetiredVersionIsNotOffered(t, retired)
+	}
+}
+
+func assertRetiredVersionIsNotOffered(t *testing.T, retired string) {
+	t.Helper()
 
 	for _, name := range []string{
 		"README.md",
@@ -1134,17 +1153,17 @@ func TestNoDocumentPresentsTheRetiredVersionAsReleased(t *testing.T) {
 				continue
 			}
 			t.Errorf("%s references the retired version %s as if it were usable:\n  %s\n\n"+
-				"ADR 0062 §21c: v0.3.0 was tagged on a commit with no release workflow, "+
-				"published nothing, and is succeeded by v0.3.1.",
+				"ADR 0062 §21c: a semver tag that published nothing is retired, never "+
+				"reused, because the Go checksum database records it permanently.",
 				name, retired, strings.TrimSpace(line))
 		}
 	}
 
 	// And the release notes must name the correct baseline. The last public
 	// GitHub Release was v0.1.0, not the last Git tag.
-	notes, ok := readRepoFileOptional(t, "docs/releases/v0.3.1.md")
+	notes, ok := readRepoFileOptional(t, releaseNotes)
 	if !ok {
-		t.Fatal("docs/releases/v0.3.1.md is missing")
+		t.Fatalf("%s is missing", releaseNotes)
 	}
 	// The baseline *statement*, not any mention of the version: the notes name
 	// v0.1.0 in several places, so a whole-file check stayed green when the
@@ -1154,11 +1173,22 @@ func TestNoDocumentPresentsTheRetiredVersionAsReleased(t *testing.T) {
 			"v0.2.0 and v0.3.0 are Git tags, not published releases — writing notes " +
 			"as though either shipped would describe changes users never received.")
 	}
-	// And they must say why the intervening tags are not releases.
-	for _, needle := range []string{"v0.2.0", "v0.3.0"} {
+	// And they must say why the intervening tags are not releases. Three of them
+	// now, which is the point: each burned tag has to be accounted for, or a
+	// reader counting versions concludes releases went missing.
+	for _, needle := range []string{"v0.2.0", "v0.3.0", "v0.3.1"} {
 		if !strings.Contains(notes, needle) {
 			t.Errorf("the release notes do not account for the %s tag", needle)
 		}
+	}
+	// v0.3.1's specific lesson: it is the first tag to reach the pipeline and be
+	// stopped by it. Notes that record it as merely "never published" lose the
+	// distinction between a gate that was missing and a gate that worked.
+	if !strings.Contains(notes, "skipped") {
+		t.Error("the release notes do not record that v0.3.1's publication jobs were " +
+			"skipped rather than failed.\n\n" +
+			"That is the difference between a tag that published nothing because no " +
+			"gate ran and one that published nothing because a gate held.")
 	}
 }
 
