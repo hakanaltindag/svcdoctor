@@ -1,0 +1,85 @@
+# One Kafka diagnosis, run from inside the cluster, then gone.
+#
+# This is the case in-cluster vantage exists for. svcdoctor authenticates once,
+# to the bootstrap endpoint you name, obtains Metadata, and then measures every
+# endpoint the cluster advertises from this Pod — credential-free. A bootstrap
+# that works while its advertised brokers do not is the failure this catches,
+# and it is invisible from outside the Pod network.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: svcdoctor-kafka
+spec:
+  backoffLimit: 0
+  # Above --timeout. The advertised-broker sweep measures several endpoints, so
+  # allow more room than the PostgreSQL example.
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: svcdoctor
+          # NOTE: this image is NOT published yet. Build it locally with
+          #   scripts/build-image.sh --dev
+          # and reference the resulting sha- tag, or wait for the first release.
+          # After publication, production deployments should pin the digest:
+          #   image: ghcr.io/hakanaltindag/svcdoctor@sha256:<digest of v0.3.0>
+          image: ghcr.io/hakanaltindag/svcdoctor:v0.3.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - diagnose
+            - kafka
+            - --host=kafka-bootstrap.messaging.svc.cluster.local
+            - --port=9093
+            # No default: svcdoctor never chooses which framing carries your
+            # password. PLAIN and SCRAM-SHA-256 are the mechanisms it performs.
+            - --sasl-mechanism=SCRAM-SHA-256
+            - --user=svcdoctor
+            - --password-file=/run/secrets/kafka/password
+            - --tls=require
+            - --tls-ca-file=/run/certs/ca.crt
+            - --timeout=60s
+            - --output=json
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: credential
+              mountPath: /run/secrets/kafka
+              readOnly: true
+            - name: trust
+              mountPath: /run/certs
+              readOnly: true
+      volumes:
+        - name: credential
+          secret:
+            secretName: svcdoctor-kafka
+            defaultMode: 0400
+            items:
+              - key: password
+                path: password
+        - name: trust
+          configMap:
+            name: svcdoctor-kafka-ca
+            optional: true
+            items:
+              - key: ca.crt
+                path: ca.crt
