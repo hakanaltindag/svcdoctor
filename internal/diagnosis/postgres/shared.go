@@ -158,7 +158,44 @@ const (
 	// would be inventing an identity (ADR 0040 section 18.1).
 	sentenceNotNative = "The response did not carry the non-localized severity field that a " +
 		"PostgreSQL backend has sent since 9.6."
+
+	// sentenceNoConnectionSlot restates the endpoint's own condition and stops
+	// there.
+	//
+	// 53300 is PostgreSQL's too_many_connections. The peer named it; svcdoctor
+	// is not inferring it from position, from timing or from a message, exactly
+	// as 3D000 and 42501 are handled a step away.
+	//
+	// What it deliberately does **not** say, because none of it follows from the
+	// code: that max_connections is configured too low, that a client is leaking
+	// connections, that a pool is misconfigured, that load spiked, or that the
+	// exhaustion is persistent rather than the instant this run measured. A
+	// second run a moment later may connect. The remedy differs for every one of
+	// those causes, and the evidence separates none of them.
+	sentenceNoConnectionSlot = "That is the endpoint's own too_many_connections condition: it " +
+		"refused because no connection slot was available to it at that moment."
 )
+
+// namedConditions are the SQLSTATEs whose condition svcdoctor may restate.
+//
+// Membership requires two things, and both were missing until Phase 7.3A. The
+// code has to name a condition specifically enough that restating it adds
+// information beyond the five characters already printed — 08P01 fails this,
+// because pgBouncer returns it for everything. And svcdoctor has to have watched
+// a real endpoint produce it, so the entry records a measurement rather than a
+// reading of the PostgreSQL source.
+//
+// It is deliberately not a SQLSTATE dictionary. ADR 0039 section 7.1 refuses one
+// because the answerable question is *what does this code prove here*, not *what
+// does this code mean*; every entry below has to be true in any window a floor
+// finding can be raised from, since floorDetail serves all three. A code whose
+// meaning depends on the window belongs in that window's classifier, where 3D000
+// and 42501 already are.
+var namedConditions = map[string]string{
+	// Measured in Phase 7.3A against PostgreSQL 18.6: max_connections reached,
+	// authentication completed, session refused before ReadyForQuery.
+	"53300": sentenceNoConnectionSlot,
+}
 
 // floorDetail assembles a floor finding's detail from the node's own record.
 //
@@ -173,13 +210,25 @@ const (
 func floorDetail(base string, node domain.Evidence) string {
 	parts := []string{base}
 
+	named := ""
 	if code, ok := stringAttr(node, servicepostgres.AttrSQLState); ok && code != "" {
 		parts = append(parts, "The endpoint reported SQLSTATE "+code+".")
+		named = namedConditions[code]
 	}
 	if native, ok := boolAttr(node, servicepostgres.AttrErrorIsNative); ok && !native {
 		parts = append(parts, sentenceNotNative)
 	}
-	if node.FailureClass() == domain.FailureProtocolUnexpectedResponse {
+	switch {
+	case named != "":
+		// The peer named the condition, so the attribution sentence would be
+		// false. ADR 0040 section 8.1 already made that sentence conditional for
+		// exactly this reason: understating the evidence is a different error
+		// from overstating it and is still an error. Phase 7.3A measured the
+		// understatement — an endpoint reported 53300 and svcdoctor printed the
+		// code and "could not attribute this outcome to a specific cause" in the
+		// same finding, which is a contradiction a reader has to resolve.
+		parts = append(parts, named)
+	case node.FailureClass() == domain.FailureProtocolUnexpectedResponse:
 		parts = append(parts, sentenceUnattributable)
 	}
 
