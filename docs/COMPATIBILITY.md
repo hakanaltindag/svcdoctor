@@ -126,6 +126,36 @@ is unchanged at one external module.
 evidence unless the peer supplied it and the product has a reason to expose it, and neither is
 true today.
 
+## 5b. Where svcdoctor runs, which is not the same question
+
+Everything above grades the *peers* svcdoctor has been run against. This section grades the
+*execution surface* it runs from, because Phase 7.1 added one: an OCI container image.
+
+**The container changes vantage, not compatibility.** Every peer row above keeps its level
+unchanged — a container is not a new implementation to be compatible with, and running the
+same client from a different network position does not re-test the server. What was measured
+is that containerization does not alter what svcdoctor concludes: schema version, evidence
+states, findings and summary are identical between a native and a containerized run against
+the same target. The only difference observed was *which* paths were measured, because a name
+resolves differently from different positions — and reporting that difference is the product
+working, not a discrepancy.
+
+| Execution surface | Tested? | Level | Notes |
+|---|---|---|---|
+| **Native binary**, macOS/Linux | Yes, throughout | **3 — SUPPORTED** | How every integration suite runs |
+| **OCI image**, `linux/arm64` | Yes — full PostgreSQL, Apache Kafka and Redpanda journeys, hardened runtime | **3 — SUPPORTED** | Built and run **natively** on arm64. `readOnlyRootFilesystem`, non-root 65532, all capabilities dropped |
+| **OCI image**, `linux/amd64` | Built; run under **emulation** only | **2 — RUN, NOT NATIVELY** | The manifest is correct and the binary executes, but emulation is supporting evidence, not native production validation |
+| **Kubernetes Job**, k3s v1.33.3 | Yes — Job completed, cluster DNS, secret mount, hardened `securityContext` | **2 — RUN** | No committed fixture, so not Level 3. NetworkPolicy enforcement was **not** verifiable: that cluster accepts NetworkPolicy objects without enforcing them |
+| **Any published registry image** | **No** | **—** | **Nothing has been published.** No image exists at GHCR, Docker Hub or anywhere else |
+
+The runtime contract is [ADR 0062](decisions/0062-oci-runtime-and-kubernetes-execution-model.md).
+
+**What the container is for.** The reason this surface exists is the same reason vantage is a
+first-class concept: a Kafka bootstrap endpoint can be reachable while the brokers it
+advertises are not, and only a client standing inside the target network can observe that.
+Measured from a container against the three-broker fixture — metadata obtained, `0 of 3
+advertised broker endpoints reached`, and **zero** SASL bytes sent to any advertised endpoint.
+
 ## 6. How a row moves up
 
 **To Level 2**: run svcdoctor against a real instance and record what happened, including what

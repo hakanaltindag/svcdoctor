@@ -1691,6 +1691,36 @@ and remote execution contexts are future extensions and are deliberately under-s
 Every topology and connectivity finding retains its vantage context. See ADR 0012 and
 `docs/REPORT_SCHEMA.md`.
 
+## 15b. Container and Kubernetes execution surface
+
+An OCI image is not packaging for this product; it is a **network position**. Every
+connectivity finding svcdoctor makes is already qualified by vantage (section 15), and running
+inside a Docker bridge network, a Kubernetes Pod or a `hostNetwork` Pod changes what DNS
+answers, what routes exist, what a firewall permits and what intercepts TLS. Those are
+different observations, not different quality of observation.
+
+The boundary this creates is the same one section 15 draws, and the container does not move
+it. The image contributes a trust store, a non-root identity and a resolver configuration.
+It contributes **no diagnosis**: no adapter, probe, rule or renderer knows it is in a
+container, and none may learn. There is no Kubernetes-specific DNS logic, no in-cluster
+discovery and no Kubernetes API access — svcdoctor observes the resolver behaviour the Pod
+has, exactly as it observes the resolver behaviour a laptop has.
+
+Two properties the runtime must preserve, both measured in Phase 7.1:
+
+- **Diagnosis semantics are identical to a native run.** Schema version, states, findings and
+  summary all match. The only permissible difference is *which* paths were measured, because
+  a name resolves differently from different positions — and that is the vantage the run is
+  reporting.
+- **Credential authority does not widen.** Being in the target's network is not authority.
+  The bootstrap endpoint the operator named is still the only endpoint offered a credential,
+  and discovered brokers still get credential-free DNS, TCP and TLS (ADR 0050).
+
+The runtime contract — base image, non-root identity, read-only root filesystem, no
+capabilities, direct entrypoint, Job rather than Deployment — is
+[ADR 0062](decisions/0062-oci-runtime-and-kubernetes-execution-model.md). Kubernetes
+correlation as a *diagnostic input* remains Phase 5 work and is unaffected by it.
+
 ## 16. Rules
 
 v0.1 uses typed Go rules. Do not add an external DSL. Rules must be deterministic and unit-testable. Expr/CEL may be considered later only for validated user-defined predicate requirements.

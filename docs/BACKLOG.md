@@ -3642,6 +3642,72 @@ That is an ADR 0056 amendment.
 
 AWS MSK IAM stays detect-and-explain only unless scope changes explicitly.
 
+## Phase 7.1 — OCI container and Kubernetes runtime: COMPLETE
+
+The image, the Kubernetes execution model and their guards are in the repository.
+[ADR 0062](decisions/0062-oci-runtime-and-kubernetes-execution-model.md) is **Accepted;
+runtime implemented, publication deferred to Phase 7.1-P**.
+
+## Phase 7.1-R — OCI release contract review: COMPLETE
+
+The four questions Phase 7.1 deferred are answered and normative in ADR 0062 §12–§20:
+distroless pinned by tag+digest, `ghcr.io/hakanaltindag/svcdoctor` as the single canonical
+registry, the Git semver tag as the sole version authority, required reproducibility scoped to
+platform image manifests, CycloneDX SBOM, keyless cosign over the digest, and required build
+provenance. `scripts/build-image.sh` is the official recipe and refuses a dirty tree or an
+untagged HEAD.
+
+Nothing is published. No `v0.3.0` tag exists.
+
+## Phase 7.1-P — OCI publication pipeline: NOT STARTED
+
+Implements the contract ADR 0062 §12–§20 now fixes. Everything here is deliberately absent
+from the repository today.
+
+- [ ] **GitHub Actions workflow triggered by a `v*` tag push.** Must validate the tag shape,
+      resolve tag → commit, and refuse any other ref. Permissions: `contents: read`,
+      `packages: write`, `id-token: write`, plus `attestations: write` if GitHub artifact
+      attestations are used. No `contents: write`. No static GHCR PAT — `GITHUB_TOKEN`
+      suffices. No Docker Hub credential.
+- [ ] **Native `linux/amd64` validation on an amd64 runner.** Required before the *first*
+      public OCI release; it does not block ADR 0062, which is accepted on architecture. Local
+      developer hardware must never be required to supply both architectures.
+- [ ] **Verify binary version == Git tag** inside the workflow, and fail the release if not.
+- [ ] **Vulnerability scan gate** per ADR 0062 §19: block exploitable HIGH/CRITICAL, allow a
+      documented non-applicable finding named in the release notes.
+- [ ] **SBOM (CycloneDX JSON)** attached to the GitHub Release and published as an OCI
+      attestation.
+- [ ] **Build provenance** bound to the final digest.
+- [ ] **Keyless cosign signature over the index digest**, never over a tag. If keyless signing
+      turns out to be unavailable, that is a STOP — not a reason to introduce a long-lived key.
+- [ ] **Post-push verification**: verify the signature and attestations against the digest,
+      then pull by digest and smoke-run `--version`.
+- [ ] **Apply the `:vX.Y.Z` tag last**, so an aborted run leaves no semver tag pointing at a
+      partial release (ADR 0062 §19).
+- [ ] **Record the published digest in the GitHub Release notes**, so the binary archives and
+      the image are discoverable from one record.
+- [ ] **Convert the ADR 0062 §12–§19 contract guards from documentation to CI enforcement**
+      where the pipeline makes it possible — version/tag agreement, revision/commit agreement,
+      signature target, provenance source ref. `internal/cli/containerclaims_test.go` holds
+      the part that is checkable without a registry.
+
+### Open evidence, not blockers
+
+- [ ] **NetworkPolicy behaviour on a CNI that enforces it.** The k3s used in Phase 7.1 accepts
+      NetworkPolicy objects without enforcing them, so the egress-denied case is **unverified**
+      — neither passed nor failed. It does not block publication: svcdoctor depends on no
+      NetworkPolicy API. The product behaviour it targets — vantage-dependent unreachability —
+      was measured directly through the Kafka advertised-broker sweep.
+- [ ] **Reproducibility across differing BuildKit versions, compression implementations and a
+      registry round-trip.** Untested, and therefore not claimed. ADR 0062 §15 scopes the
+      promise to the recipe as written.
+- [ ] **Development image publication (`:sha-<commit>`).** The recipe builds them; whether they
+      are ever pushed is deferred.
+
+Not wanted in this phase or the next: a Helm chart, an operator, a controller, a CRD, or any
+Kubernetes API access from svcdoctor itself. svcdoctor is a bounded diagnostic worker that a
+platform invokes; it does not become an agent.
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6

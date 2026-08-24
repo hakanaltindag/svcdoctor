@@ -584,14 +584,110 @@ go build -o svcdoctor ./cmd/svcdoctor
 The binary is statically linkable and builds with `CGO_ENABLED=0`. It needs no source tree,
 no configuration file and no runtime data directory.
 
-There are currently no Homebrew, Docker, apt, RPM or prebuilt-binary distributions.
+There are currently no Homebrew, apt or RPM distributions.
 Prebuilt release archives are available from GitHub Releases.
+
+A `Dockerfile` is in the repository and builds a working image, but **no container image is
+published to any registry** — not GHCR, not Docker Hub, not anywhere. Build it yourself
+(see [Running in a container](#running-in-a-container)) or use a release archive.
 `svcdoctor --version` reports the release the binary was built as, and the same value is
 recorded in every report. A binary installed from a tagged module —
 `go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.1.0` — reports that tag. A
 build from a working checkout reports `dev`, as does a build from a modified tree, because
 neither corresponds to a released commit. Release builders can also inject a value with
 `-ldflags "-X main.version=v0.1.0"`, which takes precedence over both.
+
+## Running in a container
+
+**No image is published.** Nothing has been pushed to GHCR, Docker Hub or any other registry.
+The `Dockerfile` in the repository builds one locally:
+
+```sh
+docker build --build-arg VERSION=v0.3.0 -t svcdoctor:v0.3.0 .
+docker run --rm svcdoctor:v0.3.0 diagnose postgres --host db.internal --user app
+```
+
+The image is `gcr.io/distroless/static-debian12:nonroot` plus one static binary. It has **no
+shell and no package manager**, runs as **UID 65532**, and works with a **read-only root
+filesystem and all capabilities dropped**:
+
+```sh
+docker run --rm \
+  --read-only --cap-drop=ALL --security-opt=no-new-privileges --user=65532:65532 \
+  -v /run/secrets/pg:/run/secrets:ro \
+  svcdoctor:v0.3.0 diagnose postgres --host db.internal --user app \
+    --password-file /run/secrets/password --output json
+```
+
+### Why run it in a container at all
+
+Because every connectivity finding svcdoctor makes is qualified by **where it was measured
+from**, and a container is a network position, not just packaging. Docker bridge, a Kubernetes
+Pod and `hostNetwork` can each see different DNS, routes, firewall policy and TLS
+interception.
+
+The clearest case is Kafka: a bootstrap endpoint can answer perfectly while the brokers it
+advertises are unreachable from inside the cluster. Run in the Pod, svcdoctor reports both:
+
+```
+outcome    Kafka metadata obtained
+topology   0 of 3 advertised broker endpoints reached
+```
+
+Credentials never follow that discovery — the bootstrap endpoint you named is the only one
+ever offered a credential.
+
+### Trust and secrets in the image
+
+- With no `--tls-ca-file`, the image's **system trust store** is used.
+- With one, it **replaces** the system roots rather than adding to them, so only its issuers
+  are accepted. A malformed, missing or unreadable file exits 2 before any connection.
+- Credentials come from `--password-file` or `--password-stdin`. **There is no
+  environment-variable secret source** — svcdoctor's production code reads no environment
+  variable at all, so `SVCDOCTOR_PASSWORD` and friends are ignored because nothing can read
+  them.
+
+### Kubernetes
+
+svcdoctor runs, reports and exits, so it belongs in a **Job**, not a Deployment. It requires
+**no Kubernetes API access**, no capabilities and no `hostNetwork`. Worked examples are in
+[`examples/kubernetes/`](examples/kubernetes/), and the runtime model is
+[ADR 0062](docs/decisions/0062-oci-runtime-and-kubernetes-execution-model.md).
+
+### The release contract for images
+
+Fixed in [ADR 0062](docs/decisions/0062-oci-runtime-and-kubernetes-execution-model.md)
+§12–§20, and normative once publication begins:
+
+- **The canonical registry will be `ghcr.io/hakanaltindag/svcdoctor`** — one registry, not
+  mirrored.
+- **The Git semver tag is the only version authority.** The binary version, the
+  `org.opencontainers.image.version` label and the OCI tag are all projections of it. An OCI
+  `:vX.Y.Z` will never exist before the Git tag `vX.Y.Z`, and once published it is never
+  rebuilt or re-pointed — a defect ships as the next patch version.
+- **Official images are reproducible.** Building the same commit with
+  [`scripts/build-image.sh`](scripts/build-image.sh) yields identical *platform image
+  manifest* digests. That scope is deliberate: build attestations legitimately contain
+  build-time data, so the multi-arch index digest does not reproduce, and claiming otherwise
+  would mean giving up provenance.
+- **Every release will carry a CycloneDX SBOM, a build-provenance attestation, and a keyless
+  cosign signature over the image digest** — three separate artifacts answering three
+  different questions. OCI labels are none of them: they are self-declared metadata, never
+  provenance.
+- **Production should pin the digest**, not the tag.
+
+Reproducibility is a consistency property, not a safety proof: a reproducible build of
+compromised source reproduces the compromise. Signing and provenance are what address
+authenticity.
+
+Build an image yourself with the same recipe a release uses:
+
+```sh
+make image-dev          # development build, tagged svcdoctor:sha-<commit>
+make image              # official build; refuses unless HEAD is a clean semver tag
+```
+
+Neither pushes anything.
 
 ## Current scope
 
