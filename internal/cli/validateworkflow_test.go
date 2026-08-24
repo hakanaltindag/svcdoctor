@@ -2,6 +2,7 @@ package cli
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -1152,5 +1153,212 @@ func TestNoDocumentPresentsTheRetiredVersionAsReleased(t *testing.T) {
 		if !strings.Contains(notes, needle) {
 			t.Errorf("the release notes do not account for the %s tag", needle)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration fixture recipe
+// ---------------------------------------------------------------------------
+
+// TestThePostgresFixtureReadinessIsProtocolLevelAndDiagnosable pins the two
+// properties whose absence cost the v0.3.1 release.
+//
+// The fixture failed on a Linux runner because PostgreSQL refused a TLS key
+// owned by the CI user. That is the *cause*. What made it expensive was the
+// *report*: the readiness loop printed "servers did not become ready" and
+// nothing else, so a fatal startup error sitting in the container log had to be
+// hunted for by hand, after a release tag had already been pushed.
+//
+// Two things follow, and this guards both. Readiness must remain a question
+// asked of the server rather than of the container — a `docker ps` check or a
+// `sleep` would have reported the same silence more slowly. And a readiness
+// failure must print enough to identify the cause, without printing the key.
+func TestThePostgresFixtureReadinessIsProtocolLevelAndDiagnosable(t *testing.T) {
+	mk := readRepoFile(t, "Makefile")
+	_, up, found := strings.Cut(mk, "postgres-up:")
+	if !found {
+		t.Fatal("the Makefile has no postgres-up target")
+	}
+	up, _, _ = strings.Cut(up, "\npostgres-down:")
+
+	// Readiness is asked of the server.
+	if !strings.Contains(up, "pg_isready") {
+		t.Error("postgres-up no longer uses pg_isready.\n\n" +
+			"A container-state check answers a different question: the v0.3.1 " +
+			"failure had a running container and a dead server.")
+	}
+	for _, forbidden := range []struct{ needle, why string }{
+		{"docker ps", "container state is not server readiness"},
+		{"State.Running", "container state is not server readiness"},
+	} {
+		if strings.Contains(up, forbidden.needle) {
+			t.Errorf("postgres-up gates on %q: %s", forbidden.needle, forbidden.why)
+		}
+	}
+	// A bare sleep instead of a poll loop. The `sleep 1` inside the retry loop is
+	// the poll interval and is fine; a sleep that *replaces* the loop is not, and
+	// checking only that "for i in" survives let a `sleep 30; for i in seq 1 1`
+	// through. The bound has to be a real one.
+	bound := regexp.MustCompile(`for i in \$\$\(seq 1 (\d+)\); do`).FindStringSubmatch(up)
+	if bound == nil {
+		t.Fatal("postgres-up no longer polls for readiness")
+	}
+	if n, _ := strconv.Atoi(bound[1]); n < 10 {
+		t.Errorf("postgres-up polls only %s times; that is a sleep with extra steps", bound[1])
+	}
+	if regexp.MustCompile(`@sleep \d+`).MatchString(up) {
+		t.Error("postgres-up waits with a fixed sleep. Readiness is a question asked " +
+			"of the server, not a duration guessed in advance.")
+	}
+
+	// A failure explains itself.
+	for _, g := range []struct{ needle, what string }{
+		{"$(PG_COMPOSE) ps", "printing container state on failure"},
+		{"logs --tail=", "printing bounded service logs on failure"},
+		{"server.key uid=", "printing the key ownership the server saw"},
+		{"id -u postgres", "printing the identity it is compared against"},
+	} {
+		if !strings.Contains(up, g.needle) {
+			t.Errorf("postgres-up no longer diagnoses a readiness failure: missing %s "+
+				"(looked for %q)", g.what, g.needle)
+		}
+	}
+	// Bounded, so a failing fixture cannot bury the cause in a log dump.
+	if strings.Contains(up, "logs --tail=all") || regexp.MustCompile(`logs [^-\n]*\n`).MatchString(up) {
+		t.Error("postgres-up prints unbounded container logs on failure")
+	}
+	// Diagnostics explain a failure; they never convert one into success.
+	if !strings.Contains(up, "exit 1") {
+		t.Error("postgres-up no longer fails after printing diagnostics")
+	}
+	// And they must not print the key.
+	for _, forbidden := range []string{"cat /c/server.key", "cat certs/server.key", "server.key)"} {
+		if strings.Contains(up, forbidden) {
+			t.Errorf("postgres-up diagnostics emit private key material (%q)", forbidden)
+		}
+	}
+}
+
+// TestThePostgresFixtureNormalizesKeyOwnership pins the fix itself at the
+// recipe level. The file-level proof lives in the integration suite, which is
+// where it belongs — but that suite only runs under the `integration` tag, and
+// this catches a regression in the ordinary build.
+func TestThePostgresFixtureNormalizesKeyOwnership(t *testing.T) {
+	gen := readRepoFile(t, "test/integration/postgres/env/gen-certs.sh")
+
+	if !strings.Contains(gen, "chown") {
+		t.Fatal("gen-certs.sh no longer sets ownership.\n\n" +
+			"PostgreSQL checks owner and mode independently; setting only the mode " +
+			"is what failed the v0.3.1 release on Linux.")
+	}
+	// Derived from the image, not hard-coded: a postgres image that renumbers
+	// its user must not silently reintroduce the defect.
+	if !strings.Contains(gen, `id -u postgres`) || !strings.Contains(gen, `id -g postgres`) {
+		t.Error("gen-certs.sh does not derive the postgres uid/gid from the image")
+	}
+	if regexp.MustCompile(`chown\s+\d+:\d+`).MatchString(gen) {
+		t.Error("gen-certs.sh hard-codes a numeric uid:gid; derive it from the pinned image")
+	}
+	// Broadening the mode is the tempting wrong fix and produces a different
+	// fatal error rather than a working server.
+	// Matched on the key rather than on a literal path: the chmod happens inside
+	// a container, so the path is /certs/..., and a guard written against the
+	// host path missed the mutation entirely.
+	if m := regexp.MustCompile(`chmod\s+(\d+)\s+\S*server\.key`).FindStringSubmatch(gen); m != nil {
+		if m[1] != "600" {
+			t.Errorf("gen-certs.sh sets the private key mode to %s; PostgreSQL rejects "+
+				"a group- or world-accessible key, and broadening the mode is the "+
+				"tempting wrong fix for an ownership problem", m[1])
+		}
+	} else {
+		t.Error("gen-certs.sh no longer restricts the private key mode")
+	}
+	for _, forbidden := range []string{"chmod 666", "chmod 777", "chmod a+r"} {
+		if strings.Contains(gen, forbidden) {
+			t.Errorf("gen-certs.sh weakens the private key mode (%q)", forbidden)
+		}
+	}
+
+	// ---- 8: the fix must not be conditional on the host OS -----------------
+	//
+	// Making normalization macOS-only would restore the exact asymmetry that
+	// caused this: correct where it was never needed, absent where it was.
+	if strings.Contains(gen, "uname") || strings.Contains(gen, "Darwin") ||
+		strings.Contains(gen, "OSTYPE") {
+		t.Error("gen-certs.sh branches on the host operating system.\n\n" +
+			"The defect was that the fixture behaved differently on macOS and Linux. " +
+			"An OS-conditional fix reproduces it.")
+	}
+
+	// ---- 13: fresh checkout ------------------------------------------------
+	if !strings.Contains(gen, "mkdir -p certs") {
+		t.Error("gen-certs.sh no longer creates the certificate directory, so a fresh " +
+			"checkout with no certs/ directory would fail")
+	}
+	// Normalization must not sit behind the early-exit that skips regeneration:
+	// a certs/ directory left from an earlier run carries the old ownership.
+	idx, chown := strings.Index(gen, "-f certs/server.crt"), strings.Index(gen, "chown")
+	if idx >= 0 && chown >= 0 && chown < idx {
+		t.Error("ownership normalization runs before the reuse check, so an existing " +
+			"certs/ directory would keep its stale ownership")
+	}
+	if strings.Contains(gen, "if [ -f certs/server.crt ] && [ -f certs/server.key ]; then exit 0; fi") {
+		t.Error("gen-certs.sh exits early when certificates exist, skipping ownership " +
+			"normalization for a directory left over from an earlier run")
+	}
+}
+
+// TestOCIPublicationCannotStartBeforeLinuxIntegration pins the v0.3.1 lesson
+// structurally rather than as a rule someone remembers.
+//
+// The release failed at `Integration (postgres)` on a Linux runner. That was the
+// system working: the gate caught a defect that every developer machine had
+// hidden. What must never happen is that gate becoming optional — an image
+// published without it would carry exactly the class of defect that only Linux
+// reveals.
+//
+// `needs` is the enforcement. GitHub will not schedule the OCI machinery until
+// every integration suite has succeeded, so this cannot be broken by reordering
+// steps; it can only be broken by editing the dependency or the matrix, which is
+// what this reads.
+func TestOCIPublicationCannotStartBeforeLinuxIntegration(t *testing.T) {
+	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+
+	needs := jobNeeds(wf)
+	for _, job := range []string{"stage-and-verify", "publish"} {
+		if !reaches(needs, job, "integration") {
+			t.Errorf("job %q does not depend on the integration suites.\n\n"+
+				"The v0.3.1 release failed at Integration (postgres) on Linux, which is "+
+				"the only environment that reveals that class of fixture defect. "+
+				"Publication must not be able to start without it.", job)
+		}
+	}
+
+	// Every suite, not a subset. Dropping the one that failed is the specific
+	// temptation after a release is blocked by it.
+	_, matrix, found := strings.Cut(wf, "suite:")
+	if !found {
+		t.Fatal("the release workflow declares no integration matrix")
+	}
+	matrix, _, _ = strings.Cut(matrix, "\n")
+	for _, suite := range []string{"postgres", "kafka", "redpanda"} {
+		if !strings.Contains(matrix, suite) {
+			t.Errorf("the release integration matrix no longer runs %q (matrix: %s)",
+				suite, strings.TrimSpace(matrix))
+		}
+	}
+
+	// And it must run on Linux. macOS and Windows runners would not reproduce
+	// the bind-mount ownership behaviour that matters.
+	// The job block, cut at the next two-space-indented job key. Cutting at the
+	// first "\n  " truncated after one line, because every nested key matches it.
+	_, integ, _ := strings.Cut(wf, "\n  integration:")
+	if end := regexp.MustCompile(`(?m)^  [a-z][a-z0-9-]*:`).FindStringIndex(integ); end != nil {
+		integ = integ[:end[0]]
+	}
+	if !strings.Contains(integ, "ubuntu") {
+		t.Error("the integration suites no longer run on a Linux runner. " +
+			"macOS bind mounts mask container ownership, which is how the v0.3.1 " +
+			"defect survived every local run.")
 	}
 }
