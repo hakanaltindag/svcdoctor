@@ -355,6 +355,28 @@ func TestTheSemverTagIsAppliedLast(t *testing.T) {
 	if !strings.Contains(caller, "already exists. Semver tags are immutable") {
 		t.Error("the workflow no longer refuses to overwrite an existing semver tag")
 	}
+
+	// The check is made twice on purpose, and the second one is the load-bearing
+	// half. The pre-flight check in `identity` runs before the gates; the whole
+	// pipeline then takes minutes, and `imagetools create --tag` overwrites a tag
+	// rather than refusing it. So the window between the two is a window in which
+	// a tag can appear — from a concurrent run, or a hand-pushed one — and be
+	// silently overwritten by this one.
+	//
+	// Deleting this step leaves the pre-flight check in place and passes every
+	// other guard here, which is exactly why it needs its own. Found by mutation.
+	publishStep := strings.Index(caller, "docker buildx imagetools create")
+	recheck := strings.Index(caller, "Semver tag still does not exist")
+	if recheck < 0 {
+		t.Error("the publish job no longer re-checks that the semver tag is absent " +
+			"immediately before creating it.\n\n" +
+			"The pre-flight check in `identity` runs minutes earlier, and " +
+			"`imagetools create --tag` overwrites rather than refuses. Without the " +
+			"re-check, a tag that appears mid-run is silently overwritten.")
+	} else if publishStep >= 0 && recheck > publishStep {
+		t.Error("the semver-tag re-check runs after the tag is created, which is " +
+			"an audit rather than a guard")
+	}
 }
 
 // TestTheStagingTagIsAFullCommitAndImmutable pins ADR 0062 section 21.

@@ -1071,10 +1071,16 @@ func TestTheReleaseCeremonyIsDocumented(t *testing.T) {
 		{"release-oci.yml", "naming the workflow that must be present"},
 		{"oci-stage-verify.yml", "naming the shared machinery that must be present"},
 		{"Dockerfile", "naming the build input that must be present"},
+		{"scripts/build-image.sh", "naming the build recipe that must be present"},
 		{"never moved", "the immutable-tag rule"},
 		{"sum.golang.org", "why a pushed tag cannot be withdrawn"},
 		{"sequentially", "running the integration suites without contention"},
 		{"last actual GitHub Release", "choosing the release-notes baseline correctly"},
+		// v0.3.1's lesson. The suites were green locally, had never run on Linux
+		// for that tree, and failed on the release runner after the tag was
+		// already immutable. A local run is not this check.
+		{"native Linux", "requiring the integration suites on the release runner class"},
+		{"validate-integration", "naming the workflow that provides that proof"},
 	} {
 		if !strings.Contains(checklist, g.needle) {
 			t.Errorf("the release checklist no longer covers %s (looked for %q)", g.what, g.needle)
