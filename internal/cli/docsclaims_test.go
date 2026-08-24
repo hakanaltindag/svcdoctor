@@ -429,6 +429,15 @@ var realTestedPlatforms = map[string]bool{
 	"Apache Kafka":           true,
 	"PostgreSQL self-hosted": true,
 	"Redpanda self-hosted":   true,
+	// Phase 7.5. Both are committed fixtures — test/integration/redis and
+	// test/integration/valkey — driven through app.DiagnoseRedis, with ground
+	// truth established by redis-cli and valkey-cli before svcdoctor is asked.
+	// Neither entry covers Redis Cluster as a cluster or Sentinel as a service:
+	// those have their own rows, at Level 0, and this list is per-platform rather
+	// than per-protocol precisely so that a cluster-mode *node* passing cannot
+	// promote a cluster row.
+	"Redis":  true,
+	"Valkey": true,
 }
 
 // TestOnlyRealTestedPlatformsClaimLevelTwoOrThree is the central guard.

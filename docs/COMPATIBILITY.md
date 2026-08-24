@@ -31,6 +31,7 @@ The left half of every "auth overlap" judgement below. **This is the whole list.
 |---|---|
 | Kafka SASL mechanisms | `PLAIN`, `SCRAM-SHA-256` |
 | PostgreSQL authentication | SCRAM-SHA-256; `trust`; and *observed and declined* — MD5, cleartext, SCRAM-SHA-256-PLUS |
+| Redis/Valkey authentication | `AUTH` password-only and `AUTH <username> <password>`, over verified TLS only |
 | Transport | plaintext, TLS with system roots, TLS with a replacement CA (`--tls-ca-file`), verification override (`--tls-server-name`), `--tls-insecure` |
 | Credential input | `--password-file`, `--password-stdin`. **Never a literal on the command line.** |
 | Targets | hostname, IPv4 literal, IPv6 literal. **Not** a zoned IPv6 literal. |
@@ -113,6 +114,64 @@ needed.**
   svcdoctor speaks it. Diagnosing through one measures the proxy.
 - **Microsoft Entra authentication** for Azure PostgreSQL is token-based and is therefore not
   something svcdoctor can perform — `UNSUPPORTED BY CURRENT AUTH`.
+
+## 4b. Redis and Valkey
+
+One command, `svcdoctor diagnose redis`, diagnoses both. Which implementation answered is read
+from the endpoint's own `HELLO` reply and shown in the report; the verb is not a claim.
+
+| Platform | Wire | TLS | Auth overlap | Real tested | Level | Known gaps |
+|---|---|---|---|---|---|---|
+| **Redis** 8.2.1 | RESP2 | verified TLS, custom CA, IP SAN, server-name override | **`AUTH` password ✓, `AUTH user password` ✓** | **YES** — committed `test/integration/redis` fixture, 21 scenarios | **3 — SUPPORTED BASIC** | Direct endpoint only. See the four limits below |
+| **Valkey** 8.1.1 | RESP2 | verified TLS, custom CA | **`AUTH` password ✓, `AUTH user password` ✓** | **YES** — committed `test/integration/valkey` fixture, 8 scenarios | **3 — SUPPORTED BASIC** | Same four limits. Same production adapter, with no vendor branch anywhere |
+| Any other Redis or Valkey version | RESP2 | — | — | **NO** | **0 — NOT EVALUATED** | Tested at the two exact versions above and nowhere else. svcdoctor does no version arithmetic, so it makes no prediction about any other release |
+| **Redis Cluster** (as a cluster) | — | — | — | **NO** | **0 — NOT EVALUATED** | Topology is **not measured**. See below |
+| **Redis Sentinel** | — | — | — | detection only | **0 — NOT EVALUATED** | Detection is validated; Sentinel is **not supported** and not diagnosed |
+| **AWS ElastiCache / MemoryDB** | RESP2 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. No cloud credential was used at any point |
+| **GCP Memorystore** | RESP2 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED` |
+| **Azure Managed Redis / Azure Cache for Redis** | RESP2 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. It runs Redis Enterprise, whose Enterprise clustering policy fronts the data path with a proxy |
+| **Redis Enterprise / Redis Cloud** | RESP2 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED` |
+
+### What Level 3 means here, and the four things it does not cover
+
+**A cluster-mode node is validated as an endpoint; the cluster is not.** `R-16` and `V-07` point
+svcdoctor at a node running with `cluster-enabled yes` and the whole BASIC journey completes,
+because every command svcdoctor sends is keyless and a keyless command is never redirected. The
+report records `mode=cluster` and states that **cluster topology was not measured**: no node is
+discovered, no slot coverage is checked, and no advertised address is probed.
+
+**Sentinel is detected, not supported.** `R-17` points svcdoctor at a real Sentinel. It answers
+`PING`, which is precisely why the guard exists — without it the run would report a healthy data
+endpoint for a process holding no keys. svcdoctor stops before the credential boundary and says
+the endpoint identified itself as a Sentinel. It asks the Sentinel nothing, and it makes no claim
+about quorum, failover or health.
+
+**No client certificate is presented.** Redis defaults `tls-auth-clients` to `yes`, and `R-20`
+runs against a server with that default. svcdoctor has no client certificate, so the connection
+cannot be used — and the report says the exchange did not complete rather than that the endpoint
+is unhealthy or untrusted. Measured detail: under TLS 1.3 the handshake *passes* and the server
+closes on the first read, which is not what ADR 0064 §8 predicted; the record notes the
+correction.
+
+**Zero keyspace access.** svcdoctor sends `HELLO`, `AUTH` and `PING` and nothing else. No key is
+read, written or named, which every scenario re-checks against the endpoint's own
+`INFO commandstats`.
+
+### Evidence
+
+`make integration-redis` and `make integration-valkey` run the whole journey against the pinned
+images through `app.DiagnoseRedis` — the same entry point the CLI calls. Every scenario that
+asserts something about a server establishes it independently with `redis-cli` or `valkey-cli`
+first, so the suite cannot pass by agreeing with itself.
+
+Three upstream behaviours the ADRs rest on were re-measured on the real servers rather than read:
+
+- `AUTH default <anything>` returns `+OK` against a `nopass` user, so an accepted credential is
+  never evidence that the credential is correct.
+- The one-argument and two-argument `AUTH` forms behave differently on the same server, which is
+  why svcdoctor sends the operator's form verbatim and never substitutes `default`.
+- A wrong password, an unknown user and a disabled user produce **byte-identical** `WRONGPASS`
+  replies, which is why no svcdoctor finding names a cause.
 
 ## 5. What none of this required
 
