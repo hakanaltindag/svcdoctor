@@ -910,6 +910,27 @@ is the image *index* and not one of its platform manifests. Seeing a `.sig` tag 
 exists; verification says a signed object is valid for this digest and this identity. Backing
 tags remain useful evidence and are not a gate.
 
+**[FACT] The upgrade immediately proved why.** Under cosign v2.5.2 a signed image gained two
+tags, `sha256-<digest>.sig` and `sha256-<digest>.att`. Under v3.1.3 it gains **one**,
+`sha256-<digest>` with no suffix, holding an OCI index of two
+`application/vnd.dev.sigstore.bundle.v0.3+json` artifacts — the signature and the attestation.
+The `.sig` tag the old check asserted on **does not exist** for images signed by v3, while
+`cosign verify` and `cosign verify-attestation` pass unchanged.
+
+Had correctness still rested on that tag, this version bump would have broken the release
+pipeline; because it rests on verification, the bump changed nothing. GHCR's `/referrers/` API
+returned zero for the new digest, so cosign is using its fallback tag scheme — another storage
+detail that nothing here depends on.
+
+**[FACT] The evidence parsers did break, and that is the smaller half of the same lesson.**
+The certificate dump read `Cert.Raw` and the Rekor step read `cosign verify`'s `optional.Bundle`;
+v3 puts the certificate in `verificationMaterial.certificate.rawBytes` and leaves `optional`
+empty. Both went silent, and because both tolerate failure GitHub reported the steps as
+**successful** — `continue-on-error` sets a step's *conclusion* to success while its *outcome*
+is failure. Evidence that can go quiet unnoticed is worse than no evidence. Both parsers now
+handle both shapes and fail loudly when they read nothing, and they remain incapable of
+blocking a gate.
+
 ## 22. Validation
 
 Measured through the built image unless stated. Source baseline (`gofmt`,

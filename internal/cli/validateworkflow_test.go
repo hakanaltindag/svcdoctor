@@ -1018,4 +1018,28 @@ func TestCosignIsPinnedAndForwardCompatible(t *testing.T) {
 		t.Error("a cosign backing-tag name is used as a correctness gate; " +
 			"use cosign verify, which proves validity rather than existence")
 	}
+
+	// The evidence parsers must read both signature shapes.
+	//
+	// cosign v2 returned a simple-signing object with the certificate under
+	// "Cert" and the transparency-log entry inside `cosign verify`'s "optional"
+	// block. v3 returns a Sigstore bundle: the certificate is
+	// verificationMaterial.certificate.rawBytes and "optional" is empty.
+	//
+	// Measured on the first v3 run: the certificate dump and the Rekor step both
+	// went silent, and because they tolerate failure GitHub reported the steps as
+	// successful. Evidence that can go quiet without anyone noticing is worse
+	// than no evidence, so both shapes are handled and an empty read is loud.
+	for _, g := range []struct{ needle, what string }{
+		{"verificationMaterial", "the Sigstore bundle shape"},
+		{"(vm.get('certificate') or {}).get('rawBytes')", "the bundle certificate field"},
+		{"d.get('Cert')", "the legacy simple-signing shape"},
+		{"tlogEntries", "reading the Rekor entry from the bundle"},
+		{"no Rekor entry could be read", "failing loudly when no entry is found"},
+	} {
+		if !strings.Contains(shared, g.needle) {
+			t.Errorf("the signature evidence parsers no longer handle %s (looked for %q)",
+				g.what, g.needle)
+		}
+	}
 }

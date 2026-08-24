@@ -579,10 +579,38 @@ jobs:
           cosign download signature "${IMAGE}@${{ needs.stage.outputs.digest }}" \
             | head -1 > /tmp/sig.json
           python3 - <<'PY'
-          import base64, json
-          d = json.load(open('/tmp/sig.json'))['Cert']
-          raw = d['Raw'] if isinstance(d, dict) else d
+          import base64, json, sys
+
+          d = json.load(open('/tmp/sig.json'))
+
+          # Two shapes, because cosign changed one under us. v2 returned a
+          # simple-signing object with the certificate under "Cert" (an object
+          # whose "Raw" is base64 DER). v3 returns a Sigstore bundle, and the
+          # certificate is verificationMaterial.certificate.rawBytes.
+          #
+          # Both are handled rather than one being chosen, so this keeps working
+          # across the upgrade instead of going quiet on the far side of it.
+          raw = None
+          vm = d.get('verificationMaterial') or {}
+          if (vm.get('certificate') or {}).get('rawBytes'):
+              raw = vm['certificate']['rawBytes']
+              print('bundle format:', d.get('mediaType'))
+          elif d.get('Cert'):
+              c = d['Cert']
+              raw = c['Raw'] if isinstance(c, dict) else c
+              print('legacy simple-signing format')
+          if not raw:
+              print('no certificate found; keys were:', sorted(d))
+              sys.exit(1)
           open('/tmp/cert.der', 'wb').write(base64.b64decode(raw))
+
+          # The transparency-log entry lives in the same document under v3.
+          # `cosign verify`'s "optional" block carried it under v2 and is empty
+          # under v3, which is why it must be read from here.
+          for e in vm.get('tlogEntries') or []:
+              print('rekor log index :', e.get('logIndex'))
+              print('rekor integrated:', e.get('integratedTime'))
+              print('rekor log id    :', (e.get('logId') or {}).get('keyId'))
           PY
           echo "== subject alternative name =="
           openssl x509 -inform DER -in /tmp/cert.der -noout -ext subjectAltName
@@ -786,18 +814,39 @@ jobs:
 
       # Sigstore's public transparency log. Recorded, not hidden: a keyless
       # signature is only auditable because the entry is public.
+      #
+      # Read from the signature bundle rather than from `cosign verify`'s output.
+      # Under cosign v2 the entry appeared in the verify result's `optional`
+      # block; under v3 that block is empty and the log entry lives in the
+      # bundle, so a step reading the old location prints `None` and reports
+      # success. Measured on the first v3 run.
       - name: Record the Rekor transparency entry
+        continue-on-error: true
         run: |
           set -eu
+          cosign download signature "${IMAGE}@${{ needs.stage.outputs.digest }}" > /tmp/sigs.json
           python3 - <<'PY'
-          import json
-          v = json.load(open('/tmp/verified.json'))
-          for e in v:
-              b = (e.get('optional') or {}).get('Bundle') or {}
-              p = b.get('Payload') or {}
-              print('rekor log index:', p.get('logIndex'))
-              print('rekor integrated:', p.get('integratedTime'))
-              print('rekor log id:', p.get('logID'))
+          import json, sys
+
+          found = 0
+          for line in open('/tmp/sigs.json'):
+              line = line.strip()
+              if not line:
+                  continue
+              d = json.loads(line)
+              entries = ((d.get('verificationMaterial') or {}).get('tlogEntries')
+                         or [(d.get('Bundle') or {}).get('Payload') or {}])
+              for e in entries:
+                  idx = e.get('logIndex')
+                  if idx is None:
+                      continue
+                  found += 1
+                  print('rekor log index :', idx)
+                  print('rekor integrated:', e.get('integratedTime'))
+                  print('rekor log id    :', (e.get('logId') or {}).get('keyId') or e.get('logID'))
+          if not found:
+              print('::warning::no Rekor entry could be read from the signature bundle')
+              sys.exit(1)
           PY
 
       - name: Upload SBOM artifact

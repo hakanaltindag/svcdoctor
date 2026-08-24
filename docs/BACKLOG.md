@@ -3952,6 +3952,21 @@ in-toto subject, predicate type (`https://cyclonedx.org/bom`) and `bomFormat`. I
 the signed digest is the image *index* and not a platform manifest. Shapes were established by
 running cosign v3.1.3 against the published Phase 7.1-V digest rather than guessed.
 
+### What the cosign upgrade proved on contact
+
+Under v2.5.2 a signed image gained `sha256-<digest>.sig` and `sha256-<digest>.att`. Under
+v3.1.3 it gains **one** tag, `sha256-<digest>` with no suffix, holding an OCI index of two
+`vnd.dev.sigstore.bundle.v0.3+json` artifacts. **The `.sig` tag the removed check asserted on
+does not exist for v3-signed images**, while `cosign verify` and `cosign verify-attestation`
+pass unchanged. Storage-layout assertions would have broken on a version bump; semantic
+verification did not notice one.
+
+The evidence parsers did break — the certificate dump read `Cert.Raw`, the Rekor step read
+`cosign verify`'s `optional.Bundle`, and v3 moved both. They went silent, and because they
+tolerate failure GitHub reported the steps as **successful**: `continue-on-error` sets a step's
+conclusion to success while its outcome is failure. Both now handle both shapes and fail loudly
+on an empty read, and neither can block a gate.
+
 ### Guards
 
 `TestExactlyOneSBOMFormatIsPublished`, `TestNoDocumentClaimsTwoCanonicalSBOMFormats` and
