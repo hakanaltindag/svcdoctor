@@ -2,15 +2,24 @@ package redis
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hakanaltindag/svcdoctor/internal/adapter/redis/wire"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
 )
+
+// canaryPassword is a value that appears nowhere else, so a test asserting its
+// absence from a socket is asserting something a coincidence cannot satisfy.
+//
+//nolint:gosec // G101: a leak-test canary, not a credential.
+const canaryPassword = "canary-pw-8c1f2e"
 
 // --- HELLO normalization --------------------------------------------------
 
@@ -296,6 +305,125 @@ func TestAuthWithNoCredentialRecordsWhy(t *testing.T) {
 	}
 	if p.count("AUTH") != 0 {
 		t.Fatal("no credential means no AUTH on the socket")
+	}
+}
+
+// authParamsFor mints AuthParams whose credential is bound to one endpoint and
+// whose run names another, which is the shape every credential-authority test
+// needs and no other test needs.
+func authParamsFor(t *testing.T, credentialHost string, credentialPort uint16,
+	runHost string, runPort uint16, password string) AuthParams {
+	t.Helper()
+	bound, err := security.NewEndpoint(credentialHost, credentialPort)
+	if err != nil {
+		t.Fatalf("NewEndpoint(credential): %v", err)
+	}
+	named, err := security.NewEndpoint(runHost, runPort)
+	if err != nil {
+		t.Fatalf("NewEndpoint(run): %v", err)
+	}
+	credential, err := security.NewCredential(bound, "", security.NewSecret(password))
+	if err != nil {
+		t.Fatalf("NewCredential: %v", err)
+	}
+	return AuthParams{
+		Endpoint:   named,
+		Credential: credential,
+		Policy:     permissivePolicy,
+	}
+}
+
+// TestAdapterRefusesACredentialBoundToAnotherEndpoint is the adapter half of the
+// Redis credential-authority invariant.
+//
+// # Why a behavioural test and not a structural one
+//
+// `TestExactlyOneRedisRevealAndSecretForExist` proves that exactly one
+// `SecretFor` call exists and that it lives in this file. It cannot prove that
+// the call *decides* anything: replacing its argument with
+// `params.Credential.Endpoint()` keeps the call, keeps the file, and asks the
+// credential whether it is authorized for itself — which it always is. That
+// mutation was measured to survive the whole suite, and this test is what ends
+// it.
+//
+// The invariant: a credential authorized for one operator-named endpoint may not
+// be presented at another, whatever intermediate layer changed the endpoint.
+//
+// Three things are asserted, and the third is the one that matters. The error
+// identifies the authority refusal; no evidence node is recorded, because
+// nothing was asked of the endpoint and a node would state a fact about a peer
+// that was never addressed; and **zero credential bytes reach the socket**.
+func TestAdapterRefusesACredentialBoundToAnotherEndpoint(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		credentialHost string
+		credentialPort uint16
+	}{
+		{"a different host", "other.internal", 6379},
+		{"the same host on a different port", "endpoint.internal", 6380},
+		{"a resolved address cannot widen authority", "10.0.0.1", 6379},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newPeer(t, behaviour{hello: errNoAuth, requireAuth: true})
+			result, builder := sessions(t, p)
+			session := one(t, result)
+
+			err := Authenticate(context.Background(), builder, session,
+				authParamsFor(t, tt.credentialHost, tt.credentialPort,
+					"endpoint.internal", 6379, canaryPassword))
+
+			if !errors.Is(err, security.ErrEndpointMismatch) {
+				t.Fatalf("err = %v, want ErrEndpointMismatch.\n\n"+
+					"A credential bound elsewhere must be refused by the adapter, not "+
+					"quietly downgraded to an empty secret.", err)
+			}
+			for _, node := range freeze(t, builder).Nodes() {
+				if node.Step() == serviceredis.StepAuthentication {
+					t.Errorf("an endpoint mismatch recorded a %s node (%s/%s); a local "+
+						"invocation error is not a fact about the endpoint",
+						node.Step(), node.State(), node.FailureClass())
+				}
+			}
+			if got := p.count("AUTH"); got != 0 {
+				t.Fatalf("AUTH reached the socket %d time(s); an unauthorized endpoint "+
+					"must receive zero credential bytes", got)
+			}
+			for _, frame := range p.frames() {
+				if strings.Contains(frame, canaryPassword) {
+					t.Fatalf("a credential byte reached the socket in %q", frame)
+				}
+			}
+		})
+	}
+}
+
+// TestLocalInvalidInputIsNotAPeerClose pins the truthfulness half.
+//
+// A refusal svcdoctor raises before writing anything must never be classified as
+// the endpoint closing the connection. The two are different facts about
+// different parties, and `PROTOCOL_PEER_CLOSED` on a socket that was never
+// written to accuses a peer of something it did not do.
+//
+// This asserts the semantic result — the state and the failure class the
+// classifier produces — rather than the name of the branch that produced it.
+func TestLocalInvalidInputIsNotAPeerClose(t *testing.T) {
+	obs := authObservation{
+		outcome: authAttempted,
+		err:     fmt.Errorf("%w: AUTH requires a credential", wire.ErrInvalidInput),
+	}
+	state, failureClass := obs.classify()
+
+	if failureClass == domain.FailureProtocolPeerClosed {
+		t.Fatal("a local input refusal was classified as PROTOCOL_PEER_CLOSED.\n\n" +
+			"Nothing was written to the socket, so no peer behaviour was observed " +
+			"and no class naming the peer may be used.")
+	}
+	if state == domain.StateFail {
+		t.Errorf("state = FAIL; svcdoctor's own refusal did not prove a target failure")
+	}
+	if state != domain.StateUnknown || failureClass != domain.FailureExecRequiredInputMissing {
+		t.Errorf("state/class = %s/%s, want UNKNOWN/EXEC_REQUIRED_INPUT_MISSING",
+			state, failureClass)
 	}
 }
 

@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -31,6 +32,12 @@ import (
 // relationships, which summary, how many credential attempts — hermetically, so
 // a change to the graph shape fails on every machine rather than only on one
 // with containers.
+
+// redisCanaryPassword appears nowhere else, so asserting its absence from a
+// socket asserts something a coincidence cannot satisfy.
+//
+//nolint:gosec // G101: a leak-test canary, not a credential.
+const redisCanaryPassword = "canary-pw-3f7a91"
 
 // --- a scripted endpoint ---------------------------------------------------
 
@@ -698,6 +705,108 @@ func TestTheCredentialIsPresentedAtMostOnceAcrossEveryJourney(t *testing.T) {
 		})
 	}
 }
+
+// --- credential endpoint authority -----------------------------------------
+
+// credentialBoundTo mints a credential for an endpoint the run does not name.
+func credentialBoundTo(t *testing.T, host string, port uint16, password string) security.Credential {
+	t.Helper()
+	endpoint, err := security.NewEndpoint(host, port)
+	if err != nil {
+		t.Fatalf("NewEndpoint: %v", err)
+	}
+	credential, err := security.NewCredential(endpoint, "", security.NewSecret(password))
+	if err != nil {
+		t.Fatalf("NewCredential: %v", err)
+	}
+	return credential
+}
+
+// runWithCredential drives the composition root directly, returning the error
+// rather than failing on it, because the error is what these tests assert.
+func runWithCredential(
+	t *testing.T, f *redisFake, host string, credential security.Credential,
+) (Result, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	return DiagnoseRedis(ctx, RedisParams{
+		Host:        host,
+		Port:        6379,
+		Credential:  credential,
+		Resolver:    redisResolver{addresses: parseAddrsFor(t, []string{"10.0.0.1"})},
+		Dialer:      redisDialer{target: f.addr},
+		StepTimeout: 2 * time.Second,
+		Vantage:     vantage(t),
+		Version:     "test",
+	})
+}
+
+// TestTheRootRefusesACredentialBoundElsewhereBeforeAnyNetworkWork is the
+// composition-root half of the Redis credential-authority invariant.
+//
+// The root learns the operator's target and holds the credential, so it is the
+// only layer that could rebind one. It refuses, and it refuses **before it
+// dials**: the endpoint sees nothing at all, not even a credential-free HELLO.
+//
+// That "before any network work" clause is what makes this test catch the
+// mutation it exists for. Removing the root check alone still produces an error
+// from the run, because the adapter refuses too — so asserting merely that an
+// error came back would pass against a defeated guard. Asserting that the
+// endpoint was never contacted does not.
+func TestTheRootRefusesACredentialBoundElsewhereBeforeAnyNetworkWork(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		host string
+		port uint16
+	}{
+		{"a different host", "elsewhere.internal", 6379},
+		{"the same host on a different port", "redis.internal", 6380},
+		{"a resolved address cannot widen authority", "10.0.0.1", 6379},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newRedisFake(t, redisScript{hello: rNoAuth, auth: "+OK\r\n"})
+
+			_, err := runWithCredential(t, f, "redis.internal",
+				credentialBoundTo(t, tt.host, tt.port, redisCanaryPassword))
+
+			if err == nil {
+				t.Fatalf("DiagnoseRedis accepted a credential bound to %s:%d while "+
+					"diagnosing redis.internal:6379", tt.host, tt.port)
+			}
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Errorf("err = %v, want ErrInvalidInput", err)
+			}
+			f.mu.Lock()
+			seen := append([]string(nil), f.commands...)
+			f.mu.Unlock()
+			if len(seen) != 0 {
+				t.Fatalf("the endpoint received %v; a credential the run may not use is "+
+					"refused before any network work, so the endpoint sees nothing", seen)
+			}
+		})
+	}
+}
+
+// The socket-level half of this invariant — that zero credential bytes reach an
+// unauthorized endpoint — is asserted in
+// `internal/adapter/redis.TestAdapterRefusesACredentialBoundToAnotherEndpoint`
+// rather than here, and the reason is worth recording because the obvious test
+// at this layer passes for the wrong reason.
+//
+// Every credential path in this package runs over plaintext, and
+// `security.CredentialTransportPolicy` has no permissive value by construction
+// (ADR 0029 section 7), so the transport policy withholds the credential on
+// every run these fixtures can build. A composition-level test asserting "AUTH
+// never reached the socket" would therefore pass with **both** authority guards
+// removed — it would be measuring the policy, not the authority. Phase 7.6A's
+// whole finding was a guard that looked proven and was not, so a second one is
+// not worth adding.
+//
+// The adapter test can assert it honestly because `credentialSecret` now runs
+// before the policy check, which puts the authority refusal on a path a
+// plaintext fixture actually reaches.
 
 // TestNoJourneyEverNamesAKey is the composition-level keyspace contract.
 func TestNoJourneyEverNamesAKey(t *testing.T) {

@@ -83,6 +83,28 @@ func Authenticate(
 		startedAt: time.Now(),
 	}
 
+	// **Endpoint authority is decided before anything else**, including before
+	// the transport policy.
+	//
+	// Whether a credential is even *for* this endpoint is a property of the
+	// input; whether it may cross this connection is a property of the channel.
+	// Deciding the channel first would let a misbound credential be recorded as
+	// `EXEC_SKIPPED_BY_POLICY` on a plaintext run — a node asserting a policy
+	// decision about a credential that was never admissible here at all — and
+	// would leave the authority check unreachable on exactly the channel where
+	// it is easiest to get wrong.
+	//
+	// **Nothing is recorded on a refusal.** Nothing was asked of the endpoint,
+	// so a node would state a fact about a peer that was never addressed.
+	// `internal/adapter/postgres` refuses the same way for the same reason.
+	var secret security.Secret
+	if !params.Credential.IsZero() {
+		var err error
+		if secret, err = credentialSecret(params); err != nil {
+			return err
+		}
+	}
+
 	switch {
 	case params.Credential.IsZero():
 		// Nothing to present. The node exists so that this is distinguishable
@@ -98,10 +120,10 @@ func Authenticate(
 
 	default:
 		obs.outcome = authAttempted
-		auth, err := session.rw.SendAuth(
-			ctx, params.ExchangeTimeout, params.Username, credentialSecret(params))
+		auth, sendErr := session.rw.SendAuth(
+			ctx, params.ExchangeTimeout, params.Username, secret)
 		obs.auth = auth
-		obs.err = err
+		obs.err = sendErr
 		obs.ctxErr = ctx.Err()
 	}
 	obs.duration = time.Since(obs.startedAt)
@@ -124,19 +146,27 @@ func Authenticate(
 	return nil
 }
 
-// credentialSecret resolves the secret for the endpoint the credential is bound
-// to.
+// credentialSecret resolves the secret for the endpoint this run named.
 //
 // `SecretFor` refuses any endpoint but the one the credential names, which is
 // what makes "a resolved address never widens credential authority" a check
-// rather than a promise (ADR 0028 section 2). A mismatch yields an empty secret,
-// which SendAuth refuses to put on the wire.
-func credentialSecret(params AuthParams) security.Secret {
+// rather than a promise (ADR 0028 section 2).
+//
+// # The refusal is returned, never absorbed
+//
+// An earlier form of this helper turned a mismatch into an empty secret and let
+// `SendAuth` decline it. That was wrong twice over. It made this authority check
+// invisible to a behavioural test — the run continued and recorded a node either
+// way — and the node it recorded classified svcdoctor's own refusal as
+// `PROTOCOL_PEER_CLOSED`, accusing an endpoint that had not been asked for
+// anything of closing the connection. The error is propagated so that the
+// authority boundary is observable and no false claim about a peer is possible.
+func credentialSecret(params AuthParams) (security.Secret, error) {
 	secret, err := params.Credential.SecretFor(params.Endpoint)
 	if err != nil {
-		return security.Secret{}
+		return security.Secret{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
-	return secret
+	return secret, nil
 }
 
 // authOutcome says which of the three non-exchange paths, or the exchange, this
@@ -208,6 +238,18 @@ func (o authObservation) classify() (domain.State, domain.FailureClass) {
 	}
 
 	switch {
+	case errors.Is(o.err, wire.ErrInvalidInput):
+		// **svcdoctor's own refusal, not the endpoint's.** ErrInvalidInput is
+		// raised before anything is written, so no peer behaviour was observed
+		// and no class naming the peer may be used. UNKNOWN is the honest state:
+		// the run did not measure this step. The operation is one svcdoctor can
+		// perform, no policy objected, and it had nothing usable to perform it
+		// with — which is exactly EXEC_REQUIRED_INPUT_MISSING.
+		//
+		// Unreachable while Authenticate returns on a credential-authority
+		// refusal above, and kept because "unreachable" is a property of today's
+		// callers rather than of this classifier.
+		return domain.StateUnknown, domain.FailureExecRequiredInputMissing
 	case errors.Is(o.err, context.Canceled), errors.Is(o.ctxErr, context.Canceled):
 		return domain.StateUnknown, domain.FailureExecCancelled
 	case errors.Is(o.err, context.DeadlineExceeded), errors.Is(o.ctxErr, context.DeadlineExceeded):
