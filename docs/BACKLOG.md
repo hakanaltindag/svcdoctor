@@ -3705,6 +3705,98 @@ Not wanted in this phase or the next: a Helm chart, an operator, a controller, a
 Kubernetes API access from svcdoctor itself. svcdoctor is a bounded diagnostic worker that a
 platform invokes; it does not become an agent.
 
+## Phase 7.1-V — Remote OCI publication validation: IMPLEMENTED, NEVER RUN
+
+Phase 7.1-P's checklist above is a list of things that cannot be proven without publishing.
+This phase builds the machinery to close them **without releasing anything**: a
+`workflow_dispatch` workflow that publishes exactly one reference,
+`ghcr.io/hakanaltindag/svcdoctor:sha-<full commit>`, and no semver tag.
+
+### The architectural decision: shared machinery, split authority
+
+The obvious way to write a validation workflow is to copy the release workflow's build, scan,
+SBOM, signing and smoke steps. That validates the copy. The two drift on the first edit that
+touches only one of them, and the release path stays the one nobody ever exercised — which
+would make this phase's evidence worthless for the purpose it exists to serve.
+
+So the machinery was extracted into `.github/workflows/oci-stage-verify.yml`
+(`on: workflow_call`), and **both** workflows call it:
+
+```
+release-oci.yml    tag trigger + strict semver + publish job  ─┐
+                                                               ├─> oci-stage-verify.yml
+validate-oci.yml   workflow_dispatch + dev version            ─┘
+```
+
+What the shared workflow may **not** do is decide identity. It is handed a version, a
+revision, an epoch, a staging tag and the exact certificate identity it must produce; it
+contains no `imagetools create`, no `git describe` and no reference to `GITHUB_REF_NAME`.
+Public release identity stays with the caller, and only one caller is triggered by a tag.
+
+### What changed in the accepted release pipeline
+
+- **Staging tags now use the full 40-character commit SHA**, not `git rev-parse --short`. The
+  staging tag is an immutable identity; an abbreviation can collide.
+- **The staging tag is now enforced immutable.** Before pushing, the run asks GHCR whether
+  `sha-<commit>` exists. If it does, its platform manifest digests are compared against a
+  fresh reproducible build, and the run either reuses the identical index digest or **stops**.
+  Comparison is at the platform level because ADR 0062 §16 establishes that the index digest
+  is not reproducible while provenance is enabled. This is what makes a re-run safe.
+- **The published platform manifests are checked against the reproducibility proof.** Before,
+  "reproducible" and "published" were two claims in the same run with nothing joining them.
+- **The CycloneDX SBOM is now attached to the digest** with `cosign attest --type cyclonedx`
+  and proven bound with `cosign verify-attestation`. ADR 0062 §17 required an OCI referrer;
+  the pipeline previously produced the SBOM only as an expiring CI artifact.
+- **Provenance content is now checked, not just its attachment** — it must name this
+  repository and the exact commit, and on a non-tag run it must contain no `refs/tags/vX.Y.Z`.
+- **The certificate identity is computed by the caller** and passed in, so `cosign verify` is
+  pinned to one identity rather than to a pattern. The certificate's real claims are printed
+  before the gate runs, so the constraint can be corrected from evidence rather than widened
+  until it passes.
+
+None of this weakens release authority: `release-oci.yml` still triggers only on `v*`, still
+validates `^v[0-9]+\.[0-9]+\.[0-9]+$`, still accepts no input, and still applies the semver
+tag last, from a job the shared machinery cannot reach.
+
+### Guards
+
+`internal/cli/validateworkflow_test.go` and the reworked
+`internal/cli/releaseworkflow_test.go` enforce all of the above. **All 42 mutations from the
+phase's semver-safety, SHA-immutability, signing, attestation, remote-smoke, permission and
+documentation matrices were applied to the real files and all 42 were caught.**
+
+Nine escaped on the first pass, and every one escaped for the same reason: a whole-file
+substring guard stayed green when a needle that appears in several steps was deleted from one
+of them. The guards are now scoped to the step they are about, and count runtime references
+rather than merely finding one.
+
+### Still never run
+
+**Nothing has been published.** The validation workflow has never executed. No image exists at
+GHCR — the package does not exist at all — and no `v0.3.0` Git tag, `:v0.3.0`, `:v0.3`, `:v0`
+or `:latest` OCI tag exists. Everything in Phase 7.1-P's "before the first public release"
+checklist above therefore remains open; this phase built the instrument, not the measurement.
+
+- [ ] **Run `validate-oci.yml` for real.** Requires pushing the branch. Publishes a
+      `sha-<commit>` image and writes a public Rekor transparency-log entry, which is
+      permanent and cannot be withdrawn.
+- [ ] **Decide the SHA staging artifact's retention.** Recommended: retain until v0.3.0 is
+      released, so its signature and attestations stay inspectable and the release run can be
+      compared against it. Deleting it would orphan its referrers.
+- [ ] **Record GHCR package visibility.** A newly created GHCR package is private by default;
+      whether v0.3.0 requires a manual visibility change is unknown until a package exists.
+
+### Open finding, not a blocker
+
+- [ ] **The image carries two SBOM formats.** ADR 0062 §17 says CycloneDX JSON, "one format
+      only — a second format is duplicate surface that can disagree with the first". The build
+      passes `--sbom=true`, which makes BuildKit attach an **SPDX** attestation, while the
+      canonical CycloneDX SBOM is attached separately by cosign. Both are bound to the digest,
+      by different mechanisms, and they can disagree. Left as-is deliberately: setting
+      `--sbom=false` changes the release build recipe, and doing that unreviewed during a
+      validation phase is the kind of change this phase exists to avoid. It needs an ADR 0062
+      decision before v0.3.0.
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6

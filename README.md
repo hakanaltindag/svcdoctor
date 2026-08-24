@@ -603,9 +603,15 @@ neither corresponds to a released commit. Release builders can also inject a val
 The `Dockerfile` in the repository builds one locally:
 
 ```sh
-docker build --build-arg VERSION=v0.3.0 -t svcdoctor:v0.3.0 .
-docker run --rm svcdoctor:v0.3.0 diagnose postgres --host db.internal --user app
+scripts/build-image.sh --dev --platform linux/arm64   # or linux/amd64
+docker run --rm svcdoctor:sha-$(git rev-parse --short HEAD) \
+  diagnose postgres --host db.internal --user app
 ```
+
+The build recipe derives the version from Git rather than accepting one, so a local build
+reports `0.0.0-dev+<commit>` and is addressed by its commit. It cannot label itself `v0.3.0`,
+because no such release exists and an image that claimed one would be indistinguishable from
+a real release that had gone missing.
 
 The image is `gcr.io/distroless/static-debian12:nonroot` plus one static binary. It has **no
 shell and no package manager**, runs as **UID 65532**, and works with a **read-only root
@@ -615,7 +621,7 @@ filesystem and all capabilities dropped**:
 docker run --rm \
   --read-only --cap-drop=ALL --security-opt=no-new-privileges --user=65532:65532 \
   -v /run/secrets/pg:/run/secrets:ro \
-  svcdoctor:v0.3.0 diagnose postgres --host db.internal --user app \
+  svcdoctor:sha-$(git rev-parse --short HEAD) diagnose postgres --host db.internal --user app \
     --password-file /run/secrets/password --output json
 ```
 

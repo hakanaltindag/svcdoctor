@@ -17,6 +17,11 @@ Two obligations remain open and are recorded in §21: the workflow's first real
 run, and native `linux/amd64` execution, which needs a GitHub-hosted amd64
 runner and therefore cannot be demonstrated from an arm64 workstation.
 
+Phase 7.1-V built the instrument for closing both without releasing anything —
+a SHA-only validation workflow sharing one machinery file with the release
+workflow, recorded in §21a — and **it too has never run.** "Never executed"
+above still holds for every workflow in the repository.
+
 Phase 7.1 built and measured the runtime. Phase 7.1-R reviewed it, resolved the
 four questions Phase 7.1 left open, and added the release contract in §12–§19.
 Two of those answers changed as a result of measurement rather than preference,
@@ -731,6 +736,83 @@ with attestations:**
 - **GHCR-specific behaviour** — authentication, tag immutability, package
   association. The mechanisms were proven against a local registry; GHCR is
   expected to behave the same way and has not been asked to.
+
+## 21a. Shared publication machinery (Phase 7.1-V)
+
+**[POLICY] The build, staging, verification, signing and smoke machinery lives in one file,
+`.github/workflows/oci-stage-verify.yml` (`on: workflow_call`), and both the release workflow
+and the remote-validation workflow call it.**
+
+The reason is not tidiness. §21 lists four things that cannot be proven without publishing,
+and the only way to prove them without releasing is a second workflow that publishes a
+`sha-<commit>` image. If that workflow *copies* the machinery, it validates the copy: the two
+diverge on the first edit that touches one of them, and the release path remains the one
+nobody has ever run. Sharing the file is what makes the SHA validation evidence about the
+release path rather than about a lookalike.
+
+**[POLICY] The shared workflow must not decide public identity.** It receives `version`,
+`revision`, `source_date_epoch`, `sha_tag` and `certificate_identity` as inputs. It contains no
+`imagetools create`, no `git describe`, no `build-image.sh --emit` and no reference to
+`GITHUB_REF_NAME`. Authority stays in the caller:
+
+| | Trigger | Identity | Publishes |
+|---|---|---|---|
+| `release-oci.yml` | `v*` tag push | strict `vX.Y.Z` from Git | `sha-<commit>`, then `:vX.Y.Z` last |
+| `validate-oci.yml` | `workflow_dispatch`, no inputs | `0.0.0-dev+<commit>` | `sha-<commit>` and nothing else |
+
+`validate-oci.yml` refuses to run on a tag ref and refuses a release-shaped derived version.
+It has no inputs at all, which is the only shape with no argument about which inputs are safe.
+
+**[POLICY] The staging tag is the full 40-character commit SHA and is enforced immutable.**
+§21 already called `sha-<commit>` immutable; Phase 7.1-V made that enforceable rather than
+conventional. Before pushing, the run asks GHCR whether the tag exists. If it does, its
+platform manifest digests are compared against a fresh reproducible build:
+
+- identical — reuse the existing index digest, push nothing, and continue. This is what makes
+  re-running a failed validation safe.
+- different — **STOP**. Re-pointing the tag would falsify the identity claim for every
+  signature already made against it, and it means the same source produced a different image,
+  which is a reproducibility failure rather than a tagging problem.
+
+Comparison is at the **platform** level, for the reason §16 gives: the index digest is not
+reproducible while provenance is enabled, so comparing indexes would report every honest
+re-run as tampering. An abbreviated SHA was replaced by the full one because the staging tag
+is an identity and an abbreviation can collide.
+
+**[POLICY] The published platform manifests must equal the reproduced ones.** Before this,
+"reproducible" and "published" were two claims made in the same run with nothing joining them.
+
+**[POLICY] The CycloneDX SBOM is attached to the digest as a signed attestation**
+(`cosign attest --type cyclonedx`) and proven bound (`cosign verify-attestation`). §17 required
+an OCI referrer; producing the SBOM only as an expiring CI artifact did not satisfy it.
+
+**[POLICY] Provenance content is checked, not merely its attachment.** It must name this
+repository and the exact commit, and on a non-tag run it must contain no `refs/tags/vX.Y.Z` — a
+validation build that could describe itself as a release would be worse than no provenance,
+because it would look like evidence.
+
+**[POLICY] The certificate identity is computed by the caller and passed in.** `cosign verify`
+is pinned to that one value plus the GitHub OIDC issuer, the repository and the commit —
+never a regexp. The certificate's actual SAN and Fulcio claims are printed *before* the gate,
+so a wrong constraint is corrected from the evidence rather than widened until it passes.
+
+**[FACT] Enforced by mutation, not by review.** All 42 mutations from the Phase 7.1-V matrices
+were applied to the real workflow and documentation files, and all 42 were caught by
+`internal/cli/validateworkflow_test.go` and `internal/cli/releaseworkflow_test.go`. Nine
+escaped on the first pass, every one because a whole-file substring guard survived deleting a
+needle that appears in several steps; the guards are now step-scoped and count runtime
+references.
+
+**[FACT] Never run.** As of this record the validation workflow has not executed, the GHCR
+package does not exist, and no semver Git or OCI tag exists.
+
+### Open: two SBOM formats
+
+`--sbom=true` makes BuildKit attach an **SPDX** attestation while the canonical CycloneDX SBOM
+is attached by cosign. Both are bound to the digest, by different mechanisms, and §17 says one
+format only. This is recorded rather than fixed: `--sbom=false` changes the release build
+recipe, and changing it unreviewed during a validation phase is the failure mode the phase
+exists to avoid. It needs a decision here before v0.3.0.
 
 ## 22. Validation
 
