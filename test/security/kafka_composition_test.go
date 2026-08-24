@@ -1161,7 +1161,12 @@ func TestTheGuardFileStillExists(t *testing.T) {
 		// the negative without naming its successors fails here, which is
 		// exactly what happened while Phase 6.2 was being written.
 		"func TestTheSharedSCRAMCoreIsWhereItWasAuthorized",
-		"func TestRevealHasExactlyTwoProductionCallSites",
+		// Phase 7.5 renamed TestRevealHasExactlyTwoProductionCallSites to the
+		// name below when Redis became the third service. The count was never
+		// the invariant -- "one per service, in its wire package" was, and two
+		// was a consequence of there being two services. The rename happened
+		// here and in the guard together, so it could not be done quietly.
+		"func TestRevealHasOneProductionCallSitePerService",
 		"func TestTheSharedSCRAMCoreOpensNoSecret",
 	} {
 		if !strings.Contains(string(source), required) {

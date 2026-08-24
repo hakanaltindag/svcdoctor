@@ -13,7 +13,7 @@ import (
 //
 // It holds this package's only call to security.Reveal, and svcdoctor has
 // exactly two such calls in total — one per service, each in its adapter's wire
-// package. TestRevealHasExactlyTwoProductionCallSites pins that number
+// package. TestRevealHasOneProductionCallSitePerService pins that number
 // repository-wide and forbidigo confines the call to wire packages.
 //
 // **That is why the dispatch lives here rather than in the adapter.** Phase 6.2

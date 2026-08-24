@@ -578,8 +578,20 @@ func TestTheSharedSCRAMCoreIsWhereItWasAuthorized(t *testing.T) {
 	}
 }
 
-// TestRevealHasExactlyTwoProductionCallSites is the repository-wide credential
-// surface, and it is new in Phase 6.2.
+// TestRevealHasOneProductionCallSitePerService is the repository-wide credential
+// surface. It is new in Phase 6.2 and was called
+// TestRevealHasExactlyTwoProductionCallSites until Phase 7.5 -- the name ADR 0054
+// section 4 still cites, deliberately left as written there because that record
+// says what was true when it was made.
+//
+// # Why the name changed rather than the number
+//
+// The invariant was never "two". It is **one authorized reveal per service,
+// inside that service's wire package, and nowhere else**, and two was a
+// consequence of there being two services. Redis made that visible: the total
+// moved to three and not one clause of the actual contract changed. The total is
+// now derived from the authorized set below, so the set is the single place a
+// service is admitted and the count cannot drift away from it.
 //
 // # The gap this closes
 //
@@ -593,13 +605,14 @@ func TestTheSharedSCRAMCoreIsWhereItWasAuthorized(t *testing.T) {
 // Phase 6.2a found that gap while arguing about whether extraction would widen
 // the credential surface. It does not — but the argument only holds if the count
 // is a property of the source rather than of a sentence in an ADR.
-func TestRevealHasExactlyTwoProductionCallSites(t *testing.T) {
+func TestRevealHasOneProductionCallSitePerService(t *testing.T) {
 	root := repositoryRoot(t)
 
 	// Where each call is allowed, and nowhere else.
 	authorized := map[string]bool{
 		"internal/adapter/postgres/wire/scram.go":     true,
 		"internal/adapter/kafka/wire/authenticate.go": true,
+		"internal/adapter/redis/wire/auth.go":         true,
 	}
 
 	found := map[string]int{}
@@ -677,9 +690,9 @@ func TestRevealHasExactlyTwoProductionCallSites(t *testing.T) {
 		}
 	}
 
-	if total != 2 {
-		t.Errorf("found %d production security.Reveal call site(s), want exactly 2 "+
-			"(one per service, each in its wire package)", total)
+	if total != len(authorized) {
+		t.Errorf("found %d production security.Reveal call site(s), want exactly %d "+
+			"(one per service, each in its wire package)", total, len(authorized))
 	}
 }
 
