@@ -211,6 +211,28 @@ const (
 	recommendUnsupportedBySvcdoctor = "Check whether the listener offers a mechanism svcdoctor " +
 		"supports, or verify this endpoint with a Kafka client that implements the negotiated one"
 
+	// The exchange-side wording, for a mechanism svcdoctor **does** implement.
+	//
+	// The two causes share one finding code, because to an operator they are one
+	// fact — *svcdoctor could not do this* — but they must not share prose. The
+	// strings above say the endpoint negotiated a mechanism svcdoctor does not
+	// implement, and that is false here: svcdoctor performs SCRAM-SHA-256, ran
+	// the handshake, began the exchange and then declined a **parameter inside
+	// it**. Redpanda's 130-byte salt is the measured case (ADR 0061 §19), and a
+	// report telling an operator their broker negotiated an unsupported
+	// mechanism would send them to fix a mechanism that was never the problem.
+	summaryUnsupportedExchange = "svcdoctor could not complete the SASL exchange this Kafka " +
+		"endpoint negotiated"
+	detailUnsupportedExchange = "svcdoctor performs this mechanism, and declined to continue " +
+		"this particular exchange: the identity or password fell outside the printable-ASCII " +
+		"range it prepares, or the endpoint's SCRAM parameters exceeded the sizes it reads.\n" +
+		"Those sizes are svcdoctor's own defensive limits, not a protocol rule, so the " +
+		"endpoint's message may be entirely valid. The credential was neither accepted nor " +
+		"rejected, and no byte of it was sent."
+	recommendUnsupportedExchange = "Check the referenced evidence for which limit applied; if " +
+		"the endpoint is behaving correctly this is a gap in svcdoctor rather than something " +
+		"to change on the cluster"
+
 	summaryCredentialWithheld = "svcdoctor did not present the configured Kafka credential " +
 		"over this channel"
 	detailCredentialWithheld = "A credential was configured and the endpoint asked for " +
@@ -435,18 +457,23 @@ var protocolClaims = map[outcome]claim{
 		// The same claim CodeAuthenticationUnsupportedBySvcdoctor already makes
 		// — *svcdoctor could not perform this* — reached by a different route:
 		// an identity or password outside the printable-ASCII range svcdoctor
-		// can prepare for SCRAM, an iteration count above the ceiling, or a
-		// local derivation fault.
+		// can prepare for SCRAM, an iteration count above the ceiling, a SCRAM
+		// field or message above the defensive sizes the shared core reads
+		// (ADR 0061), or a local derivation fault.
 		//
 		// It reuses that code rather than adding a second one, because a
 		// separate code would divide one operator-facing fact into two on the
 		// basis of which internal check produced it.
+		//
+		// **It does not reuse that code's prose.** Every cause here arrives
+		// inside a mechanism svcdoctor implements, so the mechanism wording
+		// would be false — see summaryUnsupportedExchange.
 		code:             CodeAuthenticationUnsupportedBySvcdoctor,
 		severity:         domain.SeverityInfo,
 		vantageDependent: false,
-		summary:          summaryUnsupportedBySvcdoctor,
-		detail:           detailUnsupportedBySvcdoctor,
-		recommendation:   recommendUnsupportedBySvcdoctor,
+		summary:          summaryUnsupportedExchange,
+		detail:           detailUnsupportedExchange,
+		recommendation:   recommendUnsupportedExchange,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureAuthMechanismNotOffered}: {
 		code:             CodeAuthMechanismNotOffered,

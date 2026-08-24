@@ -271,7 +271,10 @@ func TestRejectedServerFirstNeverDerives(t *testing.T) {
 		{"no equals in an attribute", "rrrr,s=" + rfcSaltBase64 + ",i=4096", ErrMalformedMessage},
 		{"empty attribute", ",r=" + n + "a", ErrMalformedMessage},
 		{"empty message", "", ErrMalformedMessage},
-		{"too many attributes", "r=" + n + "a,s=" + rfcSaltBase64 + ",i=4096" + strings.Repeat(",x=1", maxAttributes), ErrMalformedMessage},
+		// A policy refusal, not a grammar violation: RFC 5802's extensions
+		// list is unbounded, so this message is legal and svcdoctor is the
+		// one declining it (ADR 0061 section 19).
+		{"too many attributes", "r=" + n + "a,s=" + rfcSaltBase64 + ",i=4096" + strings.Repeat(",x=1", maxAttributes), ErrMessageTooLarge},
 	}
 
 	for _, tt := range tests {

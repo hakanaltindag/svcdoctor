@@ -66,6 +66,42 @@ func fuzzSeeds(f *testing.F) {
 	f.Add("")
 	f.Add(",,,,")
 	f.Add("x=" + strings.Repeat("A", 5000))
+
+	// Duplicates of each mandatory attribute. Peer defects rather than policy
+	// refusals, and previously unseeded.
+	f.Add("r=" + fuzzClientNonce + "x,r=" + fuzzClientNonce + "y,s=" + salt + ",i=4096")
+	f.Add("r=" + fuzzClientNonce + "x,s=" + salt + ",s=" + salt + ",i=4096")
+	f.Add("r=" + fuzzClientNonce + "x,s=" + salt + ",i=4096,i=4096")
+
+	// Every defensive threshold at limit-1, limit and limit+1 (ADR 0061 §23).
+	// The seeds are what keep the corpus exploring the edge the policy sits on,
+	// rather than only the middle of the accepted range.
+	saltAt := func(n int) string {
+		return base64.StdEncoding.EncodeToString(make([]byte, n))
+	}
+	for _, n := range []int{maxSaltLen - 1, maxSaltLen, maxSaltLen + 1} {
+		f.Add("r=" + fuzzClientNonce + "x,s=" + saltAt(n) + ",i=4096")
+	}
+	for _, n := range []int{maxNonceLen - 1, maxNonceLen, maxNonceLen + 1} {
+		f.Add("r=" + fuzzClientNonce + strings.Repeat("q", n-len(fuzzClientNonce)) +
+			",s=" + salt + ",i=4096")
+	}
+	for _, n := range []int{maxAttributes - 1, maxAttributes, maxAttributes + 1} {
+		f.Add("r=" + fuzzClientNonce + "x,s=" + salt + ",i=4096" +
+			strings.Repeat(",x=1", n-3))
+	}
+	for _, n := range []string{"1048575", "1048576", "1048577"} {
+		f.Add("r=" + fuzzClientNonce + "x,s=" + salt + ",i=" + n)
+	}
+	for _, n := range []int{maxServerFirstLen - 1, maxServerFirstLen, maxServerFirstLen + 1} {
+		base := "r=" + fuzzClientNonce + "x,s=" + salt + ",i=4096,x="
+		f.Add(base + strings.Repeat("Z", n-len(base)))
+	}
+
+	// The Redpanda shape: a 130-byte salt encoding to 176 characters, which
+	// svcdoctor v0.2.0 refused and ADR 0061 accepts. Permanent regression seed.
+	f.Add("r=" + fuzzClientNonce + strings.Repeat("R", 130) +
+		",s=" + saltAt(130) + ",i=4096")
 }
 
 // FuzzParseServerFirst is the primary target: it drives the real parser with
@@ -135,6 +171,13 @@ func FuzzVerifyServerFinal(f *testing.F) {
 	f.Add("v=!!!!")
 	f.Add("")
 	f.Add("v=")
+
+	// The server-final bound at limit-1, limit and limit+1 (ADR 0061 §23). A
+	// trailing extension is legal after the verifier, so only length varies.
+	for _, n := range []int{maxServerFinalLen - 1, maxServerFinalLen, maxServerFinalLen + 1} {
+		base := "v=" + good + ",x="
+		f.Add(base + strings.Repeat("Z", n-len(base)))
+	}
 
 	f.Fuzz(func(t *testing.T, raw string) {
 		err := verifyServerFinal(raw, expected)

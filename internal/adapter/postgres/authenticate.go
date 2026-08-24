@@ -443,6 +443,13 @@ func (o authObservation) classify() (domain.State, domain.FailureClass) {
 		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
 	case errors.Is(o.err, wire.ErrIterationsUnsupported):
 		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
+	case errors.Is(o.err, wire.ErrSCRAMParametersUnsupported):
+		// The peer's SCRAM message was legal and above svcdoctor's defensive
+		// resource ceiling. Same claim as the iteration case above and the same
+		// class. Before ADR 0061 this reached PROTOCOL_MALFORMED_RESPONSE via
+		// ErrFrameTooLarge, which asserted the peer sent something undecodable
+		// — untrue of every value this covers.
+		return domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor
 	case errors.Is(o.err, wire.ErrLocalDerivation):
 		// svcdoctor's own SCRAM derivation did not produce usable material.
 		// Unreachable from this package's call path — the callback is a

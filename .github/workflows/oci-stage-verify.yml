@@ -1,0 +1,1105 @@
+# The shared OCI staging and verification machinery.
+#
+# # Why this file exists
+#
+# Phase 7.1-V needed to prove that the release pipeline's remote half actually
+# works — GHCR authentication, native amd64 execution, keyless signing, referrer
+# binding, pull-by-digest — without releasing anything. The obvious way to do
+# that is a second workflow that publishes only a `sha-<commit>` tag.
+#
+# The obvious way is also a trap. A second workflow that *copies* the build,
+# scan, SBOM, provenance, signing and verification steps validates the copy.
+# It proves nothing about `release-oci.yml`, and the two drift apart on the
+# first edit that touches only one of them. So the machinery lives here, once,
+# and both callers run *this* file. Validating the SHA path is therefore direct
+# evidence about the release path, because it is the same path.
+#
+# # What this file is NOT allowed to decide
+#
+# **Identity.** This workflow never derives a version, never reads `github.ref`
+# to name an artifact, and never creates a semver tag. It is handed a version, a
+# revision, an epoch and a staging tag, and it builds, verifies and signs what
+# it was handed. Public release identity is the caller's authority and stays
+# there:
+#
+#   release-oci.yml   tag trigger + strict semver + `publish`  -> semver identity
+#   validate-oci.yml  workflow_dispatch + dev version          -> SHA identity only
+#
+# There is deliberately no `publish` job here and no `imagetools create --tag`.
+# A caller that wants a semver tag has to write that step itself, in a workflow
+# whose trigger is a tag — which is the property Phase 7.1-R accepted.
+#
+# # The staging tag is immutable
+#
+# `sha-<commit>` names its source. The same commit must never address different
+# bits, so `stage` refuses to overwrite: if the tag already exists, its platform
+# manifest digests are compared against a freshly reproduced build, and the run
+# either reuses the identical digest or stops. This is what makes re-running a
+# validation safe (ADR 0062 section 21).
+#
+# Third-party actions are pinned by commit SHA. This workflow holds
+# `packages: write` and an OIDC signing identity.
+
+name: OCI stage and verify
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Binary and OCI label version. Derived by the caller; never by this workflow.'
+        required: true
+        type: string
+      revision:
+        description: 'Full 40-character commit SHA being built.'
+        required: true
+        type: string
+      source_date_epoch:
+        description: "The revision's committer timestamp, for deterministic layers."
+        required: true
+        type: string
+      sha_tag:
+        description: 'Immutable staging tag, sha-<full commit>. The only tag this workflow writes.'
+        required: true
+        type: string
+      certificate_identity:
+        description: >-
+          The exact Fulcio certificate SAN this run must produce. The caller
+          computes it, so `cosign verify` is pinned to one identity rather than
+          to a pattern that would accept any GitHub Actions signature.
+        required: true
+        type: string
+      run_arm64_smoke:
+        description: 'Run the native arm64 smoke. Costs money on private repositories.'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      digest:
+        description: 'The multi-arch index digest that passed every gate.'
+        value: ${{ jobs.stage.outputs.digest }}
+      amd64_digest:
+        description: 'linux/amd64 platform manifest digest.'
+        value: ${{ jobs.reproducibility.outputs.amd64_digest }}
+      arm64_digest:
+        description: 'linux/arm64 platform manifest digest.'
+        value: ${{ jobs.reproducibility.outputs.arm64_digest }}
+      reused:
+        description: 'true when the staging tag already held these exact bits and nothing was pushed.'
+        value: ${{ jobs.stage.outputs.reused }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # A. Reproducibility proof, and the expected platform digests
+  # ---------------------------------------------------------------------------
+  #
+  # ADR 0062 section 15 requires official images to be reproducible, so this
+  # proves it rather than asserting it: built twice, cold cache, compared at the
+  # *platform manifest* level. Never the index — the index references
+  # attestations that legitimately differ (section 16), so an index comparison
+  # would fail for a reason that has nothing to do with the image.
+  #
+  # The digests are an output as well as a check. `stage` needs them to decide
+  # whether an existing staging tag holds these exact bits, which is the whole
+  # basis of the immutability rule below.
+  reproducibility:
+    name: Reproducibility proof
+    runs-on: ubuntu-latest
+    outputs:
+      amd64_digest: ${{ steps.compare.outputs.amd64_digest }}
+      arm64_digest: ${{ steps.compare.outputs.arm64_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build twice and compare platform digests
+        id: compare
+        env:
+          SOURCE_DATE_EPOCH: ${{ inputs.source_date_epoch }}
+          VERSION: ${{ inputs.version }}
+          REVISION: ${{ inputs.revision }}
+        run: |
+          set -eu
+          build() {
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg "VERSION=${VERSION}" \
+              --build-arg "REVISION=${REVISION}" \
+              --provenance=false --sbom=false --no-cache \
+              --output "type=oci,dest=$1,rewrite-timestamp=true" .
+          }
+          build /tmp/a.tar
+          build /tmp/b.tar
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, tarfile, sys
+
+          def platform_digests(path):
+              with tarfile.open(path) as t:
+                  index = json.load(t.extractfile('index.json'))
+                  top = index['manifests'][0]['digest'].replace(':', '/')
+                  listing = json.load(t.extractfile(f'blobs/{top}'))
+              out = {}
+              for m in listing['manifests']:
+                  p = m.get('platform', {})
+                  if p.get('architecture') != 'unknown':
+                      out[f"{p['os']}/{p['architecture']}"] = m['digest']
+              return out
+
+          a, b = platform_digests('/tmp/a.tar'), platform_digests('/tmp/b.tar')
+          ok = True
+          for k in sorted(set(a) | set(b)):
+              same = a.get(k) == b.get(k)
+              ok &= same
+              print(f"{k:14} {'IDENTICAL' if same else 'DIFFER'}  {a.get(k)}", file=sys.stderr)
+          if not ok:
+              print('::error::platform image digests are not reproducible', file=sys.stderr)
+              sys.exit(1)
+          print(f"amd64_digest={a['linux/amd64']}")
+          print(f"arm64_digest={a['linux/arm64']}")
+          PY
+
+  # ---------------------------------------------------------------------------
+  # B. Stage under the immutable SHA tag
+  # ---------------------------------------------------------------------------
+  #
+  # The only push of image content anywhere in the pipeline. It lands under
+  # `sha-<commit>`, which names its source and can never be mistaken for a
+  # release.
+  #
+  # The pre-flight check is the immutability rule. `sha-<commit>` is an identity
+  # claim: this commit produced these bits. Re-pointing it at different bits
+  # would make that claim false for every artifact already signed against it, so
+  # a mismatch stops the run instead of overwriting. A *match* is not an error —
+  # it is a re-run of the same commit, and reusing the identical digest is what
+  # makes re-running safe.
+  #
+  # Comparison is at the platform level for the reason section 16 gives: the
+  # index digest is not reproducible while provenance is enabled, so comparing
+  # indexes would report every honest re-run as tampering.
+  stage:
+    name: Stage image
+    runs-on: ubuntu-latest
+    needs: [reproducibility]
+    # No id-token: this job pushes, it does not sign. BuildKit's provenance and
+    # SBOM attestations come from the build and need no OIDC identity. Signing
+    # happens in `verify`, which is the only job that gets one.
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.resolve.outputs.digest }}
+      reused: ${{ steps.resolve.outputs.reused }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # GITHUB_TOKEN, not a PAT. Nothing long-lived is stored for the registry.
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Staging tag is absent, or already holds exactly these bits
+        id: preflight
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA_TAG: ${{ inputs.sha_tag }}
+          WANT_AMD64: ${{ needs.reproducibility.outputs.amd64_digest }}
+          WANT_ARM64: ${{ needs.reproducibility.outputs.arm64_digest }}
+        run: |
+          set -eu
+          repo="${GITHUB_REPOSITORY,,}"
+          token="$(curl -fsSL -u "x:${GH_TOKEN}" \
+            "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+
+          code="$(curl -s -o /tmp/existing.json -w '%{http_code}' \
+            -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/${SHA_TAG}")"
+
+          if [ "$code" != "200" ]; then
+            echo "staging tag ${SHA_TAG} is absent (HTTP $code) — will publish"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          existing="$(curl -sI -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/${SHA_TAG}" \
+            | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')"
+          echo "staging tag ${SHA_TAG} already exists at ${existing}"
+
+          python3 - <<'PY'
+          import json, os, sys
+          idx = json.load(open('/tmp/existing.json'))
+          got = {}
+          for m in idx.get('manifests', []):
+              p = m.get('platform', {})
+              if p.get('architecture') != 'unknown':
+                  got[f"{p['os']}/{p['architecture']}"] = m['digest']
+          want = {'linux/amd64': os.environ['WANT_AMD64'],
+                  'linux/arm64': os.environ['WANT_ARM64']}
+          if got != want:
+              print('::error::the staging tag already exists and holds DIFFERENT bits.')
+              print(f'::error::published: {got}')
+              print(f'::error::rebuilt:   {want}')
+              print('::error::sha-<commit> is an immutable identity claim; refusing to re-point it. '
+                    'This means the same source produced a different image, which is a '
+                    'reproducibility failure, not a tagging problem.')
+              sys.exit(1)
+          print('published platform digests are identical to the rebuild — idempotent re-run')
+          PY
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "existing_digest=${existing}" >> "$GITHUB_OUTPUT"
+
+      # `--sbom=false` is deliberate and `--provenance=mode=max` is deliberate;
+      # they are not a pair. BuildKit would emit an SPDX SBOM, and ADR 0062 §17
+      # names **one** canonical format, CycloneDX JSON, for a reason that is not
+      # tidiness: two independently produced inventories of the same image can
+      # disagree about component names, versions and base-package modelling, and
+      # an operator asking "what is in this image" would have two answers with no
+      # rule for choosing. The canonical SBOM is generated explicitly in `verify`
+      # and attached with cosign.
+      #
+      # Provenance stays on. It answers a different question — how and from what
+      # this was built — and nothing else produces it. Measured on the published
+      # index: both predicates previously shared one attestation manifest per
+      # platform, so this had to be verified rather than assumed.
+      - name: Build and push by SHA tag
+        id: push
+        if: steps.preflight.outputs.exists != 'true'
+        env:
+          SOURCE_DATE_EPOCH: ${{ inputs.source_date_epoch }}
+        run: |
+          set -eu
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg "VERSION=${{ inputs.version }}" \
+            --build-arg "REVISION=${{ inputs.revision }}" \
+            --provenance=mode=max \
+            --sbom=false \
+            --output "type=image,name=${IMAGE}:${{ inputs.sha_tag }},push=true,rewrite-timestamp=true" \
+            --metadata-file /tmp/meta.json \
+            .
+          digest="$(python3 -c 'import json;print(json.load(open("/tmp/meta.json"))["containerimage.digest"])')"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "staged ${IMAGE}@${digest}"
+
+      # One output regardless of which path ran, so every later job addresses
+      # the digest and never the tag.
+      - name: Resolve the staged digest
+        id: resolve
+        run: |
+          set -eu
+          if [ "${{ steps.preflight.outputs.exists }}" = "true" ]; then
+            echo "digest=${{ steps.preflight.outputs.existing_digest }}" >> "$GITHUB_OUTPUT"
+            echo "reused=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "digest=${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
+            echo "reused=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # C. Validate the staged digest
+  # ---------------------------------------------------------------------------
+  #
+  # Everything here addresses the digest, never a tag. A tag can be re-pointed;
+  # a digest is the artifact.
+  verify:
+    name: Verify staged image
+    runs-on: ubuntu-latest
+    needs: [reproducibility, stage]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Exactly two runtime platforms. BuildKit attestations appear in the same
+      # index as `unknown/unknown` manifests; counting one as an architecture
+      # would report a three-architecture release that does not exist.
+      - name: Multi-arch index contains exactly amd64 and arm64
+        env:
+          WANT_AMD64: ${{ needs.reproducibility.outputs.amd64_digest }}
+          WANT_ARM64: ${{ needs.reproducibility.outputs.arm64_digest }}
+        run: |
+          set -eu
+          docker buildx imagetools inspect "${IMAGE}@${{ needs.stage.outputs.digest }}" --raw > /tmp/index.json
+          python3 - <<'PY'
+          import json, os, sys
+          idx = json.load(open('/tmp/index.json'))
+          plats, attest = {}, 0
+          for m in idx['manifests']:
+              p = m.get('platform', {})
+              if p.get('architecture') == 'unknown':
+                  attest += 1
+              else:
+                  plats[f"{p['os']}/{p['architecture']}"] = m['digest']
+          print('runtime platforms:', sorted(plats))
+          print('attestation manifests:', attest)
+          bad = False
+          if sorted(plats) != ['linux/amd64', 'linux/arm64']:
+              print('::error::index must expose exactly linux/amd64 and linux/arm64')
+              bad = True
+          # The published platform manifests must be the ones the reproducibility
+          # job produced. Without this, "reproducible" and "published" are two
+          # unrelated claims that happen to appear in the same run.
+          for plat, want in (('linux/amd64', os.environ['WANT_AMD64']),
+                             ('linux/arm64', os.environ['WANT_ARM64'])):
+              if plats.get(plat) != want:
+                  print(f'::error::{plat} published as {plats.get(plat)}, reproduced as {want}')
+                  bad = True
+          sys.exit(1 if bad else 0)
+          PY
+
+      # ADR 0062 section 11: labels are projections of release identity. They are
+      # not authority, which is exactly why they must be checked against it.
+      - name: OCI labels match the build identity
+        run: |
+          set -eu
+          docker buildx imagetools inspect "${IMAGE}@${{ needs.stage.outputs.digest }}" \
+            --format '{{json .Image}}' > /tmp/cfg.json
+          python3 - <<'PY'
+          import json, os, sys
+          cfg = json.load(open('/tmp/cfg.json'))
+          configs = list(cfg.values()) if isinstance(cfg, dict) and 'config' not in cfg else [cfg]
+          want = {
+              'org.opencontainers.image.version': os.environ['VERSION'],
+              'org.opencontainers.image.revision': os.environ['REVISION'],
+              'org.opencontainers.image.source': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}",
+          }
+          required = ['org.opencontainers.image.title',
+                      'org.opencontainers.image.description',
+                      'org.opencontainers.image.licenses']
+          bad = False
+          for c in configs:
+              labels = (c.get('config') or {}).get('Labels') or {}
+              for k, v in want.items():
+                  if labels.get(k) != v:
+                      print(f"::error::{k} is {labels.get(k)!r}, expected {v!r}")
+                      bad = True
+              for k in required:
+                  if not labels.get(k):
+                      print(f"::error::{k} is missing")
+                      bad = True
+          sys.exit(1 if bad else 0)
+          PY
+        env:
+          VERSION: ${{ inputs.version }}
+          REVISION: ${{ inputs.revision }}
+
+      # ADR 0062 section 19. Blocks on HIGH/CRITICAL. An exception is a
+      # deliberate, reviewed edit to .trivyignore naming the CVE and why it is
+      # unreachable in an image with no shell and no package manager — not a
+      # blanket --ignore-unfixed.
+      - name: Vulnerability scan
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ needs.stage.outputs.digest }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: false
+          trivyignores: .trivyignore
+
+      # BuildKit binds each attestation to the platform image it describes via
+      # the `vnd.docker.reference.digest` annotation. Generating an attestation
+      # is not the claim; being attached to *this* digest is.
+      - name: BuildKit provenance is bound to this digest
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json, sys
+          idx = json.load(open('/tmp/index.json'))
+          images = {m['digest'] for m in idx['manifests']
+                    if m.get('platform', {}).get('architecture') != 'unknown'}
+          attached = set()
+          for m in idx['manifests']:
+              ann = m.get('annotations') or {}
+              ref = ann.get('vnd.docker.reference.digest')
+              if ann.get('vnd.docker.reference.type') == 'attestation-manifest' and ref:
+                  if ref not in images:
+                      print(f'::error::attestation references {ref}, which is not in this index')
+                      sys.exit(1)
+                  attached.add(ref)
+          missing = images - attached
+          if missing:
+              print(f'::error::platform images without attestations: {sorted(missing)}')
+              sys.exit(1)
+          print(f'every platform image ({len(images)}) carries an attestation bound to its digest')
+          PY
+
+      # The provenance predicate must name this source and this commit. An
+      # attestation that is *attached* correctly but *claims* the wrong origin is
+      # worse than none, because it looks like evidence.
+      - name: Provenance names this repository, commit and workflow
+        env:
+          REVISION: ${{ inputs.revision }}
+        run: |
+          set -eu
+          docker buildx imagetools inspect "${IMAGE}@${{ needs.stage.outputs.digest }}" \
+            --format '{{json .Provenance}}' > /tmp/prov.json
+          python3 - <<'PY'
+          import json, os, sys
+          raw = json.load(open('/tmp/prov.json'))
+          blob = json.dumps(raw)
+          rev = os.environ['REVISION']
+          repo = os.environ['GITHUB_REPOSITORY']
+          bad = False
+          for needle, what in ((rev, 'the exact commit'),
+                               (repo, 'this repository')):
+              if needle not in blob:
+                  print(f'::error::provenance does not name {what} ({needle})')
+                  bad = True
+          # A SHA validation build must not be able to describe itself as a
+          # semver release. If a tag ref leaks into a dispatch-triggered
+          # provenance statement, the statement is a lie about what happened.
+          print('provenance bytes:', len(blob))
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Provenance does not claim a semver release ref
+        if: github.ref_type != 'tag'
+        run: |
+          set -eu
+          if grep -Eo 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+' /tmp/prov.json; then
+            echo "::error::provenance claims a semver tag ref, but this run was not triggered by one"
+            exit 1
+          fi
+          echo "provenance claims no semver tag ref, which is correct for this run"
+
+      # ADR 0062 section 17: CycloneDX JSON is the canonical SBOM format.
+      - name: Export CycloneDX SBOM
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ needs.stage.outputs.digest }}
+          format: cyclonedx
+          output: sbom.cdx.json
+          severity: HIGH,CRITICAL
+          skip-setup-trivy: true
+
+      - name: SBOM names the expected components and carries no secret
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json, re, sys
+          sbom = json.load(open('sbom.cdx.json'))
+          names = {c.get('name', '') for c in sbom.get('components', [])}
+          print(f"SBOM components: {len(names)}")
+          bad = []
+          missing = [w for w in ('svcdoctor', 'ca-certificates') if not any(w in n for n in names)]
+          if not any('kmsg' in n or 'franz-go' in n for n in names):
+              missing.append('franz-go/kmsg')
+          if missing:
+              print(f'::error::SBOM is missing expected components: {missing}')
+              bad.append(1)
+          # An SBOM is published. It must not carry anything the repository
+          # treats as a credential, including test fixture material.
+          blob = open('sbom.cdx.json').read()
+          for pat in (r'BEGIN [A-Z ]*PRIVATE KEY', r'svcdoctor-test-password',
+                      r'PGPASSWORD', r'SASL_PASSWORD'):
+              if re.search(pat, blob):
+                  print(f'::error::SBOM contains material matching {pat!r}')
+                  bad.append(1)
+          sys.exit(1 if bad else 0)
+          PY
+
+      # Pinned twice, on purpose. The SHA pins the *action*; `cosign-release`
+      # pins the *binary*, which the action would otherwise choose for us and
+      # change under us on its own schedule. Phase 7.1-VR found this pipeline
+      # silently running cosign v2.5.2 — the pinned action's default — while its
+      # documentation talked about v3 behaviour.
+      #
+      # v3.1.3 is the current cosign line. v4 is announced but unreleased, and
+      # `cosign triangulate` is deprecated in v3 and removed when v4 ships; this
+      # pipeline no longer uses it, so the v4 upgrade is a version bump rather
+      # than a redesign.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.3'
+
+      - name: Record the cosign version in use
+        run: cosign version
+
+      # ADR 0062 section 17: keyless, over the digest, never over a tag.
+      # No key file, no COSIGN_PASSWORD, no signing secret — the identity is the
+      # short-lived OIDC token this job is granted and nothing else.
+      - name: Sign the digest (keyless, GitHub OIDC)
+        run: cosign sign --yes "${IMAGE}@${{ needs.stage.outputs.digest }}"
+
+      # ADR 0062 section 17 also requires the SBOM to be published as an OCI
+      # referrer, not merely produced. A CI artifact expires and is invisible to
+      # anyone holding the image; an attestation travels with the digest.
+      - name: Attach the CycloneDX SBOM as a signed attestation
+        run: |
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json \
+            "${IMAGE}@${{ needs.stage.outputs.digest }}"
+
+      # Evidence, deliberately placed *before* the gate. ADR 0062 section 17
+      # requires a narrow identity constraint, and the only honest way to write
+      # one is to read the certificate the run actually produced rather than to
+      # guess a pattern and widen it until it passes.
+      # Evidence, deliberately placed *before* the gate and deliberately unable to
+      # fail it. ADR 0062 §17 requires a narrow identity constraint, and the only
+      # honest way to write one is to read the certificate the run actually
+      # produced rather than to guess a pattern and widen it until it passes.
+      #
+      # `continue-on-error` is the point, not a concession: the first real run of
+      # this workflow died here on a JSON key name, which skipped `cosign verify`
+      # — the actual gate, which passes. A diagnostic that can block a gate is a
+      # liability, and the gate below is what decides the run.
+      - name: Record the certificate claims this run actually produced
+        continue-on-error: true
+        run: |
+          set -eu
+          # `cosign download signature` returns one JSON object per signature.
+          # The certificate is under "Cert", capitalised, and is an object whose
+          # "Raw" field is base64 DER — not a PEM string.
+          cosign download signature "${IMAGE}@${{ needs.stage.outputs.digest }}" \
+            | head -1 > /tmp/sig.json
+          python3 - <<'PY'
+          import base64, json, sys
+
+          d = json.load(open('/tmp/sig.json'))
+
+          # Two shapes, because cosign changed one under us. v2 returned a
+          # simple-signing object with the certificate under "Cert" (an object
+          # whose "Raw" is base64 DER). v3 returns a Sigstore bundle, and the
+          # certificate is verificationMaterial.certificate.rawBytes.
+          #
+          # Both are handled rather than one being chosen, so this keeps working
+          # across the upgrade instead of going quiet on the far side of it.
+          raw = None
+          vm = d.get('verificationMaterial') or {}
+          if (vm.get('certificate') or {}).get('rawBytes'):
+              raw = vm['certificate']['rawBytes']
+              print('bundle format:', d.get('mediaType'))
+          elif d.get('Cert'):
+              c = d['Cert']
+              raw = c['Raw'] if isinstance(c, dict) else c
+              print('legacy simple-signing format')
+          if not raw:
+              print('no certificate found; keys were:', sorted(d))
+              sys.exit(1)
+          open('/tmp/cert.der', 'wb').write(base64.b64decode(raw))
+
+          # The transparency-log entry lives in the same document under v3.
+          # `cosign verify`'s "optional" block carried it under v2 and is empty
+          # under v3, which is why it must be read from here.
+          for e in vm.get('tlogEntries') or []:
+              print('rekor log index :', e.get('logIndex'))
+              print('rekor integrated:', e.get('integratedTime'))
+              print('rekor log id    :', (e.get('logId') or {}).get('keyId'))
+          PY
+          echo "== subject alternative name =="
+          openssl x509 -inform DER -in /tmp/cert.der -noout -ext subjectAltName
+          echo "== issuer and validity =="
+          openssl x509 -inform DER -in /tmp/cert.der -noout -issuer -dates
+          echo "== Fulcio GitHub claims =="
+          openssl x509 -inform DER -in /tmp/cert.der -noout -text > /tmp/cert.txt
+          python3 - <<'PY'
+          import re
+          # Fulcio's documented GitHub Actions extension OIDs.
+          oids = {
+              '1.3.6.1.4.1.57264.1.2': 'trigger event',
+              '1.3.6.1.4.1.57264.1.3': 'commit sha',
+              '1.3.6.1.4.1.57264.1.4': 'workflow name',
+              '1.3.6.1.4.1.57264.1.5': 'repository',
+              '1.3.6.1.4.1.57264.1.6': 'ref',
+              '1.3.6.1.4.1.57264.1.8': 'oidc issuer',
+              '1.3.6.1.4.1.57264.1.9': 'build signer uri',
+              '1.3.6.1.4.1.57264.1.10': 'build signer digest',
+              '1.3.6.1.4.1.57264.1.11': 'runner environment',
+              '1.3.6.1.4.1.57264.1.12': 'source repository uri',
+              '1.3.6.1.4.1.57264.1.13': 'source repository digest',
+              '1.3.6.1.4.1.57264.1.14': 'source repository ref',
+              '1.3.6.1.4.1.57264.1.21': 'run invocation uri',
+          }
+          text = open('/tmp/cert.txt').read()
+          for oid, label in oids.items():
+              m = re.search(re.escape(oid) + r':\s*\n\s*(.*)', text)
+              if m:
+                  print(f'  {label:24} {m.group(1).strip().lstrip(".").strip()}')
+          PY
+
+      # Signing succeeding is not the gate. Verification against a *constrained*
+      # identity is: an unconstrained verify, or `--certificate-identity-regexp`
+      # with a permissive pattern, accepts any valid Sigstore signature from any
+      # identity on earth. The identity is supplied by the caller, because the
+      # caller is the authority for what this run is allowed to be.
+      - name: Verify the signature against this exact identity
+        run: |
+          set -eu
+          cosign verify \
+            --certificate-identity "${{ inputs.certificate_identity }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-github-workflow-repository "${GITHUB_REPOSITORY}" \
+            --certificate-github-workflow-sha "${{ inputs.revision }}" \
+            "${IMAGE}@${{ needs.stage.outputs.digest }}" > /tmp/verified.json
+          echo "signature verified against ${{ inputs.certificate_identity }}"
+
+      - name: Verify the SBOM attestation is bound to this digest
+        run: |
+          set -eu
+          cosign verify-attestation --type cyclonedx \
+            --certificate-identity "${{ inputs.certificate_identity }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-github-workflow-repository "${GITHUB_REPOSITORY}" \
+            --certificate-github-workflow-sha "${{ inputs.revision }}" \
+            "${IMAGE}@${{ needs.stage.outputs.digest }}" > /tmp/attested.json
+          echo "CycloneDX attestation verified against the image digest"
+
+      # The signature and the SBOM must cover the index — the artifact an
+      # operator pulls — and not a platform manifest, and not a tag.
+      #
+      # This used to ask `cosign triangulate` where the signature lived and
+      # compare the answer to a string this workflow built from the same digest.
+      # That was a tautology dressed as a check: both sides applied the same
+      # transformation to the same input, so it could only fail if cosign changed
+      # its formatting. It also depended on cosign's backing-tag layout, which is
+      # an implementation detail, and on a subcommand deprecated in cosign v3 and
+      # removed in v4.
+      #
+      # What replaces it is semantic and stronger: read what the *verifier*
+      # attested to. `cosign verify` and `cosign verify-attestation` have already
+      # checked the signature, the certificate identity and the transparency log;
+      # their payloads name the subject digest, and that is the fact worth
+      # asserting. Nothing here needs to know how cosign stores anything.
+      - name: Signature and SBOM name the index digest, not a platform
+        env:
+          DIGEST: ${{ needs.stage.outputs.digest }}
+          WANT_AMD64: ${{ needs.reproducibility.outputs.amd64_digest }}
+          WANT_ARM64: ${{ needs.reproducibility.outputs.arm64_digest }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import base64, json, os, sys
+
+          want = os.environ['DIGEST']
+          bare = want.split(':', 1)[1]
+          bad = False
+
+          # 1. The verified signature payload names exactly the staged digest.
+          sig = json.load(open('/tmp/verified.json'))
+          subjects = {e.get('critical', {}).get('image', {}).get('docker-manifest-digest')
+                      for e in sig}
+          if subjects != {want}:
+              print(f'::error::verified signature names {subjects}, expected {{{want}}}')
+              bad = True
+          else:
+              print(f'signature payload names exactly {want} ({len(sig)} signature(s))')
+
+          # 2. The verified attestation is CycloneDX and names the same digest.
+          #    Its payload is a base64 in-toto statement inside a DSSE envelope.
+          preds, subs, boms = set(), set(), set()
+          for line in open('/tmp/attested.json'):
+              line = line.strip()
+              if not line:
+                  continue
+              stmt = json.loads(base64.b64decode(json.loads(line)['payload']))
+              preds.add(stmt.get('predicateType'))
+              subs.update(x['digest']['sha256'] for x in stmt.get('subject', []))
+              pred = stmt.get('predicate') or {}
+              boms.add((pred.get('bomFormat'), pred.get('specVersion')))
+          if preds != {'https://cyclonedx.org/bom'}:
+              print(f'::error::attestation predicate types are {preds}, expected CycloneDX only')
+              bad = True
+          if subs != {bare}:
+              print(f'::error::attestation names subjects {subs}, expected {{{bare}}}')
+              bad = True
+          for fmt, spec in boms:
+              if fmt != 'CycloneDX':
+                  print(f'::error::attached SBOM declares bomFormat {fmt!r}, not CycloneDX')
+                  bad = True
+              print(f'attestation: CycloneDX {spec} bound to {bare}')
+
+          # 3. That digest is the multi-arch index, not one of its platforms.
+          for plat, d in (('linux/amd64', os.environ['WANT_AMD64']),
+                          ('linux/arm64', os.environ['WANT_ARM64'])):
+              if want == d:
+                  print(f'::error::the signed digest is the {plat} manifest, not the index')
+                  bad = True
+          idx = json.load(open('/tmp/index.json'))
+          if idx.get('mediaType') != 'application/vnd.oci.image.index.v1+json':
+              print(f"::error::signed digest is a {idx.get('mediaType')}, not an image index")
+              bad = True
+
+          sys.exit(1 if bad else 0)
+          PY
+
+      # ADR 0062 §17 closure, and the load-bearing test of Phase 7.1-VR: the
+      # published image carries **one** SBOM format.
+      #
+      # Checked against the registry rather than against the build flags,
+      # because the claim is about the artifact. Each BuildKit attestation
+      # manifest is fetched and its layers' in-toto predicate types read. SPDX
+      # would appear here if `--sbom` were ever switched back on, including by
+      # a default change upstream that no diff in this repository would show.
+      #
+      # Provenance is asserted present in the same pass. The two predicates used
+      # to share one manifest per platform, so "SPDX is gone" and "provenance
+      # survived" are one measurement, not two.
+      - name: Exactly one SBOM format, and provenance survived
+        run: |
+          set -eu
+          python3 - <<'PY' > /tmp/att_manifests.txt
+          import json
+          idx = json.load(open('/tmp/index.json'))
+          for m in idx['manifests']:
+              if (m.get('annotations') or {}).get('vnd.docker.reference.type') == 'attestation-manifest':
+                  print(m['digest'])
+          PY
+          : > /tmp/predicates.txt
+          while read -r d; do
+            [ -n "$d" ] || continue
+            docker buildx imagetools inspect "${IMAGE}@${d}" --raw > /tmp/am.json
+            python3 - <<'PY' >> /tmp/predicates.txt
+          import json
+          m = json.load(open('/tmp/am.json'))
+          for l in m.get('layers', []):
+              ann = l.get('annotations') or {}
+              t = ann.get('in-toto.io/predicate-type')
+              if t:
+                  print(t)
+          PY
+          done < /tmp/att_manifests.txt
+
+          echo "== in-toto predicates attached to platform images =="
+          sort /tmp/predicates.txt | uniq -c
+
+          python3 - <<'PY'
+          import sys
+          preds = [l.strip() for l in open('/tmp/predicates.txt') if l.strip()]
+          bad = False
+          spdx = [p for p in preds if 'spdx' in p.lower()]
+          if spdx:
+              print(f'::error::the image carries {len(spdx)} SPDX SBOM attestation(s): {sorted(set(spdx))}')
+              print('::error::ADR 0062 §17 names one canonical SBOM format, CycloneDX JSON. '
+                    'Two independently produced inventories can disagree, and an operator '
+                    'would have no rule for choosing between them.')
+              bad = True
+          if not any('slsa.dev/provenance' in p for p in preds):
+              print('::error::no SLSA provenance attestation is attached. Disabling the '
+                    'BuildKit SBOM must not disable BuildKit provenance.')
+              bad = True
+          for other in {p for p in preds
+                        if 'slsa.dev/provenance' not in p and 'spdx' not in p.lower()}:
+              print(f'::warning::unexpected predicate type attached: {other}')
+          if not bad:
+              print(f'one SBOM format (CycloneDX, via cosign) and provenance present; '
+                    f'{len(preds)} BuildKit predicate(s), none of them SPDX')
+          sys.exit(1 if bad else 0)
+          PY
+
+      # Sigstore's public transparency log. Recorded, not hidden: a keyless
+      # signature is only auditable because the entry is public.
+      #
+      # Read from the signature bundle rather than from `cosign verify`'s output.
+      # Under cosign v2 the entry appeared in the verify result's `optional`
+      # block; under v3 that block is empty and the log entry lives in the
+      # bundle, so a step reading the old location prints `None` and reports
+      # success. Measured on the first v3 run.
+      - name: Record the Rekor transparency entry
+        continue-on-error: true
+        run: |
+          set -eu
+          cosign download signature "${IMAGE}@${{ needs.stage.outputs.digest }}" > /tmp/sigs.json
+          python3 - <<'PY'
+          import json, sys
+
+          found = 0
+          for line in open('/tmp/sigs.json'):
+              line = line.strip()
+              if not line:
+                  continue
+              d = json.loads(line)
+              entries = ((d.get('verificationMaterial') or {}).get('tlogEntries')
+                         or [(d.get('Bundle') or {}).get('Payload') or {}])
+              for e in entries:
+                  idx = e.get('logIndex')
+                  if idx is None:
+                      continue
+                  found += 1
+                  print('rekor log index :', idx)
+                  print('rekor integrated:', e.get('integratedTime'))
+                  print('rekor log id    :', (e.get('logId') or {}).get('keyId') or e.get('logID'))
+          if not found:
+              print('::warning::no Rekor entry could be read from the signature bundle')
+              sys.exit(1)
+          PY
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-${{ inputs.sha_tag }}
+          path: sbom.cdx.json
+
+  # ---------------------------------------------------------------------------
+  # D. Native amd64 runtime smoke, by digest
+  # ---------------------------------------------------------------------------
+  #
+  # Closes the evidence gap Phase 7.1 left open: amd64 was previously built and
+  # run only under emulation, and an emulated run is not evidence that the
+  # binary works on the architecture operators will use. `ubuntu-latest` is
+  # native amd64, and the image is pulled *by digest* so what is tested is
+  # exactly what was verified and will be tagged.
+  smoke-amd64:
+    name: Native amd64 smoke
+    runs-on: ubuntu-latest
+    needs: [reproducibility, stage]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The runner's own architecture, recorded before anything is pulled. If
+      # this said aarch64, every "native amd64" claim below would be emulation.
+      - name: Runner is genuinely native amd64
+        run: |
+          set -eu
+          echo "runner os:      $(uname -s) $(uname -r)"
+          echo "runner arch:    $(uname -m)"
+          echo "RUNNER_ARCH:    ${RUNNER_ARCH}"
+          echo "docker arch:    $(docker version --format '{{.Server.Arch}}')"
+          [ "$(uname -m)" = "x86_64" ] || { echo "::error::runner is $(uname -m), not x86_64"; exit 1; }
+          [ "${RUNNER_ARCH}" = "X64" ] || { echo "::error::RUNNER_ARCH is ${RUNNER_ARCH}, not X64"; exit 1; }
+          [ "$(docker version --format '{{.Server.Arch}}')" = "amd64" ] \
+            || { echo "::error::docker daemon is not amd64"; exit 1; }
+
+      - name: Pull by digest and verify the runtime contract
+        env:
+          WANT_AMD64: ${{ needs.reproducibility.outputs.amd64_digest }}
+        run: |
+          set -eu
+          ref="${IMAGE}@${{ needs.stage.outputs.digest }}"
+          docker pull --platform linux/amd64 "$ref"
+
+          echo "== architecture is genuinely amd64 =="
+          arch="$(docker image inspect "$ref" --format '{{.Architecture}}')"
+          [ "$arch" = "amd64" ] || { echo "::error::pulled $arch, expected amd64"; exit 1; }
+
+          echo "== version matches the build identity =="
+          got="$(docker run --rm --platform linux/amd64 "$ref" --version)"
+          [ "$got" = "${{ inputs.version }}" ] \
+            || { echo "::error::binary reports '$got', identity is '${{ inputs.version }}'"; exit 1; }
+
+          echo "== runs hardened: non-root, read-only rootfs, no capabilities =="
+          docker run --rm --platform linux/amd64 \
+            --read-only --cap-drop=ALL --security-opt=no-new-privileges --user=65532:65532 \
+            "$ref" --version > /dev/null
+
+          echo "== image config: nonroot user, direct entrypoint, no exposed port =="
+          docker image inspect "$ref" --format '{{.Config.User}} {{json .Config.Entrypoint}} {{json .Config.ExposedPorts}}'
+          [ "$(docker image inspect "$ref" --format '{{.Config.User}}')" = "65532:65532" ] \
+            || { echo "::error::image does not run as 65532:65532"; exit 1; }
+
+          echo "== the pulled image is the reproduced platform manifest =="
+          docker buildx imagetools inspect "$ref" --raw > /tmp/idx.json
+          python3 - <<'PY'
+          import json, os, sys
+          idx = json.load(open('/tmp/idx.json'))
+          got = next(m['digest'] for m in idx['manifests']
+                     if m.get('platform', {}).get('architecture') == 'amd64')
+          want = os.environ['WANT_AMD64']
+          if got != want:
+              print(f'::error::pulled amd64 manifest {got}, reproduced {want}')
+              sys.exit(1)
+          print(f'amd64 manifest matches the reproducibility proof: {got}')
+          PY
+
+      # No shell, no package manager, no source, no repository metadata, no
+      # credential material. Re-checked on the *pulled* image, because the claim
+      # that matters is about what GHCR serves, not about what was built.
+      - name: Remote image content audit
+        run: |
+          set -eu
+          ref="${IMAGE}@${{ needs.stage.outputs.digest }}"
+          cid="$(docker create --platform linux/amd64 "$ref")"
+          docker export "$cid" > /tmp/rootfs.tar
+          docker rm "$cid" > /dev/null
+          python3 - <<'PY'
+          import re, sys, tarfile
+
+          t = tarfile.open('/tmp/rootfs.tar')
+          members = t.getmembers()
+          files = [m for m in members if m.isfile()]
+          names = [m.name.rstrip('/') for m in members]
+          print(f'== entries: {len(members)}  regular files: {len(files)} ==')
+
+          bad = []
+          if not any(n in ('svcdoctor', './svcdoctor', '/svcdoctor') for n in names):
+              bad.append('/svcdoctor is missing')
+          if not any('ca-certificates.crt' in n for n in names):
+              bad.append('the CA bundle is missing')
+
+          # Executable-shaped findings are about *files*. Measured on the first
+          # real run: distroless static-debian12 ships the directories `etc/dpkg`
+          # and `var/lib/dpkg` — package *metadata*, which is what lets a scanner
+          # enumerate the base packages at all — and no dpkg binary. Matching on
+          # names alone reported a package manager that is not in the image.
+          executable = {
+              r'(^|/)(bash|sh|dash|busybox|ash)$': 'a shell',
+              r'(^|/)(apk|apt|apt-get|dpkg|yum|dnf|rpm)$': 'a package manager',
+          }
+          for pat, what in executable.items():
+              hits = [m.name for m in files if re.search(pat, m.name.rstrip('/'))]
+              if hits:
+                  bad.append(f'{what}: {hits[:5]}')
+
+          # These are wrong at any file type.
+          anywhere = {
+              r'(^|/)\.git(/|$)': 'repository metadata',
+              r'\.go$': 'Go source',
+              r'(^|/)go\.(mod|sum)$': 'Go module files',
+              r'(^|/)testdata(/|$)': 'test fixtures',
+              r'\.(pem|key|p12|pfx)$': 'key material',
+              r'\.crt$': 'certificate material',
+          }
+          for pat, what in anywhere.items():
+              hits = [n for n in names if re.search(pat, n)]
+              # The distroless CA bundle is the one certificate that belongs here.
+              hits = [h for h in hits if 'ca-certificates.crt' not in h]
+              if hits:
+                  bad.append(f'{what}: {hits[:5]}')
+
+          # Credential canary: nothing in the image may contain fixture secrets.
+          for m in files:
+              if m.size > 64 * 1024 * 1024:
+                  continue
+              data = t.extractfile(m).read()
+              for canary in (b'svcdoctor-test-password', b'BEGIN RSA PRIVATE KEY',
+                             b'BEGIN PRIVATE KEY', b'BEGIN EC PRIVATE KEY'):
+                  if canary in data:
+                      bad.append(f'{m.name} contains {canary!r}')
+
+          if bad:
+              for b in bad:
+                  print(f'::error::{b}')
+              sys.exit(1)
+          print('image content audit passed')
+          PY
+
+          echo "== no password-bearing environment variable =="
+          env_json="$(docker image inspect "$ref" --format '{{json .Config.Env}}')"
+          echo "$env_json"
+          printf '%s' "$env_json" | grep -Eiq '(PASSWORD|PASSWD|SECRET|TOKEN)' \
+            && { echo "::error::image config carries credential-shaped environment"; exit 1; }
+          echo "clean"
+
+      # ADR 0062 section 20: the CA store is a security-sensitive build input, so
+      # the published image is asked to verify a public certificate with no
+      # `--tls-ca-file`. If distroless' trust store did not survive publication,
+      # this is where it shows.
+      - name: System CA trust survives publication
+        run: |
+          set -eu
+          ref="${IMAGE}@${{ needs.stage.outputs.digest }}"
+          docker run --rm --platform linux/amd64 \
+            --read-only --cap-drop=ALL --security-opt=no-new-privileges --user=65532:65532 "$ref" \
+            diagnose kafka --host www.google.com --port 443 --sasl-mechanism PLAIN \
+            --tls require --timeout 20s --output json > /tmp/tls.json || true
+          python3 - <<'PY'
+          import json, sys
+
+          d = json.load(open('/tmp/tls.json'))
+          nodes = d['evidence']['nodes']
+          tls = [n for n in nodes if n['step'] == 'tls.handshake']
+
+          # The whole evidence path, always — a failure here needs to be
+          # diagnosable from the log rather than from a rerun.
+          for n in nodes:
+              if n['step'] in ('dns.lookup', 'tcp.connect', 'tls.handshake'):
+                  a = n.get('attributes') or {}
+                  extra = ''
+                  if n['step'] == 'tls.handshake':
+                      extra = (f"  trust={(a.get('tls.trust_source') or {}).get('value')}"
+                               f" verified={(a.get('tls.verified') or {}).get('value')}")
+                  print(f"  {n['state']:<8} {n.get('failureClass', ''):<24} {n['id']}{extra}")
+
+          if not tls:
+              print('::error::no TLS handshake was attempted; the smoke proved nothing')
+              sys.exit(1)
+
+          # The claim under test is that *the published image kept a usable system
+          # trust store*. One verified handshake proves it.
+          #
+          # It is deliberately not "every path verified". www.google.com resolves
+          # to both A and AAAA records and GitHub-hosted runners have no IPv6
+          # route, so some paths fail at TCP before TLS is reached. That is
+          # vantage — a fact about where this ran — and treating it as a broken
+          # CA store is precisely the "a local failure is not a remote failure"
+          # conflation svcdoctor exists to refuse. Measured: the first run of this
+          # step failed for exactly that reason while the trust store was fine.
+          good = [n for n in tls
+                  if n['state'] == 'PASS'
+                  and ((n.get('attributes') or {}).get('tls.trust_source') or {}).get('value') == 'system'
+                  and ((n.get('attributes') or {}).get('tls.verified') or {}).get('value') is True]
+          if not good:
+              print('::error::no path verified against the image system trust store')
+              sys.exit(1)
+
+          # The negative control. A missing or corrupt CA bundle does not make
+          # handshakes disappear — it makes them fail to verify, and this is the
+          # class that says so. Any occurrence is a real finding about the image.
+          unknown = [n for n in tls if n.get('failureClass') == 'TLS_UNKNOWN_AUTHORITY']
+          if unknown:
+              print(f'::error::{len(unknown)} handshake(s) could not verify the peer: '
+                    'the image trust store is missing or incomplete')
+              sys.exit(1)
+
+          print(f'{len(good)}/{len(tls)} handshakes verified against the image system trust store')
+          PY
+
+  # Optional native arm64 smoke. GitHub's arm64 runners are free for public
+  # repositories and are not free for private ones, and ADR 0062 does not
+  # require paid infrastructure. The caller decides.
+  smoke-arm64:
+    name: Native arm64 smoke
+    if: inputs.run_arm64_smoke
+    runs-on: ubuntu-24.04-arm
+    needs: [reproducibility, stage]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull by digest and run
+        run: |
+          set -eu
+          ref="${IMAGE}@${{ needs.stage.outputs.digest }}"
+          docker pull --platform linux/arm64 "$ref"
+          [ "$(uname -m)" = "aarch64" ] || { echo "::error::runner is not arm64"; exit 1; }
+          [ "$(docker image inspect "$ref" --format '{{.Architecture}}')" = "arm64" ]
+          got="$(docker run --rm --platform linux/arm64 --read-only --cap-drop=ALL \
+                   --security-opt=no-new-privileges --user=65532:65532 "$ref" --version)"
+          [ "$got" = "${{ inputs.version }}" ]

@@ -2,7 +2,16 @@
 # Generates a throwaway CA and broker certificates for Phase 3 validation.
 # Everything here is test-only and regenerated on demand; nothing is committed.
 set -euo pipefail
-cd "$(dirname "$0")/certs"
+# `mkdir -p` before `cd`, because `certs/` is generated and therefore untracked:
+# git stores no empty directory, so on a fresh clone or worktree it does not
+# exist and a bare `cd` fails with "No such file or directory" — taking
+# `make integration-kafka` down at its first step. The suite only ever worked on
+# a machine where an earlier run had already created it. Measured in Phase 7.0
+# by running this script in a fresh worktree: exit 1 here, exit 0 for the
+# PostgreSQL fixture, which has always done this.
+cd "$(dirname "$0")"
+mkdir -p certs
+cd certs
 rm -f ./*.pem ./*.p12 ./*.srl ./*.cnf
 
 PASS=svcdoctor-test

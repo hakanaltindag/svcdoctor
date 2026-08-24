@@ -1,0 +1,94 @@
+# One PostgreSQL diagnosis, run from inside the cluster, then gone.
+#
+# Substitute: the image reference, --host, --user, --database and the Secret.
+# Nothing here contains a real credential.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: svcdoctor-postgres
+spec:
+  # svcdoctor is deterministic: a failed run failed for a reason, and running it
+  # again produces the same answer while hiding that it already answered.
+  backoffLimit: 0
+  # Above the --timeout below, so svcdoctor reaches its own execution budget
+  # first and exits with an (incomplete) report. Kubernetes killing the Pod
+  # first would leave no report at all.
+  activeDeadlineSeconds: 60
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      # svcdoctor never calls the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # Makes the mounted Secret readable by the runtime user.
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: svcdoctor
+          # The semver tag is the readable reference and is immutable: :v0.3.1
+          # will always resolve to the digest that was signed and scanned.
+          #
+          # Production should pin the digest instead. A tag is a name resolved at
+          # pull time; a digest is the artifact, so pinning it means a Pod that
+          # restarts next year runs the bytes you validated, and the image you
+          # verified with `cosign verify` is provably the image that ran:
+          #   image: ghcr.io/hakanaltindag/svcdoctor@sha256:<release digest>
+          # Resolve it once with:
+          #   docker buildx imagetools inspect ghcr.io/hakanaltindag/svcdoctor:v0.3.1 \
+          #     --format '{{json .Manifest.Digest}}'
+          image: ghcr.io/hakanaltindag/svcdoctor:v0.3.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - diagnose
+            - postgres
+            - --host=postgres.database.svc.cluster.local
+            - --user=app
+            - --database=appdb
+            - --password-file=/run/secrets/postgres/password
+            - --tls=require
+            # Omit to use the image's system trust store. When given, this file
+            # REPLACES the system roots rather than adding to them.
+            - --tls-ca-file=/run/certs/ca.crt
+            - --timeout=30s
+            - --output=json
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            # Measured locally at well under 16Mi peak for a single endpoint;
+            # these are deliberately generous starting values, not a guarantee.
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: credential
+              mountPath: /run/secrets/postgres
+              readOnly: true
+            - name: trust
+              mountPath: /run/certs
+              readOnly: true
+      volumes:
+        - name: credential
+          secret:
+            secretName: svcdoctor-postgres
+            defaultMode: 0400
+            items:
+              - key: password
+                path: password
+        - name: trust
+          configMap:
+            name: svcdoctor-postgres-ca
+            optional: true
+            items:
+              - key: ca.crt
+                path: ca.crt

@@ -12,42 +12,92 @@ import (
 // internal/adapter/kafka/wire bounds a response at 8 MiB — eight times apart —
 // so a core that trusted its caller's framing bound would be safe only for the
 // callers that exist today. See ADR 0056 section 7.
+// The numbers are ADR 0061's, and the reasoning behind them changed with it.
+//
+// ADR 0056 §7 chose these from how large a value looked next to the ones then
+// observed — the salt bound was justified as *"eight times the largest value in
+// common use"*. Redpanda v25.1.9 falsified that premise: it emits a **130-byte**
+// salt, hardcoded in its own source, which is legal RFC 5802 and which svcdoctor
+// refused. A bound picked from observed frequency fails against the first
+// implementation nobody measured, and it fails *narrowly*, which is the worst
+// shape because it reads as a protocol error.
+//
+// So each bound below is now justified by a **measured resource cost** and a
+// stated headroom multiple over the largest value any real implementation is
+// known to produce. Two facts from that measurement shape all of them:
+//
+//   - PBKDF2 is flat in salt size. A 64 KiB salt costs 7.9% more than a 16-byte
+//     one, because the salt enters only the first HMAC of the first iteration.
+//     Salt length buys an attacker essentially nothing.
+//   - Parsing is four orders of magnitude below derivation. A full-length
+//     message parses in microseconds; one derivation at the iteration ceiling
+//     costs ~101 ms.
+//
+// The message bound and MaxIterations are therefore the bounds that constrain a
+// real resource. The field ceilings are retained anyway — svcdoctor is pointed
+// at arbitrary, possibly hostile endpoints by design — but as **absolute
+// constants, deliberately not derived from the message bound**, so that raising
+// the message bound for a future service cannot silently widen them.
 const (
 	// maxServerFirstLen bounds the whole server-first message before any
-	// parsing happens. A real server-first is about ninety bytes: a nonce, a
-	// base64 salt and an iteration count. 4096 leaves room for extensions and
-	// still refuses a multi-megabyte message before the walker sees it.
-	maxServerFirstLen = 4096
+	// parsing happens. This is the primary defence: it bounds input, walker
+	// work and every allocation derived from the message.
+	//
+	// A real server-first is small — Apache Kafka's is about ninety bytes and
+	// Redpanda's measured 342. 8192 is ~24x the largest observed, costs about
+	// 3.5µs of worst-case parsing, and still refuses a multi-megabyte message
+	// before the walker sees it. The two wire packages bound peer payloads
+	// eight times apart (1 MiB and 8 MiB), which is why this is core policy
+	// rather than something inherited from a caller.
+	maxServerFirstLen = 8192
 
 	// maxServerFinalLen bounds the whole server-final message. A real one is
-	// about forty-six bytes.
-	maxServerFinalLen = 4096
+	// about forty-six bytes; this matches maxServerFirstLen for symmetry.
+	maxServerFinalLen = 8192
+
+	// maxSaltLen bounds the decoded salt.
+	//
+	// RFC 5802 and RFC 7677 set no maximum and the salt is opaque octets, so no
+	// value is derivable from the specification. 1024 is ~7.9x Redpanda's 130
+	// and 64x PostgreSQL's 16, and the measurement above says the cost of the
+	// headroom is a single allocation of at most a kilobyte.
+	maxSaltLen = 1024
 
 	// maxSaltEncodedLen bounds the salt **before base64 decoding**, and the
-	// ordering is the reason it exists as a separate constant.
+	// ordering is the whole reason it exists as a separate constant.
 	//
 	// The implementation this package was extracted from decoded the salt
-	// before applying the iteration ceiling, so a peer able to send a Kafka-
-	// sized frame could force roughly six megabytes of allocation before any
-	// refusal. Bounding the encoded length first caps the decode at
-	// maxSaltLen bytes: 4*ceil(128/3) rounds to 172.
-	maxSaltEncodedLen = 172
+	// before applying any ceiling, so a peer able to send a Kafka-sized frame
+	// could force megabytes of allocation before any refusal. Checking the
+	// encoded length first caps the decode at maxSaltLen bytes, and makes every
+	// oversized-salt refusal allocate nothing at all — measured.
+	//
+	// **Derived from maxSaltLen, never written independently.** This is exactly
+	// base64.StdEncoding.EncodedLen(maxSaltLen), spelled as a constant
+	// expression because a method call cannot appear in a const block;
+	// TestEncodedSaltBoundTracksTheDecodedBound pins the two to agree, so the
+	// pair cannot drift into a gap the decode could fall through.
+	maxSaltEncodedLen = (maxSaltLen + 2) / 3 * 4
 
-	// maxSaltLen bounds the decoded salt. PostgreSQL uses sixteen bytes and
-	// RFC 7677 sets no maximum; 128 is eight times the largest value in common
-	// use.
-	maxSaltLen = 128
+	// maxNonceLen bounds the server nonce, which enters the AuthMessage and is
+	// therefore HMAC'd over its whole length.
+	//
+	// The client half is 24 characters. Redpanda appends 130, for a measured
+	// total of 154 — against the previous bound of 256 that was only 1.7x
+	// headroom, the same thin margin the salt had before it failed. 1024 is
+	// ~6.6x the largest observed, and HMAC is linear in a value the message
+	// bound already caps.
+	maxNonceLen = 1024
 
-	// maxNonceLen bounds the server nonce. The client half is 24 characters and
-	// a server typically appends a similar amount, so real totals run 48 to 72.
-	// The bound matters because the nonce enters the AuthMessage, which is
-	// HMAC'd over its whole length.
-	maxNonceLen = 256
-
-	// maxAttributes bounds how many attributes the walker will visit. A
-	// server-first carries three; the margin is for extensions. The walker
-	// allocates nothing per attribute, so this bounds work rather than memory.
-	maxAttributes = 16
+	// maxAttributes bounds how many attributes the walker will visit.
+	//
+	// RFC 5802's `extensions` production is an unbounded list, so this can
+	// refuse a legal message and the margin matters. A server-first carries
+	// three. The walker allocates nothing per attribute and examines each byte
+	// exactly once, so the message bound already fixes the byte count; this
+	// bounds visitor iterations, which is a parser-complexity guard rather than
+	// a resource bound.
+	maxAttributes = 32
 )
 
 // MaxIterations bounds the PBKDF2 work svcdoctor performs for one exchange.
@@ -196,7 +246,14 @@ func parseServerFirst(raw, clientNonce string) (serverFirst, error) {
 func attributes(raw string, visit func(key byte, value string) error) error {
 	for seen := 0; ; seen++ {
 		if seen >= maxAttributes {
-			return ErrMalformedMessage
+			// **A policy refusal, not a grammar violation**, and the two must
+			// not share a sentinel. RFC 5802's `extensions` production is an
+			// unbounded list, so a message with more attributes than svcdoctor
+			// walks is legal — refusing it says something about svcdoctor and
+			// nothing about the peer. The malformed answer below is the
+			// opposite: the sender announced a grammar it did not follow.
+			// See ADR 0061 §19.
+			return ErrMessageTooLarge
 		}
 
 		end := len(raw)

@@ -1691,6 +1691,36 @@ and remote execution contexts are future extensions and are deliberately under-s
 Every topology and connectivity finding retains its vantage context. See ADR 0012 and
 `docs/REPORT_SCHEMA.md`.
 
+## 15b. Container and Kubernetes execution surface
+
+An OCI image is not packaging for this product; it is a **network position**. Every
+connectivity finding svcdoctor makes is already qualified by vantage (section 15), and running
+inside a Docker bridge network, a Kubernetes Pod or a `hostNetwork` Pod changes what DNS
+answers, what routes exist, what a firewall permits and what intercepts TLS. Those are
+different observations, not different quality of observation.
+
+The boundary this creates is the same one section 15 draws, and the container does not move
+it. The image contributes a trust store, a non-root identity and a resolver configuration.
+It contributes **no diagnosis**: no adapter, probe, rule or renderer knows it is in a
+container, and none may learn. There is no Kubernetes-specific DNS logic, no in-cluster
+discovery and no Kubernetes API access — svcdoctor observes the resolver behaviour the Pod
+has, exactly as it observes the resolver behaviour a laptop has.
+
+Two properties the runtime must preserve, both measured in Phase 7.1:
+
+- **Diagnosis semantics are identical to a native run.** Schema version, states, findings and
+  summary all match. The only permissible difference is *which* paths were measured, because
+  a name resolves differently from different positions — and that is the vantage the run is
+  reporting.
+- **Credential authority does not widen.** Being in the target's network is not authority.
+  The bootstrap endpoint the operator named is still the only endpoint offered a credential,
+  and discovered brokers still get credential-free DNS, TCP and TLS (ADR 0050).
+
+The runtime contract — base image, non-root identity, read-only root filesystem, no
+capabilities, direct entrypoint, Job rather than Deployment — is
+[ADR 0062](decisions/0062-oci-runtime-and-kubernetes-execution-model.md). Kubernetes
+correlation as a *diagnostic input* remains Phase 5 work and is unaffected by it.
+
 ## 16. Rules
 
 v0.1 uses typed Go rules. Do not add an external DSL. Rules must be deterministic and unit-testable. Expr/CEL may be considered later only for validated user-defined predicate requirements.
@@ -1734,6 +1764,25 @@ stays where it is produced. The service-specific half remains open.
 registry, the probe chain contract, the diagnosis `Rule` contract, and CLI orchestration is
 not decided beyond the architecture principles already locked. Concrete structs first;
 interfaces only at real boundaries.
+
+**Defensive bound selection — settled in Phase 7.0, and the rule is now general.** A bound on
+peer-controlled input must be justified by a **measured resource cost** and a stated headroom
+multiple over the largest value any real implementation is known to produce. *"N times the
+largest value in common use"* is not a justification: it was the stated reason for the SCRAM
+salt bound, and a mainstream implementation falsified it two bytes past the limit (ADR 0061).
+
+The corollary binds every layer, not just SCRAM. **A value svcdoctor refuses because of its own
+policy is not a defect in the peer**, and must not be classified as one — §12's claim discipline
+already said an unsupported capability is `UNKNOWN` rather than `FAIL`, and a ceiling on a legal
+value is exactly that. Phase 7.0b found both adapters reporting a legal SCRAM message as
+`PROTOCOL_MALFORMED_RESPONSE` and moved it to `EXEC_UNSUPPORTED_BY_SVCDOCTOR`, which each
+already used for the iteration ceiling.
+
+Two things that made the defect invisible are worth carrying forward. Every bound test was
+written *relative to its constant*, so the whole suite passed unchanged under four different
+bound policies — **a defensive constant needs a test that states its value**. And one finding
+code covered two causes with one sentence, so widening the causes quietly made the sentence
+false; sharing a code is fine, sharing prose is not.
 
 ## 19. MCP and other frontends
 

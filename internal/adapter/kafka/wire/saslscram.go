@@ -59,6 +59,25 @@ var ErrSCRAMPasswordUnsupported = errNew("password is outside the range svcdocto
 // capability gap instead of as an accusation against the cluster.
 var ErrSCRAMLocalDerivation = errNew("svcdoctor could not complete its own SCRAM derivation")
 
+// ErrSCRAMParametersUnsupported means the broker's SCRAM message was legal and
+// larger than svcdoctor's defensive resource policy reads.
+//
+// **A statement about svcdoctor, never about the broker.** RFC 5802 and RFC 7677
+// set no maximum on a salt, a nonce, an attribute list or a message, so a value
+// above any of svcdoctor's ceilings is valid protocol that svcdoctor declines to
+// process — exactly the claim ErrSCRAMIterationsUnsupported already makes about
+// a legal iteration count.
+//
+// It exists because that distinction was previously lost: the shared core's
+// ErrMessageTooLarge was translated to ErrMalformedResponse, so a real Redpanda
+// broker emitting a legal 130-byte salt was reported as having sent a malformed
+// response. Nothing the broker did was wrong. See ADR 0061 §19.
+//
+// The offending value never travels with it: this is a fixed-text sentinel and
+// the core cannot format a peer byte into an error at all.
+var ErrSCRAMParametersUnsupported = errNew(
+	"broker SCRAM parameters exceed the size svcdoctor reads")
+
 // ErrSCRAMRejected means the broker refused the credential inside the SCRAM
 // exchange, by answering the client proof with `e=invalid-proof` or
 // `e=unknown-user` instead of a verifier.
@@ -212,8 +231,14 @@ func translateSCRAM(err error) error {
 		errorIs(err, scram.ErrServerSignatureMismatch),
 		errorIs(err, scram.ErrRejected):
 		return err
-	case errorIs(err, scram.ErrMalformedMessage),
-		errorIs(err, scram.ErrMessageTooLarge):
+	case errorIs(err, scram.ErrMessageTooLarge):
+		// **Not framing, and not the broker's fault.** The value was legal
+		// SCRAM and above svcdoctor's own ceiling, so it classifies with the
+		// other capability gaps rather than with a decoding failure. Grouping
+		// it with ErrMalformedMessage below is what made a legal Redpanda salt
+		// read as a malformed broker response. See ADR 0061 §19.
+		return ErrSCRAMParametersUnsupported
+	case errorIs(err, scram.ErrMalformedMessage):
 		return ErrMalformedResponse
 	case errorIs(err, scram.ErrUnexpectedResponse):
 		return ErrNotKafka

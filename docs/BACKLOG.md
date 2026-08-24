@@ -85,7 +85,9 @@ condition that should reopen it.
 | **Finding identity / duplicate semantics** | Defining when two findings are one conclusion is guesswork today; the engine preserves duplicates rather than discarding a real finding | A real rule set produces duplicates in practice (ADR 0017) |
 | **Service attribute-key ownership** | **Settled for the keys that have a second consumer, in Phase 3.6.** A key lives with the code that produces it until something outside that package genuinely reads it; then it moves to a leaf vocabulary package (`internal/service/<service>`) that imports `internal/domain` and nothing else. Three Kafka constants moved on exactly that trigger (ADR 0034 §19); the rest stayed. `internal/domain` still holds no service key | A key acquires a consumer outside the package that produces it |
 | **Contract-package placement** for the adapter contract, the registry, the probe chain contract and CLI orchestration | Concrete structs first; interfaces only at real boundaries. A placement chosen before a real consumer is a guess | Each is forced by the implementation that needs it |
+| **SCRAM defensive resource bounds** | **Closed in Phase 7.0b.** ADR 0061 is Accepted and implemented: 8192/8192/1024/1368/1024/32, `MaxIterations` and `maxUsernameLen` unchanged. Redpanda v25.1.9's 130-byte salt (176 encoded) now passes against a real broker, and the committed fixture fails against the old bounds on that same broker. The bound refusal is no longer reported as a malformed peer response: it reaches `UNKNOWN` + `EXEC_UNSUPPORTED_BY_SVCDOCTOR` in both services, on a rule that already existed, so no finding code or failure class was added. Every bound is now pinned by value, which Phase 7.0 found nothing did | Closed. Reopens only on ADR 0061 §27's conditions — a real implementation measured above the new ceilings, a third service with different framing, SCRAM-SHA-512 or channel binding, or a materially different derivation cost |
 | **SCRAM's implementation route** | **Closed in Phase 6.0.** ADR 0026 §7.4 framed it as franz-go's main module — `kgo` plus three transitive dependencies — or hand-rolled crypto. Phase 4.4b settled it in practice: `internal/adapter/postgres/wire/scram.go` implements SCRAM-SHA-256 on the standard library alone and is validated against a real server, so Kafka SCRAM needs **no new module**. What remains is extraction and framing | Closed. Extraction is Phase 6.2, under the constraints in `docs/ARCHITECTURE.md` §5.8, and requires its own security review |
+| **Kafka integration fixture cannot bootstrap from a fresh checkout** | **Fixed in Phase 7.0b.** `test/integration/kafka/env/gen-certs.sh` now does `mkdir -p certs` before `cd`, as the PostgreSQL fixture always has. Reproduced first in a fresh worktree (exit 1 against PostgreSQL's exit 0), fixed, and re-verified from another fresh worktree including a second idempotent run | Closed |
 | **A `SKIPPED` protocol node for a transport path that failed** | The adapter receives completed paths only, so it cannot know an address it was never handed exists. Nothing today knows a service step was *requested* for one: the transport chain must not know Kafka, and the layer that would is the orchestration boundary Phase 3.1 did not build. The subject rule does not forbid the node — `ip:port` is known — so this is an open question, not a settled shape (ADR 0025 §9) | Phase 3 orchestration sequences transport and an adapter for one endpoint, or a rule needs to tell "L4 was never reached here" from "no L4 node here" |
 | **Execution mode** in run metadata | No vocabulary is defined, and both plausible meanings already have owners: `vantage` and the summary | A real execution mode exists that neither already expresses |
 | **`affectedResources`, recommendation reference / risk** | Listed as "recommended when relevant"; nothing consumes them and no renderer exists | A renderer or a finding catalog needs them |
@@ -3639,6 +3641,386 @@ That is an ADR 0056 amendment.
 - [ ] a committed `test/integration/redpanda/` fixture — the remaining requirement for Level 3
 
 AWS MSK IAM stays detect-and-explain only unless scope changes explicitly.
+
+## Phase 7.1 — OCI container and Kubernetes runtime: COMPLETE
+
+The image, the Kubernetes execution model and their guards are in the repository.
+[ADR 0062](decisions/0062-oci-runtime-and-kubernetes-execution-model.md) is **Accepted;
+runtime implemented, publication deferred to Phase 7.1-P**.
+
+## Phase 7.1-R — OCI release contract review: COMPLETE
+
+The four questions Phase 7.1 deferred are answered and normative in ADR 0062 §12–§20:
+distroless pinned by tag+digest, `ghcr.io/hakanaltindag/svcdoctor` as the single canonical
+registry, the Git semver tag as the sole version authority, required reproducibility scoped to
+platform image manifests, CycloneDX SBOM, keyless cosign over the digest, and required build
+provenance. `scripts/build-image.sh` is the official recipe and refuses a dirty tree or an
+untagged HEAD.
+
+Nothing is published. No `v0.3.0` tag exists.
+
+## Phase 7.1-P — OCI publication pipeline: IMPLEMENTED, NEVER RUN
+
+`.github/workflows/release-oci.yml` implements ADR 0062 §12–§21. It is triggered by a `v*`
+tag push, derives every identity value from `scripts/build-image.sh --emit`, stages the image
+under `sha-<commit>`, validates that digest, signs and verifies it, runs a native amd64 smoke,
+and only then points `:vX.Y.Z` at the digest that passed. Job `needs` edges are the ordering
+enforcement, and `internal/cli/releaseworkflow_test.go` fails the build if any of them is
+removed.
+
+**Nothing has been published.** The workflow has never executed, no image exists at GHCR, and
+no `v0.3.0` tag exists.
+
+### Before the first public release
+
+- [ ] **Run the workflow for real.** Every mechanism was validated against a local registry
+      and every step's logic was executed locally, but the pipeline has never run end to end.
+      The first run is the test.
+- [ ] **Native `linux/amd64` execution.** The workflow performs a pull-by-digest smoke on
+      `ubuntu-latest`, which is native amd64; that closes Phase 7.1's emulation-only gap, but
+      only when it actually runs. **This is the one outstanding evidence obligation.**
+- [ ] **Confirm GHCR-specific behaviour**: `GITHUB_TOKEN` push permission, tag immutability,
+      and package-to-repository association via `org.opencontainers.image.source`. The
+      mechanisms were proven against a local registry; GHCR has not been asked.
+- [ ] **Confirm cosign keyless signing and constrained verification.** Not exercised locally
+      by design: signing with a throwaway key would have uploaded to the public Rekor
+      transparency log, which is a publication.
+- [ ] **Decide whether to enable the optional native arm64 smoke.** The job exists behind the
+      repository variable `ENABLE_ARM64_SMOKE`; GitHub's arm64 runners are free for public
+      repositories and not for private ones, and ADR 0062 requires no paid infrastructure.
+- [ ] **Decide the GitHub Release relationship.** The workflow deliberately does not create a
+      GitHub Release. If one is wanted, it should consume the digest this workflow already
+      outputs rather than becoming a second release authority.
+
+### Open evidence, not blockers
+
+- [ ] **NetworkPolicy behaviour on a CNI that enforces it.** Still **unverified** — neither
+      passed nor failed. Does not block publication: svcdoctor depends on no NetworkPolicy API.
+- [ ] **Reproducibility across differing BuildKit versions, compression implementations and a
+      registry round-trip.** Untested, and therefore not claimed.
+- [ ] **Publishing development `:sha-<commit>` images.** The pipeline stages under one; whether
+      such tags are ever kept deliberately is deferred.
+
+Not wanted in this phase or the next: a Helm chart, an operator, a controller, a CRD, or any
+Kubernetes API access from svcdoctor itself. svcdoctor is a bounded diagnostic worker that a
+platform invokes; it does not become an agent.
+
+## Phase 7.1-V — Remote OCI publication validation: IMPLEMENTED, NEVER RUN
+
+Phase 7.1-P's checklist above is a list of things that cannot be proven without publishing.
+This phase builds the machinery to close them **without releasing anything**: a
+`workflow_dispatch` workflow that publishes exactly one reference,
+`ghcr.io/hakanaltindag/svcdoctor:sha-<full commit>`, and no semver tag.
+
+### The architectural decision: shared machinery, split authority
+
+The obvious way to write a validation workflow is to copy the release workflow's build, scan,
+SBOM, signing and smoke steps. That validates the copy. The two drift on the first edit that
+touches only one of them, and the release path stays the one nobody ever exercised — which
+would make this phase's evidence worthless for the purpose it exists to serve.
+
+So the machinery was extracted into `.github/workflows/oci-stage-verify.yml`
+(`on: workflow_call`), and **both** workflows call it:
+
+```
+release-oci.yml    tag trigger + strict semver + publish job  ─┐
+                                                               ├─> oci-stage-verify.yml
+validate-oci.yml   workflow_dispatch + dev version            ─┘
+```
+
+What the shared workflow may **not** do is decide identity. It is handed a version, a
+revision, an epoch, a staging tag and the exact certificate identity it must produce; it
+contains no `imagetools create`, no `git describe` and no reference to `GITHUB_REF_NAME`.
+Public release identity stays with the caller, and only one caller is triggered by a tag.
+
+### What changed in the accepted release pipeline
+
+- **Staging tags now use the full 40-character commit SHA**, not `git rev-parse --short`. The
+  staging tag is an immutable identity; an abbreviation can collide.
+- **The staging tag is now enforced immutable.** Before pushing, the run asks GHCR whether
+  `sha-<commit>` exists. If it does, its platform manifest digests are compared against a
+  fresh reproducible build, and the run either reuses the identical index digest or **stops**.
+  Comparison is at the platform level because ADR 0062 §16 establishes that the index digest
+  is not reproducible while provenance is enabled. This is what makes a re-run safe.
+- **The published platform manifests are checked against the reproducibility proof.** Before,
+  "reproducible" and "published" were two claims in the same run with nothing joining them.
+- **The CycloneDX SBOM is now attached to the digest** with `cosign attest --type cyclonedx`
+  and proven bound with `cosign verify-attestation`. ADR 0062 §17 required an OCI referrer;
+  the pipeline previously produced the SBOM only as an expiring CI artifact.
+- **Provenance content is now checked, not just its attachment** — it must name this
+  repository and the exact commit, and on a non-tag run it must contain no `refs/tags/vX.Y.Z`.
+- **The certificate identity is computed by the caller** and passed in, so `cosign verify` is
+  pinned to one identity rather than to a pattern. The certificate's real claims are printed
+  before the gate runs, so the constraint can be corrected from evidence rather than widened
+  until it passes.
+
+None of this weakens release authority: `release-oci.yml` still triggers only on `v*`, still
+validates `^v[0-9]+\.[0-9]+\.[0-9]+$`, still accepts no input, and still applies the semver
+tag last, from a job the shared machinery cannot reach.
+
+### Guards
+
+`internal/cli/validateworkflow_test.go` and the reworked
+`internal/cli/releaseworkflow_test.go` enforce all of the above. **All 42 mutations from the
+phase's semver-safety, SHA-immutability, signing, attestation, remote-smoke, permission and
+documentation matrices were applied to the real files and all 42 were caught.**
+
+Nine escaped on the first pass, and every one escaped for the same reason: a whole-file
+substring guard stayed green when a needle that appears in several steps was deleted from one
+of them. The guards are now scoped to the step they are about, and count runtime references
+rather than merely finding one.
+
+### Result: PASSED, on real infrastructure
+
+`validate-oci.yml` ran against GHCR on a GitHub-hosted runner. **Nothing was
+released**: the only references it created are `sha-<commit>` and cosign's `.sig` and `.att`.
+
+| | |
+|---|---|
+| Commit | `66e277f698c3bfd04df2ee3ce7a8688c70e57a4c` |
+| Version | `0.0.0-dev+66e277f` |
+| Staging tag | `sha-66e277f698c3bfd04df2ee3ce7a8688c70e57a4c` |
+| Index digest | `sha256:eb2e9b6b31106121552b4ae3e7b80f78993853fa177b771db9c7faaba17e2a10` |
+| `linux/amd64` | `sha256:7539216ccaa35da431a1df8d627514e25f36780e8acd9dd4c57bce9f5760ae34` |
+| `linux/arm64` | `sha256:3dabdafb184236a8b6e52ae65b14f133cea6a9d74e62438d1e5198e76eac2bce` |
+
+**Native `linux/amd64` — the one open evidence obligation from §21 — is closed.**
+`Linux 6.17.0-1022-azure`, `uname -m` = `x86_64`, `RUNNER_ARCH` = `X64`, Docker
+daemon `amd64`. No emulation. `--version` reported `0.0.0-dev+66e277f`; the image
+ran read-only, `cap-drop=ALL`, `no-new-privileges`, as `65532:65532`; and the
+pulled amd64 manifest equals the one the reproducibility job produced.
+
+- **Reproducible.** Both platform digests IDENTICAL across two cold-cache builds,
+  and the *published* manifests equal them.
+- **GHCR.** `GITHUB_TOKEN` only. No PAT, no Docker Hub, no static registry secret.
+  The package is **public** — anonymous pull-by-digest works with no credentials.
+- **Index.** Exactly `linux/amd64` and `linux/arm64`, plus 2 `unknown/unknown`
+  attestation manifests, each bound to its platform image by
+  `vnd.docker.reference.digest`.
+- **Vulnerabilities.** 0 CRITICAL, 0 HIGH — at the configured `HIGH,CRITICAL`
+  threshold, with nothing suppressed (`.trivyignore` has no active entries).
+  Lower severities were not enumerated, so this is not a "zero vulnerabilities"
+  claim. Positive proof the scan analysed something: Trivy detected
+  `debian 12.15` and scanned the `gobinary` target as well as OS packages.
+- **SBOM.** CycloneDX, 10 components, attached with `cosign attest --type
+  cyclonedx` and proven bound by `cosign verify-attestation`.
+- **Provenance.** 60 806 bytes, names this repository and the exact commit, and
+  contains **no** `refs/tags/vX.Y.Z` — checked, because a validation build that
+  could describe itself as a release would look like evidence.
+- **Keyless signing.** Certificate identity
+  `https://github.com/hakanaltindag/svcdoctor/.github/workflows/oci-stage-verify.yml@refs/heads/feat/v0.3.0`,
+  issuer `https://token.actions.githubusercontent.com`, trigger `workflow_dispatch`,
+  10-minute Fulcio certificate. `cosign verify` passed against that exact identity
+  plus the repository and commit — no regexp. Rekor log index `2579293960`.
+- **Signature target.** `:sha256-eb2e9b6b….sig`, and the verified payload names
+  `sha256:eb2e9b6b…` — the **index**, not a tag and not a platform manifest.
+- **Native arm64** also passed, unconditionally in validation because this
+  repository is public and the runners are free.
+
+### Staging-tag immutability, measured both ways
+
+Run 4 found `sha-66e277f...` **absent** (HTTP 404) and published it. Re-dispatching the
+same workflow on the **same commit** found it present at
+`sha256:eb2e9b6b...`, compared its platform manifests against a fresh cold-cache
+rebuild, and reported:
+
+```
+staging tag sha-66e277f698c3bfd04df2ee3ce7a8688c70e57a4c already exists at sha256:eb2e9b6b...
+published platform digests are identical to the rebuild — idempotent re-run
+```
+
+Nothing was pushed and **the index digest did not change**. That is the property that
+makes recovery from a mid-run failure safe: a re-run either reuses the identical
+artifact or stops, and it can never re-point an immutable identity at different bits.
+Cosign referrers accumulate across re-runs — a second `.sig` layer under the same
+`.sig` tag — which is expected and does not alter the image digest.
+
+The mismatch branch is not exercised by any run, because producing it would require
+the same source to build differently. It is covered by mutation instead: deleting the
+comparison, ignoring a mismatch, or dropping the `sys.exit(1)` beneath it each fail
+the build.
+
+### What publishing found that review had not
+
+Four defects, all in code written to build or observe the image, none in the
+image. Each was invisible locally and would have fired on the release run.
+
+1. **Neither source gate installed `golangci-lint`.** `make check` runs it and
+   fails closed when it is missing; `ci.yml` installs it with an action that
+   *runs* the linter rather than providing one for `make check` to call. Nothing
+   local caught it because the binary is on a developer's PATH. **On
+   `release-oci.yml` this would have failed the v0.3.0 tag push itself.**
+2. **The certificate evidence dump read the wrong JSON key** — `cert` rather than
+   `Cert`, whose value is an object carrying base64 DER, not PEM. Worse, being an
+   ordinary step it took the job down and **skipped `cosign verify`**, the actual
+   gate. It is now `continue-on-error`: a diagnostic that can abort a gate is a
+   liability.
+3. **The image content audit reported a package manager that is not there.**
+   distroless `static-debian12` ships the directories `etc/dpkg` and
+   `var/lib/dpkg` — package metadata, which is what lets a scanner enumerate base
+   packages at all — and no dpkg binary. Executable-shaped findings now consider
+   regular files only.
+4. **The system-CA smoke was testing the runner's network, not the image.** It
+   required *every* `tls.handshake` to PASS. `www.google.com` resolves to 8 A and
+   8 AAAA records and GitHub-hosted runners have no IPv6 route, so the measured
+   evidence is 8 × `tcp.connect` PASS → `tls.handshake` PASS
+   (`trust_source=system`, `verified=true`) and 8 × `tcp.connect`
+   FAIL/`TCP_NETWORK_UNREACHABLE` → `tls.handshake`
+   SKIPPED/`EXEC_SKIPPED_PREREQUISITE_FAILED`.
+
+   That last row is svcdoctor's own layered short-circuiting working correctly —
+   a failed prerequisite yields SKIPPED, never a fabricated FAIL — and the check
+   was wrong because it treated SKIPPED as failure. **It had reintroduced, in the
+   workflow that validates svcdoctor, exactly the conflation svcdoctor exists to
+   refuse: a local path failure is not proof about the target.** The gate now
+   requires at least one verified handshake and keeps a negative control — no
+   handshake may carry `TLS_UNKNOWN_AUTHORITY`, which is what a missing or
+   incomplete CA bundle actually produces.
+
+### Still open
+
+- [ ] **Decide the SHA staging artifacts' retention.** Recommended: retain until
+      v0.3.0 is released, so signatures and attestations stay inspectable and the
+      release run can be compared against them. Deleting them orphans their
+      referrers.
+- [ ] **The image carries two SBOM formats.** `--sbom=true` makes BuildKit attach
+      an **SPDX** attestation while the canonical CycloneDX SBOM is attached by
+      cosign. Both are bound to the digest, by different mechanisms, and ADR 0062
+      §17 says one format only. Not fixed here: `--sbom=false` changes the release
+      build recipe, and changing it unreviewed during a validation phase is the
+      failure mode this phase exists to avoid. Needs an ADR 0062 decision before
+      v0.3.0.
+- [ ] **`cosign triangulate` is deprecated** and is removed in cosign v4. The
+      signature-target check uses it. The stronger half of that check — the
+      verified payload naming the staged digest — does not.
+- [ ] **`validate-oci.yml` is registered on `main`** because GitHub only lists a
+      `workflow_dispatch` workflow from the default branch. The run executes the
+      file from the dispatched ref. A run dispatched against `main` fails at
+      identity derivation and can publish nothing, since the shared machinery is
+      not on `main`.
+
+## Phase 7.1-VR — OCI supply-chain closure: IMPLEMENTED, PENDING REMOTE RE-VALIDATION
+
+Phase 7.1-V passed but left two release blockers. Both are closed here. Neither needed an
+architectural change, and no product Go was touched.
+
+### Blocker 1 — two SBOM formats
+
+**Measured on the published index, not inferred from flags.** Each of the two BuildKit
+attestation manifests carried two in-toto predicates:
+
+| Predicate | Size | Producer |
+|---|---|---|
+| `https://spdx.dev/Document` | 636 461 B | BuildKit `--sbom=true` |
+| `https://slsa.dev/provenance/v1` | 29 629 B | BuildKit `--provenance=mode=max` |
+
+On top of those, cosign attached the CycloneDX SBOM to the index — three SBOM-bearing objects
+in two formats at two levels.
+
+`--sbom=false`; `--provenance=mode=max` unchanged. The canonical SBOM stays CycloneDX JSON,
+generated explicitly and attached with `cosign attest --type cyclonedx` to the index digest.
+
+The two flags **look like a matched pair and are not**: they shared an attestation manifest, so
+disabling the first could plausibly have taken the second with it. Provenance answers a
+different question and nothing else produces it. The pipeline now proves both facts in one
+pass **against the registry** — it fetches every attestation manifest, reads its layers'
+predicate types, and fails if any SPDX document is present *or* if no SLSA provenance is.
+Checking the artifact rather than the build flags is the point: an upstream default change
+would show up there and in no diff.
+
+### Blocker 2 — `cosign triangulate`
+
+Two findings, and the first was not in the brief.
+
+**The pipeline was running cosign v2.5.2.** `sigstore/cosign-installer` was pinned by commit
+SHA — which pins the *action*, not the binary it downloads — and v2.5.2 was that action's
+default. A signing pipeline should not learn its own tool version from an upstream default.
+`cosign-release` is now pinned explicitly at **v3.1.3** alongside the action SHA, and the
+workflow prints `cosign version` so the log records what actually ran.
+
+**cosign v4 is announced but unreleased.** The current line is v3.1.3; `cosign triangulate` is
+*deprecated* in v3 and is removed when v4 ships. The `cosign-installer` **action** is at v4.1.2,
+which is the action's version and not cosign's — its default `cosign-release` is v3.0.6. So
+this pipeline does not run v4 and does not claim to; it claims not to depend on what v4
+removes.
+
+The removed check asked `cosign triangulate` where the signature lived and compared the answer
+to a string built from the same digest — **a tautology** that could only fail if cosign changed
+its formatting, over a storage-layout detail. What replaces it reads what the *verifier*
+attested to: the signature payload's `docker-manifest-digest`, and the attestation's decoded
+in-toto subject, predicate type (`https://cyclonedx.org/bom`) and `bomFormat`. It also confirms
+the signed digest is the image *index* and not a platform manifest. Shapes were established by
+running cosign v3.1.3 against the published Phase 7.1-V digest rather than guessed.
+
+### What the cosign upgrade proved on contact
+
+Under v2.5.2 a signed image gained `sha256-<digest>.sig` and `sha256-<digest>.att`. Under
+v3.1.3 it gains **one** tag, `sha256-<digest>` with no suffix, holding an OCI index of two
+`vnd.dev.sigstore.bundle.v0.3+json` artifacts. **The `.sig` tag the removed check asserted on
+does not exist for v3-signed images**, while `cosign verify` and `cosign verify-attestation`
+pass unchanged. Storage-layout assertions would have broken on a version bump; semantic
+verification did not notice one.
+
+The evidence parsers did break — the certificate dump read `Cert.Raw`, the Rekor step read
+`cosign verify`'s `optional.Bundle`, and v3 moved both. They went silent, and because they
+tolerate failure GitHub reported the steps as **successful**: `continue-on-error` sets a step's
+conclusion to success while its outcome is failure. Both now handle both shapes and fail loudly
+on an empty read, and neither can block a gate.
+
+### Guards
+
+`TestExactlyOneSBOMFormatIsPublished`, `TestNoDocumentClaimsTwoCanonicalSBOMFormats` and
+`TestCosignIsPinnedAndForwardCompatible`. **All 38 Phase 7.1-VR mutations were caught, and the
+42 Phase 7.1-V mutations still are.**
+
+Six of the 38 escaped on the first pass, all the same failure as in Phase 7.1-V: a guard hunting
+for a string that survives partial deletion. Replacing each condition with `if False:` left
+every error message in place. The guards now assert on the **comparison expressions**
+themselves.
+
+### Result: PASSED, on real infrastructure
+
+`validate-oci.yml` ran against GHCR on a GitHub-hosted runner and passed every gate.
+
+| | |
+|---|---|
+| Commit | `cf3f12309010478f71378ea7db0087e3bdc9a8a7` |
+| Staging tag | `sha-cf3f12309010478f71378ea7db0087e3bdc9a8a7` |
+| Index digest | `sha256:b8ccb1ae36031b587bb9b248a167535622559ff925e61d18b29230521034cdc7` |
+| `linux/amd64` | `sha256:7947aebfa160301d210de82d71e897a9de8979f7ec1b2a94f24011287471e96e` |
+| `linux/arm64` | `sha256:1111cb04652f6bdae9957bf2f18d07c59bcc4765bb42f0ed06a1d472896f8a4c` |
+| cosign | v3.1.3 |
+
+**The one-SBOM proof, read back off the published image:** two attestation manifests, each
+carrying exactly one predicate, `https://slsa.dev/provenance/v1`. No SPDX. Under the previous
+configuration each carried two. The CycloneDX SBOM — 10 components, spec 1.7 — is attached by
+cosign to the index digest and verifies against it.
+
+- **The SBOM flag does not move the image.** Measured directly rather than inferred: the same
+  source built with `--sbom=true` and `--sbom=false`, same VERSION, REVISION and epoch,
+  produces **identical** platform digests, and those digests are the ones CI published. The
+  attestation manifest *count* is unchanged too — SPDX was a layer *inside* the existing
+  manifest, not a manifest of its own. Only the index digest moves, which §16 already permits.
+- Reproducible: both platform digests IDENTICAL across two cold-cache builds.
+- 0 CRITICAL, 0 HIGH, nothing suppressed; Trivy scanned `debian 12.15` and the `gobinary`.
+- Provenance 60 458 bytes, names this repository and commit, contains no `refs/tags/vX.Y.Z`.
+- Keyless sign, `cosign verify` and `cosign verify-attestation` all pass against the pinned
+  identity. Rekor `2579323300` (signature) and `2579323317` (attestation).
+- Native amd64: `x86_64`, `RUNNER_ARCH=X64`, Docker `amd64`. Native arm64 also passed.
+- System CA: 8/16 handshakes verified — 8 IPv4 PASS, 8 IPv6
+  `TCP_NETWORK_UNREACHABLE` → `SKIPPED`, correctly not read as a trust failure.
+- Content audit: 1444 entries, 970 regular files, no shell, no package-manager executable.
+- `:latest`, `:v0`, `:v0.3`, `:v0.3.0`, `:0.3.0` all absent. Git tags: `v0.1.0`, `v0.2.0`.
+
+Four SHA staging artifacts are retained: `a4a835a`, `769371c` and `66e277f` record the
+two-SBOM configuration, `9abdc6d` and `cf3f123` the corrected one.
+
+### Still open
+- [ ] **`validate-oci.yml` is registered on `main`** so GitHub lists the `workflow_dispatch`;
+      the run executes the file from the dispatched ref. Operational debt, retained.
+- [ ] **`release-oci.yml` has still never been triggered by a semver tag.** Its authority path
+      is statically verified and the machinery it shares is remotely validated; the semver
+      publication step itself runs first at v0.3.0.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 

@@ -1,0 +1,36 @@
+redpanda:
+  data_directory: /var/lib/redpanda/data
+  seed_servers: []
+  empty_seed_starts_cluster: true
+  rpc_server:
+    address: 0.0.0.0
+    port: 33145
+  advertised_rpc_api:
+    address: 127.0.0.1
+    port: 33145
+
+  kafka_api:
+    - {address: 0.0.0.0, port: 19291, name: plain}
+    - {address: 0.0.0.0, port: 19292, name: tls}
+  # Advertised as `localhost` so the advertised-endpoint sweep resolves and
+  # measures a real endpoint, exactly as it does against Apache Kafka.
+  advertised_kafka_api:
+    - {address: localhost, port: 19291, name: plain}
+    - {address: localhost, port: 19292, name: tls}
+
+  kafka_api_tls:
+    - name: tls
+      enabled: true
+      cert_file: /certs/server-cert.pem
+      key_file: /certs/server-key.pem
+      require_client_auth: false
+
+  # `SCRAM` is one value covering both digests — Redpanda rejects the literal
+  # `SCRAM-SHA-256` as a configuration value. That is a fixture difference, not
+  # a client one: svcdoctor never sends this value. It cost Phase 6.8 an hour.
+  enable_sasl: true
+  sasl_mechanisms: [SCRAM, PLAIN]
+  superusers: [svcdoctor]
+
+rpk:
+  overprovisioned: true

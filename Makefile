@@ -16,7 +16,7 @@ GOPKGS := $(shell $(GO) list ./... 2>/dev/null)
 
 NO_PKGS_MSG = no Go packages yet; gate activates with the first package (Phase 1)
 
-.PHONY: help fmt fmt-check test vet lint build check clean
+.PHONY: help fmt fmt-check test vet lint build check clean image image-dev
 
 help: ## Show available targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -68,6 +68,12 @@ build: ## Build the CLI (CGO_ENABLED=0)
 endif
 
 check: fmt-check test vet lint build ## Run the full local quality gate
+
+image: ## Build the official OCI image (requires a semver-tagged, clean HEAD; never pushes)
+	@./scripts/build-image.sh
+
+image-dev: ## Build a development OCI image tagged sha-<commit> (not reproducible, not official)
+	@./scripts/build-image.sh --dev --platform linux/$(shell go env GOARCH)
 
 clean: ## Remove build output
 	$(GO) clean
@@ -195,3 +201,62 @@ postgres-test: ## Run the PostgreSQL integration suite against a running server
 	$(GO) test -tags integration -count=1 -timeout 10m ./test/integration/postgres/...
 
 integration-postgres: postgres-up postgres-test postgres-down ## Full PostgreSQL validation gate
+
+# --- Redpanda integration validation (Phase 7.0b gate) ----------------------
+#
+# Deliberately not part of `check`, for the reason the other two are not: it
+# needs Docker. It is also deliberately **not** run concurrently with the Kafka
+# gate — Phase 7.0 observed one unexplained Kafka failure while a Redpanda
+# instance was competing for the same cores, and the closure evidence for both
+# is only meaningful if each ran alone.
+#
+# The version is pinned in env/compose.yaml. ADR 0061's evidence is about
+# Redpanda v25.1.9 specifically, whose SCRAM salt is 130 bytes.
+
+RP_ENV := test/integration/redpanda/env
+RP_COMPOSE := docker compose -f $(RP_ENV)/compose.yaml
+
+.PHONY: redpanda-up redpanda-down redpanda-test redpanda-users integration-redpanda
+
+redpanda-up: ## Start the Redpanda validation broker
+	@$(RP_ENV)/gen-certs.sh
+	@$(RP_COMPOSE) up -d --force-recreate
+	@printf 'waiting for redpanda'
+	@for i in $$(seq 1 90); do \
+		if docker exec svcd-redpanda curl -sf http://localhost:9644/v1/status/ready \
+			>/dev/null 2>&1; then printf ' ready\n'; exit 0; fi; \
+		printf '.'; sleep 2; \
+	done; printf '\nredpanda did not become ready\n'; \
+	docker logs svcd-redpanda 2>&1 | tail -20; exit 1
+	@$(MAKE) --no-print-directory redpanda-users
+
+# The first principal cannot be created over the Kafka API, because SASL is
+# already on and there is no credential yet to authenticate the request with.
+# Redpanda's admin API is not SASL-gated, which is the documented bootstrap
+# path and the only one available here.
+#
+# Two principals: the SCRAM one this phase exists to validate, and a second used
+# for the PLAIN scenarios. Both are fixture-only values on a loopback container.
+redpanda-users: ## Create the validation principals
+	@for u in 'svcdoctor:svcdoctor-redpanda-canary' 'plainuser:plainuser-redpanda-canary'; do \
+		name=$${u%%:*}; pass=$${u##*:}; \
+		docker exec svcd-redpanda curl -sf -X POST http://localhost:9644/v1/security/users \
+			-H 'Content-Type: application/json' \
+			-d "{\"username\":\"$$name\",\"password\":\"$$pass\",\"algorithm\":\"SCRAM-SHA-256\"}" \
+			>/dev/null || { printf 'could not create principal %s\n' "$$name"; exit 1; }; \
+	done
+	@printf 'waiting for principals'
+	@for i in $$(seq 1 30); do \
+		if docker exec svcd-redpanda curl -sf http://localhost:9644/v1/security/users \
+			2>/dev/null | grep -q svcdoctor; then \
+			printf ' ready\n'; exit 0; fi; \
+		printf '.'; sleep 1; \
+	done; printf '\nprincipals did not appear\n'; exit 1
+
+redpanda-down: ## Stop the validation broker and delete its volumes
+	@$(RP_COMPOSE) down -v --remove-orphans
+
+redpanda-test: ## Run the Redpanda integration suite against a running broker
+	$(GO) test -tags integration -count=1 -timeout 15m ./test/integration/redpanda/...
+
+integration-redpanda: redpanda-up redpanda-test redpanda-down ## Full Redpanda validation gate

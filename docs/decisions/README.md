@@ -1,6 +1,11 @@
 # Architecture Decision Records
 
-Every ADR here is **in force**. None has been superseded or withdrawn.
+Every ADR here is **in force**, and none has been withdrawn.
+
+Three have been **superseded in part**, each by a later record that argues the reversal rather
+than editing history: 0011 on command-tree shape (by 0041), one bullet of 0040 (by 0044), and
+0056 §7's numeric SCRAM bounds and refusal semantics (by 0061). In every case the rest of the
+superseded record still binds, and the original text is left as written.
 
 Records 0001 to 0005 and 0007 to 0010 were written before this project adopted a
 `## Status` heading, which ADR 0006 introduced because the license decision needed to
@@ -553,6 +558,29 @@ A deferral is a decision too, and each names the condition that should reopen it
   code are unchanged. `tls.verified` moved to `internal/vocabulary` on the trigger that package
   already named, because a renderer cannot import a probe. No code, class, flag or dependency
   was added.
+- **[0061](0061-scram-defensive-resource-bounds.md) — A defensive bound must be justified by a
+  measured resource cost, not by how common a value looks.** **Accepted, implemented in Phase
+  7.0b**, and it supersedes ADR 0056 §7 in part — the numeric bounds and the refusal semantics,
+  nothing else.
+  Redpanda v25.1.9 issues a **130-byte** SCRAM salt — confirmed from its source, where
+  `SaltSize` is hardcoded — and svcdoctor refuses it, at the **encoded** check (176 > 172)
+  before the decoded one. ADR 0056 §7 justified `maxSaltLen` as *"8× the largest value in
+  common use"*, and a third mainstream implementation falsifies that premise. Archaeology
+  found every field bound was invented in the extraction commit, **after v0.1.0 shipped
+  PostgreSQL SCRAM with no salt bound at all**. Measurement found the bound protects nothing:
+  a **64 KiB salt costs 7.9% more PBKDF2 CPU than a 16-byte one**, refusals allocate zero, and
+  parsing a full message costs 1.7 µs against 101 ms of derivation. So the message bound and
+  the iteration ceiling are the bounds that do the work; field ceilings are retained as
+  absolute constants — not derived from the message bound, which is the one point the
+  counter-argument wins — but re-derived at ~8× the largest value any real implementation
+  produces. Also records a **truthfulness defect**: a bound refusal is reported as
+  `PROTOCOL_MALFORMED_RESPONSE`, claiming the peer's legal message was malformed, when the
+  `EXEC_UNSUPPORTED_BY_SVCDOCTOR` vocabulary both adapters already use for
+  `ErrIterationsUnsupported` is the truthful one. Phase 7.0b shipped 8192/8192/1024/1368/1024/32
+  with `MaxIterations` unchanged, corrected that classification in both services, and committed
+  `test/integration/redpanda/` pinned to v25.1.9 — whose SCRAM now passes, and whose suite fails
+  against the old bounds on the same live broker. No finding code, failure class,
+  `SchemaVersion`, `Reveal` count, auth cardinality or dependency changed.
 
 `docs/BACKLOG.md` tracks these alongside every other open decision.
 

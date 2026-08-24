@@ -1,0 +1,327 @@
+# svcdoctor OCI publication pipeline.
+#
+# This workflow implements ADR 0062 sections 12-20. It does not decide anything;
+# every rule it enforces was accepted in Phase 7.1-R and is normative there.
+#
+# The two structural ideas worth understanding before reading it:
+#
+#   1. THE GIT TAG IS THE ONLY VERSION AUTHORITY. Nothing here accepts a
+#      version as input. `scripts/build-image.sh --emit` derives the version,
+#      the revision and SOURCE_DATE_EPOCH from Git, and it is the same script a
+#      developer runs locally — so there is exactly one derivation, not one for
+#      humans and a second for CI that can drift from it.
+#
+#   2. THE SEMVER TAG IS APPLIED LAST. Everything is staged under an immutable
+#      `sha-<commit>` tag, validated there by digest, and only then does
+#      `:vX.Y.Z` get pointed at the digest that passed. `job.needs` is the
+#      enforcement: `publish` cannot start until every gate has succeeded,
+#      because GitHub will not run it. An aborted release therefore leaves
+#      unreferenced blobs and a SHA tag, never a semver tag naming a partial
+#      release.
+#
+# Measured in Phase 7.1-P against a local registry: `imagetools create --tag
+# <semver> <repo>@<digest>` re-points the tag at the *existing* index digest
+# without rewriting it, so step 2 above is achievable rather than aspirational.
+#
+# Third-party actions are pinned by commit SHA, not by tag. A tag is mutable and
+# this workflow holds `packages: write` and an OIDC identity.
+
+name: Release OCI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Read-only by default. Individual jobs escalate only what they need, and the
+# escalation is visible at the job that uses it rather than granted globally.
+permissions:
+  contents: read
+
+# Never cancel a release that may already be pushing artifacts. Two runs racing
+# on one tag is the thing to prevent; interrupting a half-published one is not
+# an improvement on it.
+concurrency:
+  group: oci-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Release identity
+  # ---------------------------------------------------------------------------
+  #
+  # Establishes what is being released before anything is built, and refuses
+  # every way the answer could be ambiguous.
+  identity:
+    name: Release identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      revision: ${{ steps.derive.outputs.revision }}
+      source_date_epoch: ${{ steps.derive.outputs.source_date_epoch }}
+      sha_tag: ${{ steps.derive.outputs.sha_tag }}
+      certificate_identity: ${{ steps.derive.outputs.certificate_identity }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Tags are required: the release identity is derived with
+          # `git describe --exact-match`, which sees nothing in a shallow clone.
+          fetch-depth: 0
+
+      # ADR 0062 section 13. `v*` is the trigger filter and is deliberately
+      # loose; this is the actual rule. `v0.3`, `v01.2.3`, `foo-v0.3.0` and
+      # `v0.3.0-dev` are all rejected here rather than silently released.
+      - name: Validate tag shape
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$tag' is not a vX.Y.Z release tag"
+            exit 1
+          fi
+          echo "release tag: $tag"
+
+      # The workflow trigger says a tag was pushed. It does not say the tag
+      # names this commit, and a build that claimed otherwise would publish a
+      # semver that does not describe its own source.
+      - name: Derive identity from Git
+        id: derive
+        run: |
+          set -eu
+          ./scripts/build-image.sh --emit >> "$GITHUB_OUTPUT"
+          version="$(./scripts/build-image.sh --emit | sed -n 's/^version=//p')"
+          if [ "$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::derived version '$version' != triggering tag '${GITHUB_REF_NAME}'"
+            exit 1
+          fi
+          # The **full** 40-character SHA, not an abbreviation. The staging
+          # tag is an immutable identity and an abbreviated SHA is a registry
+          # identity that can collide as the repository grows; a collision
+          # would mean two sources claiming one immutable tag.
+          echo "sha_tag=sha-$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+          # The exact Fulcio SAN this release must produce. Computed here
+          # because identity is this workflow's authority: the shared machinery
+          # is told what it must be, and `cosign verify` is pinned to it rather
+          # than to a pattern.
+          echo "certificate_identity=https://github.com/${GITHUB_REPOSITORY}/.github/workflows/oci-stage-verify.yml@${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+
+      # ADR 0062 section 13: a published semver tag is immutable. Checking
+      # before building means a re-release attempt fails in seconds rather than
+      # after the whole pipeline, and it can never be resolved by overwriting.
+      - name: Refuse to overwrite an existing semver tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          token="$(curl -fsSL -u "x:${GH_TOKEN}" \
+            "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY,,}:pull&service=ghcr.io" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            "https://ghcr.io/v2/${GITHUB_REPOSITORY,,}/manifests/${GITHUB_REF_NAME}")"
+          if [ "$code" = "200" ]; then
+            echo "::error::${IMAGE}:${GITHUB_REF_NAME} already exists. Semver tags are immutable (ADR 0062 §13); release the next patch version instead."
+            exit 1
+          fi
+          echo "tag is unpublished (HTTP $code) — safe to proceed"
+
+  # ---------------------------------------------------------------------------
+  # 2. Source gates
+  # ---------------------------------------------------------------------------
+  source:
+    name: Source gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26'
+      # `make check` runs golangci-lint and refuses to pretend it passed when the
+      # binary is absent, which is correct — and means CI has to install it.
+      # ci.yml does that with golangci-lint-action; this pipeline cannot, because
+      # that action *runs* the linter rather than installing one for `make check`
+      # to call. Pinned to the version the Makefile requires, installed through
+      # the Go module proxy so it is checksum-verified rather than fetched by a
+      # piped shell script into a job that later holds packages: write.
+      #
+      # Found by the first real run of validate-oci.yml: the release workflow had
+      # the same gap and would have failed here on v0.3.0.
+      - name: Install golangci-lint
+        run: |
+          set -eu
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Quality gate
+        run: make check
+      - name: Race detector
+        run: go test -count=1 -race ./...
+
+  # ---------------------------------------------------------------------------
+  # 3. Integration suites
+  # ---------------------------------------------------------------------------
+  #
+  # All three, on a release tag, without exception. Kafka takes several minutes;
+  # this is publication, not quick feedback, and PR-time cost is governed by
+  # ci.yml and unchanged by this workflow.
+  integration:
+    name: Integration (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [postgres, kafka, redpanda]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26'
+      - name: Run suite
+        run: make integration-${{ matrix.suite }}
+
+  # ---------------------------------------------------------------------------
+  # 4. The shared OCI machinery
+  # ---------------------------------------------------------------------------
+  #
+  # Reproducibility, staging under the immutable `sha-<commit>` tag, index and
+  # label validation, the vulnerability scan, the CycloneDX SBOM, provenance,
+  # keyless signing, constrained verification, pull-by-digest and the native
+  # hardened runtime smoke all live in `oci-stage-verify.yml`.
+  #
+  # They live there because `validate-oci.yml` runs the same file. Duplicating
+  # this machinery so a validation workflow could rehearse it would have
+  # rehearsed the duplicate: the two copies drift on the first edit that touches
+  # only one, and the release path would be the one nobody ever exercised. As
+  # written, every remote behaviour Phase 7.1-V proved — GHCR authentication,
+  # native amd64 execution, keyless signing, referrer binding, pull-by-digest —
+  # was proven about *this* code path.
+  #
+  # What the shared workflow is not allowed to do is decide identity. It is
+  # handed a version, a revision, an epoch, a staging tag and the exact
+  # certificate identity it must produce, and it contains no step that writes a
+  # semver tag. Release authority stays here: the tag trigger above, and the
+  # `publish` job below.
+  stage-and-verify:
+    name: OCI
+    needs: [identity, source, integration]
+    uses: ./.github/workflows/oci-stage-verify.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    with:
+      version: ${{ needs.identity.outputs.version }}
+      revision: ${{ needs.identity.outputs.revision }}
+      source_date_epoch: ${{ needs.identity.outputs.source_date_epoch }}
+      sha_tag: ${{ needs.identity.outputs.sha_tag }}
+      certificate_identity: ${{ needs.identity.outputs.certificate_identity }}
+      run_arm64_smoke: ${{ vars.ENABLE_ARM64_SMOKE == 'true' }}
+
+  # ---------------------------------------------------------------------------
+  # 5. Publish the semver tag — LAST
+  # ---------------------------------------------------------------------------
+  #
+  # `needs` is the enforcement. This job cannot run unless identity, the source
+  # and integration gates and every gate inside the shared machinery have
+  # succeeded, because GitHub will not schedule it. There is no ordering to get
+  # wrong inside a script.
+  #
+  # This is also the one thing the shared workflow deliberately cannot do. A
+  # semver tag is created here, in a workflow whose only trigger is a semver tag
+  # push — so an artifact built from a branch has no path to this step.
+  #
+  # `imagetools create --tag` re-points the tag at the digest that was
+  # validated; it does not rebuild or re-index. Measured in Phase 7.1-P.
+  publish:
+    name: Publish semver tag
+    runs-on: ubuntu-latest
+    needs: [identity, stage-and-verify]
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ needs.stage-and-verify.outputs.digest }}
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Re-checked immediately before writing. The earlier check was cheap
+      # insurance; this one closes the window between then and now.
+      - name: Semver tag still does not exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          token="$(curl -fsSL -u "x:${GH_TOKEN}" \
+            "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY,,}:pull&service=ghcr.io" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            "https://ghcr.io/v2/${GITHUB_REPOSITORY,,}/manifests/${GITHUB_REF_NAME}")"
+          [ "$code" = "200" ] && { echo "::error::${GITHUB_REF_NAME} appeared during this run; refusing to overwrite"; exit 1; }
+          echo "still unpublished (HTTP $code)"
+
+      - name: Point the semver tag at the validated digest
+        run: |
+          set -eu
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${GITHUB_REF_NAME}" \
+            "${IMAGE}@${{ needs.stage-and-verify.outputs.digest }}"
+
+      # The tag must resolve to the digest that passed every gate. If it does
+      # not, something re-indexed the image and the release is not what was
+      # verified.
+      - name: Confirm the tag resolves to the verified digest
+        run: |
+          set -eu
+          got="$(docker buildx imagetools inspect "${IMAGE}:${GITHUB_REF_NAME}" \
+                  --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          want="${{ needs.stage-and-verify.outputs.digest }}"
+          [ "$got" = "$want" ] || { echo "::error::tag resolves to $got, expected $want"; exit 1; }
+          echo "${IMAGE}:${GITHUB_REF_NAME} -> $got"
+
+  # ---------------------------------------------------------------------------
+  # 6. Release summary
+  # ---------------------------------------------------------------------------
+  summary:
+    name: Release summary
+    runs-on: ubuntu-latest
+    needs: [identity, stage-and-verify, publish]
+    if: always()
+    steps:
+      - name: Write summary
+        run: |
+          {
+            echo "## svcdoctor ${{ needs.identity.outputs.version }}"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Version | \`${{ needs.identity.outputs.version }}\` |"
+            echo "| Commit | \`${{ needs.identity.outputs.revision }}\` |"
+            echo "| Image | \`${IMAGE}:${{ needs.identity.outputs.version }}\` |"
+            echo "| Digest | \`${{ needs.stage-and-verify.outputs.digest }}\` |"
+            echo "| linux/amd64 | \`${{ needs.stage-and-verify.outputs.amd64_digest }}\` |"
+            echo "| linux/arm64 | \`${{ needs.stage-and-verify.outputs.arm64_digest }}\` |"
+            echo "| Staging tag | \`${{ needs.identity.outputs.sha_tag }}\` |"
+            echo "| Architectures | linux/amd64, linux/arm64 |"
+            echo "| Scan, SBOM, provenance, signature | ${{ needs.stage-and-verify.result }} |"
+            echo "| Semver tag published | ${{ needs.publish.result }} |"
+            echo
+            echo "Pin the digest in production:"
+            echo
+            echo '```'
+            echo "${IMAGE}@${{ needs.stage-and-verify.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

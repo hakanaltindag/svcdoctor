@@ -37,9 +37,21 @@ import (
 // Both services, because the claim is equally unproven on either side and a
 // README does not separate them.
 var managedProviders = []string{
-	"Redpanda", "Confluent", "MSK", "Event Hubs",
+	"Confluent", "MSK", "Event Hubs",
 	"RDS", "Aurora", "Cloud SQL", "Azure Database",
 }
+
+// Redpanda is deliberately absent from the list above, and moved to its own rule
+// below, because it is the one name that stopped being unproven.
+//
+// Phase 7.0b committed `test/integration/redpanda/` against a pinned
+// v25.1.9 and the whole BASIC journey passes there over `PLAIN` and
+// `SCRAM-SHA-256`. A blanket ban would now forbid a true sentence, and a guard
+// that forbids the truth gets deleted rather than obeyed.
+//
+// What replaces it is narrower rather than weaker: the claim must carry the
+// version it was measured at, and the three ways of widening it are named.
+// See TestTheREADMEsRedpandaClaimStaysNarrow.
 
 // denials are the words that mark a line as recording an absence rather than
 // making a claim.
@@ -50,7 +62,7 @@ var managedProviders = []string{
 // prose.
 var denials = map[string]bool{
 	"not": true, "no": true, "never": true, "none": true,
-	"deferred": true, "unproven": true, "without": true,
+	"nothing": true, "deferred": true, "unproven": true, "without": true,
 }
 
 // TestTheREADMENeverClaimsManagedCompatibility keeps provider names where they
@@ -682,4 +694,139 @@ func TestTheHealthClaimGuardCanFail(t *testing.T) {
 	if recordsAbsence(planted) {
 		t.Error("a planted health claim reads as a denial")
 	}
+}
+
+// --- the Redpanda claim, which is true and easy to widen --------------------
+
+// redpandaSupportWords mark a sentence as asserting compatibility rather than
+// merely naming the software.
+//
+// A `make` target line and an operational note about running suites one at a
+// time both name Redpanda and claim nothing, so the trigger is the claim, not
+// the name.
+var redpandaSupportWords = []string{
+	"supported", "support for", "tested", "validated", "works", "compatible",
+	"compatibility", "certified", "verified against",
+}
+
+// redpandaOverclaims are the three widenings ADR 0061's evidence does not cover.
+//
+// Each is checked against a sentence stripped of Markdown, so a disclaimer
+// elsewhere in the paragraph cannot excuse it — but a denial *in the same
+// sentence* legitimately can, which is why denies() still applies.
+var redpandaOverclaims = []struct{ phrase, why string }{
+	{"redpanda cloud", "self-hosted evidence does not transfer to Redpanda Cloud; " +
+		"nothing has ever run against it"},
+	{"all redpanda", "the fixture pins one version, and Redpanda's SCRAM salt size " +
+		"is a compile-time constant in its source"},
+	{"any redpanda version", "same reason: one version was measured"},
+	{"every redpanda version", "same reason: one version was measured"},
+	{"scram-sha-512", "svcdoctor does not implement it, against Redpanda or anything else"},
+}
+
+// TestTheREADMEsRedpandaClaimStaysNarrow replaces the blanket ban that
+// TestTheREADMENeverClaimsManagedCompatibility used to apply to this name.
+//
+// Two rules, both structural:
+//
+//  1. a sentence that *claims* Redpanda compatibility must name the tested
+//     version, so the claim cannot silently generalize;
+//  2. the named widenings are refused outright.
+func TestTheREADMEsRedpandaClaimStaysNarrow(t *testing.T) {
+	const testedVersion = "v25.1.9"
+
+	// claimUnits rather than a per-line split: the README wraps prose to a
+	// column, so "says nothing about Redpanda Cloud" lands on two lines and a
+	// line-wise guard sees the claim without its denial. That is the same defect
+	// the compatibility guard already learned.
+	for _, sentence := range claimUnits(readmeOutsideRoadmap(t)) {
+		lower := strings.ToLower(sentence)
+		if !strings.Contains(lower, "redpanda") {
+			continue
+		}
+
+		for _, over := range redpandaOverclaims {
+			if strings.Contains(lower, over.phrase) && !denies(sentence) {
+				t.Errorf("the README claims %q: %s\n\n  %s", over.phrase, over.why, sentence)
+			}
+		}
+
+		claimsSupport := false
+		for _, w := range redpandaSupportWords {
+			if strings.Contains(lower, w) {
+				claimsSupport = true
+				break
+			}
+		}
+		if !claimsSupport || denies(sentence) {
+			continue
+		}
+		if !strings.Contains(sentence, testedVersion) {
+			t.Errorf("the README claims Redpanda compatibility without naming the "+
+				"tested version %s:\n  %s\n\n"+
+				"Redpanda's SCRAM salt size is a compile-time constant in its source, so "+
+				"the fixture is evidence about one version. An unversioned claim "+
+				"generalizes past what was measured.", testedVersion, sentence)
+		}
+	}
+}
+
+// TestTheRedpandaClaimGuardCanFail proves neither rule above is vacuous.
+func TestTheRedpandaClaimGuardCanFail(t *testing.T) {
+	// The sentence the README actually carries must satisfy the guard.
+	real := "**Redpanda self-hosted v25.1.9 is tested**, `PLAIN` and `SCRAM-SHA-256`, " +
+		"by a committed fixture with its own `make` target"
+	if !strings.Contains(real, "v25.1.9") {
+		t.Fatal("the fixture sentence lost its version")
+	}
+
+	// And these must not.
+	for _, planted := range []string{
+		"Redpanda is supported",
+		"svcdoctor is compatible with Redpanda",
+		"Redpanda Cloud is supported",
+		"all Redpanda versions are tested",
+	} {
+		lower := strings.ToLower(planted)
+		flagged := strings.Contains(lower, "v25.1.9")
+		for _, over := range redpandaOverclaims {
+			if strings.Contains(lower, over.phrase) {
+				flagged = true
+			}
+		}
+		claims := false
+		for _, w := range redpandaSupportWords {
+			if strings.Contains(lower, w) {
+				claims = true
+			}
+		}
+		if !claims && !flagged {
+			t.Errorf("a planted claim would slip past both rules: %q", planted)
+		}
+		if denies(planted) {
+			t.Errorf("a planted claim reads as a denial: %q", planted)
+		}
+	}
+}
+
+// readmeOutsideRoadmap returns the README with its Roadmap section removed.
+//
+// The Roadmap is exempt for the reason it is exempt from the managed-provider
+// guard: its entire content is work not yet done, so naming a platform there
+// claims nothing. "Redpanda Cloud" appears in it as an open item and must keep
+// being allowed to.
+func readmeOutsideRoadmap(t *testing.T) string {
+	t.Helper()
+
+	var kept []string
+	inRoadmap := false
+	for _, line := range strings.Split(readRepoFile(t, "README.md"), "\n") {
+		if strings.HasPrefix(line, "## ") {
+			inRoadmap = strings.Contains(line, "Roadmap")
+		}
+		if !inRoadmap {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
 }

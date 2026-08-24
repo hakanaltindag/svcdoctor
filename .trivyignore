@@ -1,0 +1,27 @@
+# Vulnerability exceptions for the svcdoctor OCI image.
+#
+# ADR 0062 section 19: the release gate blocks on HIGH and CRITICAL findings.
+# A finding may be released past only with a written justification that names
+# the CVE and explains why it is not reachable in the shipped runtime — and that
+# justification belongs here and in the release notes, not in a scanner flag.
+#
+# This file is deliberately empty of entries.
+#
+# What it must never become: a way to make the gate quiet. `--ignore-unfixed`
+# and a blanket severity downgrade were both rejected in Phase 7.1-R for the
+# same reason — a gate nobody can fail is not a gate. Each line added here is a
+# decision someone made and signed their name to in review.
+#
+# Format, when an entry is genuinely needed:
+#
+#   CVE-YYYY-NNNNN
+#   # <date> <who reviewed it>
+#   # Why it is not reachable: the image contains no shell and no package
+#   # manager, and nothing in svcdoctor executes <component>. The package is
+#   # present only because <base image reason>.
+#   # Revisit when: <condition>
+#
+# Phase 7.1 measured 0 CRITICAL and 0 HIGH across 5 base OS packages and 3 Go
+# components. That was one measurement of one image, not a promise about future
+# CVEs — which is exactly why this file exists rather than an assumption that it
+# never will.

@@ -2,8 +2,22 @@
 
 ## Status
 
-**Accepted.** This record is the outcome of **Phase 6.2a-R2** and it is the implementation
-contract for Phase 6.2.
+**Accepted, and superseded in part by [ADR 0061](0061-scram-defensive-resource-bounds.md).**
+This record is the outcome of **Phase 6.2a-R2** and it is the implementation contract for
+Phase 6.2.
+
+**What ADR 0061 replaces, and nothing more:** §7's numeric bound table, and the classification of
+a bound refusal. §7's *reasoning* that the core must not inherit its caller's framing limit
+survives intact and is the reason those bounds are still core-owned.
+
+**What it does not touch:** Model D itself, the plaintext boundary, the derivation-callback
+contract, the SASLname/SASLprep decision in §5, the error discipline in §8, the cryptography in
+§9, the import allowlist in §10, or the state minimization in §6.
+
+§7's row for `MaxSaltLen` recorded its interoperability risk as *"none: 8× the largest common
+value"*. **That premise was falsified by measurement**: Redpanda v25.1.9 emits a 130-byte salt,
+hardcoded in its own source, and svcdoctor refused it. The table below is left as written —
+it is what was decided and why — and ADR 0061 records what replaced it. See §7's own note.
 
 ADR 0055 remains the record that rejected Model A and selected Model D for further review.
 This record makes Model D precise enough to build: the exact API, the exact callback contract,
@@ -333,6 +347,19 @@ dereference. No `noCopy` marker is added, because it would need `sync` in the al
 a `go vet` diagnostic for a mistake the API shape already discourages.
 
 ### 7. Core-owned bounds
+
+> **Superseded in part by [ADR 0061](0061-scram-defensive-resource-bounds.md).** The numbers in
+> the table below, and the "Interop risk" column's claim of *none*, are **historical**. Six of
+> the eight bounds moved in Phase 7.0b, and a bound refusal no longer classifies as a malformed
+> peer response. The current values are ADR 0061 §28.
+>
+> The paragraph immediately below — *the core cannot inherit a caller's bound* — is **not**
+> superseded. It is why these bounds are still core-owned rather than derived from framing.
+>
+> The `MaxSaltLen` row's rationale, *"8× the largest common value"*, was falsified by a real
+> implementation: Redpanda v25.1.9 uses 130 bytes. It is left here as written, because what was
+> decided and why is the record's job; ADR 0061 §4 explains why the *methodology* was the defect
+> rather than the number.
 
 The two wire packages bound peer payloads **eight times apart** — PostgreSQL's
 `MaxMessageSize` is 1 MiB, Kafka's `maxResponseSize` is 8 MiB — so the core cannot inherit a
