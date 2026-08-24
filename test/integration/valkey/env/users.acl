@@ -1,0 +1,3 @@
+user default on nopass ~* &* +@all
+user app on >app-pw ~app:* &* +@read +ping
+user noperm on >noperm-pw ~app:* &* +@read -ping
