@@ -1,0 +1,41 @@
+# Docker build context — deny by default.
+#
+# This file excludes everything and then re-admits only what `go build` needs.
+# The allowlist direction is deliberate: an ignore list has to predict every
+# secret-bearing path that might appear, and it silently fails the day one
+# appears that nobody predicted. This inverts that — a new file is outside the
+# build context until someone adds it here on purpose.
+#
+# What the deny-by-default rule actually keeps out of the context today:
+#
+#   .git/                                 19 MB of history, every reverted
+#                                         experiment and every commit message
+#   test/integration/*/env/certs/         generated CA and server PRIVATE KEYS
+#                                         for the PostgreSQL, Kafka and Redpanda
+#                                         fixtures — untracked, but present in a
+#                                         developer tree that has run `make
+#                                         integration-*`, which is exactly the
+#                                         tree an image gets built from
+#   .claude/, CLAUDE.md, AGENTS.md        local agent instructions
+#   .env, *.pem, *.key, credentials*      whatever a working tree accumulated
+#   .DS_Store                             macOS noise
+#
+# The build needs four things and no more: the module files and the two Go
+# source trees. There are no `go:embed` assets, no generated code and no
+# codegen step, so nothing else belongs in the context.
+#
+# `docs/`, `test/` and `scripts/` are intentionally absent from the allowlist.
+# The image ships a binary, not the repository.
+*
+
+!go.mod
+!go.sum
+!cmd/
+!internal/
+
+# Re-exclude anything that could ride in under the two admitted source trees.
+# `!cmd/` and `!internal/` re-admit those directories wholesale, so these rules
+# exist to keep a stray secret or a macOS artefact from being carried along.
+**/.DS_Store
+**/testdata/**/*.pem
+**/testdata/**/*.key
