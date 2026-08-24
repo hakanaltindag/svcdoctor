@@ -2,13 +2,20 @@
 
 ## Status
 
-**Accepted; runtime implemented, publication deferred to Phase 7.1-P.**
+**Accepted; runtime and publication pipeline implemented, never executed.**
 
 Read that wording literally. **Accepted** applies to every decision below.
 **Runtime implemented** means the image, its security properties and the
-Kubernetes execution model exist and are validated. **Publication deferred**
-means no image has been pushed, signed or attested, and §12–§19 — the release
-contract — are therefore *normative but not yet exercised*.
+Kubernetes execution model exist and are validated. **Publication pipeline
+implemented** means `.github/workflows/release-oci.yml` now mechanically
+enforces §12–§20. **Never executed** means the workflow has never run: no image
+has been pushed to GHCR, nothing has been signed or attested, and no `v0.3.0`
+tag exists. Phase 7.1-P validated the pipeline's mechanisms against a local
+registry and its logic locally; it deliberately published nothing.
+
+Two obligations remain open and are recorded in §21: the workflow's first real
+run, and native `linux/amd64` execution, which needs a GitHub-hosted amd64
+runner and therefore cannot be demonstrated from an arm64 workstation.
 
 Phase 7.1 built and measured the runtime. Phase 7.1-R reviewed it, resolved the
 four questions Phase 7.1 left open, and added the release contract in §12–§19.
@@ -102,9 +109,9 @@ attack surface, then predictability, then size.
 passes `RootCAs: nil` and Go falls back to the system trust store. A `scratch`
 image has no trust store, so `nil` would silently stop meaning *use the system
 roots* and start meaning *trust nothing*. That is a change to TLS semantics
-disguised as a packaging choice, and §33 proves it is real rather than
-theoretical: the same invocation that verifies a public certificate in the
-shipped image fails with `TLS_UNKNOWN_AUTHORITY` and
+disguised as a packaging choice, and the CA-less negative control recorded in
+§22 proves it is real rather than theoretical: the same invocation that verifies
+a public certificate in the shipped image fails with `TLS_UNKNOWN_AUTHORITY` and
 `TLS_CHAIN_NOT_TRUSTED` in a CA-less scratch build.
 
 | Model | Verdict | Why |
@@ -142,9 +149,9 @@ able to express *only this issuer is acceptable here*. `internal/cli/tls.go`
 builds a fresh `x509.NewCertPool()` and never calls `SystemCertPool`, so the
 replacement is structural; D confirms the image does not undo it.
 
-Case A alone would be worthless without §33's negative control, because a test
-that cannot fail proves nothing. The CA-less build fails it. The trust store is
-doing real work.
+Case A alone would be worthless without the CA-less negative control recorded in
+§22, because a test that cannot fail proves nothing. The CA-less build fails it.
+The trust store is doing real work.
 
 `SSL_CERT_FILE` is set by the base image to the same bundle Go would find
 anyway. It is left as inherited and noted here because it is, technically, an
@@ -325,7 +332,7 @@ and this ADR never calls the labels provenance. See §17.
 - **Appending `--tls-ca-file` to the system roots** — would destroy the
   *only this issuer* meaning. Rejected; §5 case D guards it.
 - **A Helm chart, an operator or a controller** — turns a bounded diagnostic
-  worker into an agent. Explicitly out of scope; §22.
+  worker into an agent. Explicitly out of scope; §23.
 - **`latest` as a deployment reference** — mutable. Immutable semver and digest
   only; §13.
 - **Docker Hub as a second canonical registry** — a second credential and a
@@ -640,7 +647,92 @@ must not be described as "secure": it is *fixed*, which is a different property.
 **[GUIDANCE]** Automated dependency updates (Dependabot/Renovate) may propose
 the bump; a human accepts it, because it changes trust.
 
-## 21. Validation
+## 21. Publication pipeline
+
+**[POLICY] `.github/workflows/release-oci.yml` is the only way an official image
+is produced.** It is triggered by a `v*` tag push, validates the tag as
+`^v[0-9]+\.[0-9]+\.[0-9]+$`, and derives every identity value by running
+`scripts/build-image.sh --emit` — the same script a developer runs locally, so
+there is one derivation rather than one for humans and a second for CI.
+
+**[POLICY] Job ordering is the enforcement mechanism, not script ordering.**
+`publish` declares `needs` on identity, staging, verification and the native
+amd64 smoke, which themselves depend on the source, integration and
+reproducibility gates. GitHub will not schedule `publish` until all of them
+succeed, so the ordering cannot be broken by editing a step.
+
+**[FACT] Tag-last is achievable, and this was measured rather than assumed.**
+Against a local registry, `docker buildx imagetools create --tag <semver>
+<repo>@<digest>` re-pointed the tag at the **existing** index digest without
+rewriting it — the semver tag and the staged digest were byte-identical. That is
+what makes the following sequence real:
+
+1. build and push to `:sha-<commit>`, capture the index digest;
+2. validate the digest — index platforms, OCI labels, vulnerability scan,
+   attestation binding, SBOM contents;
+3. sign the digest keylessly and **verify** the signature;
+4. pull by digest and run a native amd64 smoke;
+5. **only then** point `:vX.Y.Z` at that exact digest, and confirm it resolves
+   to it.
+
+**[POLICY] The staging tag is `sha-<commit>` and is immutable.** It names its
+source and can never be mistaken for a release. An aborted run leaves
+unreferenced blobs and possibly a SHA tag — never a semver tag naming a partial
+release, because step 5 is last.
+
+**[POLICY] Every third-party action is pinned to a 40-character commit SHA.**
+This workflow holds `packages: write` and an OIDC signing identity; an action
+referenced by mutable tag would be a release-signing compromise waiting to
+happen. All seven pins were verified to resolve against the GitHub API.
+
+**[POLICY] Credentials.** GHCR authentication uses `GITHUB_TOKEN`. There is no
+PAT, no Docker Hub credential, no cosign private key and no `COSIGN_PASSWORD`.
+No secret of any kind is passed into the build: `--build-arg` carries `VERSION`
+and `REVISION` and nothing else, and there is no `--secret` mount.
+
+**[POLICY] `cosign verify` is a release gate, not a formality.** It is
+constrained by `--certificate-identity` to this repository's workflow at
+`refs/tags/vX.Y.Z` and by `--certificate-oidc-issuer` to GitHub's issuer. An
+unconstrained verify — or `--certificate-identity-regexp` with a permissive
+pattern — accepts any valid Sigstore signature from any identity on earth, and
+is close to no check at all.
+
+### What Phase 7.1-P proved, and what it did not
+
+**[FACT] Validated locally, against a real registry and a real multi-arch image
+with attestations:**
+
+- the tag-last mechanism preserves the digest;
+- a `HEAD` request distinguishes an existing tag (200) from an absent one (404),
+  which is what makes the immutability refusal implementable;
+- the index carries exactly `linux/amd64` and `linux/arm64` plus two
+  `unknown/unknown` **attestation** manifests, and the workflow's check
+  distinguishes them — reporting an attestation as a third architecture would be
+  a plausible and wrong claim;
+- each attestation is bound to its platform image by
+  `vnd.docker.reference.digest`;
+- the CycloneDX SBOM names `svcdoctor`, `ca-certificates` and
+  `franz-go/kmsg`;
+- the workflow's reproducibility step reproduces both platform digests exactly.
+
+**[FACT] Not proved, because it cannot be without publishing:**
+
+- **The workflow has never run.** Every claim above is about its mechanisms and
+  its logic, tested in isolation.
+- **Native `linux/amd64` execution.** Phase 7.1 ran amd64 only under emulation.
+  The workflow performs a native amd64 pull-by-digest smoke on `ubuntu-latest`,
+  which is native amd64 — but that requires a real run. This remains **the one
+  open evidence obligation before first publication**, exactly as §22 records.
+- **cosign keyless signing and verification.** Keyless signing requires an OIDC
+  identity that exists only in CI. It was deliberately *not* exercised locally:
+  signing with a throwaway key would have uploaded a signature to the public
+  Rekor transparency log, which is a publication, and this phase published
+  nothing.
+- **GHCR-specific behaviour** — authentication, tag immutability, package
+  association. The mechanisms were proven against a local registry; GHCR is
+  expected to behave the same way and has not been asked to.
+
+## 22. Validation
 
 Measured through the built image unless stated. Source baseline (`gofmt`,
 `vet`, `golangci-lint`, `go test`, `-race`, `go mod tidy`, `make check`) and all
@@ -712,7 +804,7 @@ nevertheless measured directly: the advertised-broker sweep produced
 qualified as *"could not be reached from this vantage point … not the health of
 the cluster"*.
 
-## 22. Relationship to existing decisions
+## 23. Relationship to existing decisions
 
 Consumes and contradicts nothing. ADR 0050 (discovery creates no credential
 authority), 0052 (Kafka has no session; the terminal line is *Kafka metadata
