@@ -78,4 +78,23 @@
 // postgres.in_hot_standby, postgres.default_transaction_read_only,
 // postgres.is_superuser, postgres.transaction_status or
 // postgres.server_version. Those are evidence and stay evidence.
+//
+// # Why those five stay evidence, measured
+//
+// Phase 7.3A ran the released binary against a real 3-node Patroni cluster.
+// postgres.in_hot_standby tracked pg_is_in_recovery() exactly on every member,
+// through a leader failure, a failover and the old primary rejoining as a
+// replica. During etcd quorum loss every member reported in_hot_standby=on —
+// the cluster had no primary at all — and this package correctly produced no
+// finding on any of them.
+//
+// That is the right answer and it is right for a reason worth stating: none of
+// these facts is a problem without an expectation, and svcdoctor has no
+// expected-state model. A replica is not a fault; it is what two thirds of a
+// healthy cluster are. A read-only server may be deliberate. A superuser
+// diagnostic role may be a customer's policy. An old version may be supported.
+//
+// Turning any of them into a finding would be inventing the operator's intent
+// from a single connection. When an expected-state contract exists, this is
+// reopened deliberately — see docs/BACKLOG.md, PostgreSQL BASIC freeze.
 package postgres

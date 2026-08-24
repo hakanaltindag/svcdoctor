@@ -4236,6 +4236,89 @@ delivery model. Inventing a binary-distribution policy here was out of scope.
       authorization and a re-run of `release-oci.yml` against the existing immutable tag, which
       will reuse the published image and write no registry tag.
 
+## Phase 7.3A — Real-world PostgreSQL and Patroni validation: COMPLETE
+
+The released v0.3.3 image, digest-pinned, was run against disposable Hetzner infrastructure:
+standalone PostgreSQL 18.6, a 3-node Patroni 4.0.4 cluster on 3-member etcd, real TLS and SCRAM,
+real failover, DCS quorum loss, firewall REJECT and DROP, connection exhaustion, and three
+network vantage points. All lab resources were destroyed; residue verified zero.
+
+**BASIC remained truthful in every executed scenario. No material overclaim and no product bug.**
+
+What it proved, against a real server rather than a fixture:
+
+- a firewall REJECT is `TCP_CONNECTION_REFUSED`/FAIL/exit 1, and a DROP is `EXEC_LOCAL_TIMEOUT`/
+  UNKNOWN/status OK/INCOMPLETE/exit 4 with **no finding**. A local timeout never became a remote
+  failure.
+- a `pg_hba` refusal never became a wrong-password claim, and named its own vantage-dependence.
+- TLS trust and TLS identity stayed separate, each explicitly disclaiming the other.
+- an address literal produced **no `dns.lookup` node**, confirmed in the canonical JSON.
+- `--tls-insecure` withheld the credential: authentication SKIPPED, `EXEC_SKIPPED_BY_POLICY`,
+  zero credential bytes.
+- from one vantage a healthy Patroni member was unreachable while the cluster was fine, and
+  svcdoctor reported INCOMPLETE with no findings rather than a claim about the cluster.
+
+The scenarios were injected. This is evidence about semantics, not a compatibility guarantee and
+not an organic customer finding.
+
+### The two things it found
+
+**One understatement, now fixed in 7.3B.** With `max_connections` exhausted, the endpoint
+reported SQLSTATE 53300 and svcdoctor printed that code *and* "could not attribute this outcome
+to a specific cause" in the same finding.
+
+**One structural observation, deliberately not fixed.** The session node already carries
+`in_hot_standby`, `default_transaction_read_only`, `is_superuser` and `server_version`, and
+`in_hot_standby` tracked `pg_is_in_recovery()` exactly through failover and rejoin. So svcdoctor
+can already distinguish a primary from a replica with no SQL and no new collector — and reports
+nothing, because a replica is not a fault without an expectation. That is the correct behaviour
+today and the cheapest possible starting point for an expected-state phase later.
+
+## Phase 7.3B — PostgreSQL real-world hardening closure: COMPLETE
+
+One semantic correction, no new vocabulary.
+
+`floorDetail` appended "svcdoctor could not attribute this outcome to a specific cause" whenever
+the failure class was the unnormalized floor — including when the peer had named the condition
+itself. ADR 0040 §8.1 had already made that sentence conditional on precisely this principle:
+**understating the evidence is a different error from overstating it and is still an error.**
+7.3A measured the understatement; 7.3B extends the existing gate to a code the peer names.
+
+SQLSTATE 53300 now restates the endpoint's own `too_many_connections` condition and suppresses
+the attribution sentence. It claims **no cause**: not that `max_connections` is too low, not a
+leak, not a pool, not a spike, not that the exhaustion persists — a later run may connect, and
+the code separates none of those.
+
+Deliberately unchanged: **0 new FindingCodes (40), 0 new FailureClasses (41), SchemaVersion 1,
+Reveal 2, SecretFor 2, 1 dependency.** The `namedConditions` table requires a measurement, not a
+reading of the PostgreSQL source, and a guard enforces that.
+
+`first break L5` on a session failure was reviewed and classified **CORRECT**: the producer
+declares `Layer: domain.LayerAuth` deliberately, session establishment completes the
+authorization phase, and the terminal shows the failing step separately. Not changed — doing so
+would alter released semantics for a reading preference.
+
+**19 mutations, all caught**, including every attempt to invent a cause for 53300, to promote any
+of the four session facts into a finding, to collapse TLS trust into identity, to make a local
+timeout a remote failure, and to introduce a cluster/HA/role finding code.
+
+### PostgreSQL BASIC — FROZEN
+
+**Owns:** the requested target, DNS and literal-target semantics, TCP, `SSLRequest`, TLS trust
+and identity, `Startup`, authentication, session establishment to `ReadyForQuery`, and the
+server-reported facts protocol negotiation already yields.
+
+**Does not own:** expected-state assurance, role expectation, multi-endpoint or cluster
+correlation, Patroni, replication health, backup or storage assurance, SQL collectors, fleet
+history, and waiver or drift semantics.
+
+No finding may depend on "expected primary", "expected writable", "cluster should", "HA should",
+"replication should" or "Patroni should". `TestNoPostgresFindingAssertsAnExpectation` and
+`TestNoCodeIsDeclaredOutsideTheAuthorizedSet` enforce it.
+
+**Reopening requires a deliberate decision recorded here**, with the expected-state contract that
+makes the claim meaningful. It is not reopened by adding a rule.
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6
