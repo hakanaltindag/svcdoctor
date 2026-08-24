@@ -24,12 +24,14 @@
 set -eu
 
 MODE=official
+EMIT=no
 PLATFORMS=linux/amd64,linux/arm64
 IMAGE=${IMAGE:-svcdoctor}
 
 while [ $# -gt 0 ]; do
   case $1 in
     --dev)      MODE=dev ;;
+    --emit)     EMIT=yes ;;
     --platform) PLATFORMS=$2; shift ;;
     -h|--help)  sed -n '2,25p' "$0"; exit 0 ;;
     *)          printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
@@ -132,6 +134,21 @@ else
 fi
 
 [ -n "${BUILDER:-}" ] && set -- --builder "$BUILDER" "$@"
+
+# --emit prints the derived release identity and exits without building.
+#
+# This exists so the publication workflow has exactly one place that decides
+# what a release is called. CI reads these values instead of re-deriving them
+# from `github.ref`, which would be a second version authority with its own
+# opportunity to disagree (ADR 0062 section 12).
+if [ "$EMIT" = yes ]; then
+  printf 'version=%s\n'           "$VERSION"
+  printf 'revision=%s\n'          "$REVISION"
+  printf 'source_date_epoch=%s\n' "$SOURCE_DATE_EPOCH"
+  printf 'dev_tag=%s\n'           "$DEV_TAG"
+  printf 'platforms=%s\n'         "$PLATFORMS"
+  exit 0
+fi
 
 echo "mode:              $MODE"
 echo "version:           $VERSION"

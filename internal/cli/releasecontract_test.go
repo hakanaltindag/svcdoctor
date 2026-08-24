@@ -231,11 +231,21 @@ func TestTheReproducibilityClaimStaysScoped(t *testing.T) {
 
 // TestUnenforceableContractItemsAreRecordedAsSuch is the honesty guard.
 //
-// Everything above checks the half of the contract that lives in files. The
-// other half — signature target, provenance source ref, tag-applied-last —
-// cannot be checked without publishing. That is fine, but only while it is
-// written down somewhere a reader will find it. If the backlog stops carrying
-// these, the contract silently becomes "whatever the tests happen to check".
+// Everything above checks the half of the contract that lives in files, and the
+// other half is whatever cannot be checked without actually publishing. That
+// boundary is not fixed, and this guard has now moved once.
+//
+// Phase 7.1-R wrote it covering four items. Two of them — the signature target
+// and tag-applied-last — stopped being unenforceable in Phase 7.1-P, when
+// `.github/workflows/release-oci.yml` came into existence and
+// releaseworkflow_test.go began asserting them directly against the workflow.
+// Requiring the backlog to keep describing them in prose would now be
+// requiring a duplicate of something a test checks, and duplicated obligations
+// drift.
+//
+// What remains genuinely unenforceable is what needs a real run against a real
+// registry. Those stay here, because the written record is the only thing
+// carrying them.
 func TestUnenforceableContractItemsAreRecordedAsSuch(t *testing.T) {
 	backlog := readRepoFile(t, "docs/BACKLOG.md")
 
@@ -244,15 +254,35 @@ func TestUnenforceableContractItemsAreRecordedAsSuch(t *testing.T) {
 			"of the release contract that needs a registry to enforce")
 	}
 	for _, item := range []struct{ needle, what string }{
-		{"never over a tag", "signing target"},
-		{"amd64", "native amd64 validation before first publication"},
+		{"amd64", "native amd64 execution before first publication"},
 		{"NetworkPolicy", "unverified NetworkPolicy evidence"},
-		{"tag last", "semver tag applied last, so a partial release wears no tag"},
+		{"Rekor", "why keyless signing was not exercised locally"},
+		{"never executed", "the pipeline has never run end to end"},
 	} {
-		if !strings.Contains(backlog, item.needle) {
+		if !strings.Contains(backlog, item.needle) &&
+			!strings.Contains(strings.ToLower(backlog), strings.ToLower(item.needle)) {
 			t.Errorf("docs/BACKLOG.md no longer records the %s obligation (looked for %q).\n\n"+
-				"It cannot be enforced by a test until publication exists, so the "+
-				"written record is the only thing carrying it.", item.what, item.needle)
+				"It cannot be enforced by a test until the pipeline has run against a "+
+				"real registry, so the written record is the only thing carrying it.",
+				item.what, item.needle)
+		}
+	}
+
+	// And the two items that graduated must actually be enforced now, or they
+	// have simply been dropped.
+	workflowGuards := readRepoFile(t, "internal/cli/releaseworkflow_test.go")
+	// The function *declaration*, not the bare name. Every one of these tests
+	// carries a doc comment that names it, so a search for the name alone stays
+	// satisfied by the comment of a test that has been renamed away — which is
+	// exactly what happened when this guard was first written.
+	for _, graduated := range []struct{ needle, what string }{
+		{"func TestTheReleaseWorkflowSignsAndVerifiesTheDigest(", "signing target"},
+		{"func TestTheSemverTagIsAppliedLast(", "tag applied last"},
+	} {
+		if !strings.Contains(workflowGuards, graduated.needle) {
+			t.Errorf("the %s obligation was removed from docs/BACKLOG.md on the "+
+				"grounds that %s enforces it, and that test no longer exists.",
+				graduated.what, strings.TrimSuffix(strings.TrimPrefix(graduated.needle, "func "), "("))
 		}
 	}
 }
