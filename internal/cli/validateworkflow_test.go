@@ -523,6 +523,49 @@ func TestTheRemoteSmokeProvesNativeExecutionByDigest(t *testing.T) {
 	if !strings.Contains(shared, "the pulled image is the reproduced platform manifest") {
 		t.Error("nothing ties the pulled amd64 manifest back to the reproducibility proof")
 	}
+
+	// ADR 0062 §20: the CA store is a security-sensitive build input, so the
+	// smoke must keep both halves of the claim — a positive result and the
+	// negative control that gives it meaning.
+	ca := stepBlock(t, shared, "System CA trust survives publication")
+	// The point of the smoke is that no CA file is supplied: the image's own
+	// store has to do the work, or the test proves nothing about the image.
+	if strings.Contains(ca, "--tls-ca-file") || strings.Contains(ca, "--tls-insecure") {
+		t.Error("the system CA smoke supplies its own trust material or disables " +
+			"verification, so it no longer tests the image's trust store")
+	}
+	if !strings.Contains(ca, "TLS_UNKNOWN_AUTHORITY") {
+		t.Error("the system CA smoke no longer carries its negative control.\n\n" +
+			"A missing CA bundle does not make handshakes disappear — it makes them " +
+			"fail to verify, and TLS_UNKNOWN_AUTHORITY is the class that says so.")
+	}
+
+	// Scoped to the expression that selects a passing path, not to the whole
+	// step: both attribute names also appear in the evidence-printing loop
+	// above, so a whole-step check stayed green when the condition itself was
+	// deleted. Found by mutation.
+	_, good, found := strings.Cut(ca, "good = [n for n in tls")
+	if !found {
+		t.Fatal("the system CA smoke no longer selects verified handshakes")
+	}
+	// Cut at the statement after the comprehension, not at the first "]" —
+	// n['state'] closes a bracket on the comprehension's own first line.
+	good, _, _ = strings.Cut(good, "if not good")
+	for _, g := range []struct{ needle, what string }{
+		{"'PASS'", "the passing-state condition"},
+		{"'tls.trust_source'", "the system trust-source condition"},
+		{"'system'", "the expected trust source"},
+		{"'tls.verified'", "the verification condition"},
+		{"is True", "the requirement that verification actually succeeded"},
+	} {
+		if !strings.Contains(good, g.needle) {
+			t.Errorf("the system CA smoke no longer requires %s (looked for %q)", g.what, g.needle)
+		}
+	}
+	// It must not have been weakened into "a handshake happened".
+	if !strings.Contains(ca, "no path verified against the image system trust store") {
+		t.Error("the system CA smoke does not require a verified handshake")
+	}
 }
 
 // TestTheRemoteAuditLooksForSecretsAndSource pins ADR 0062 §22.

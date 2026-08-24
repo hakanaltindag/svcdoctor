@@ -838,22 +838,54 @@ jobs:
             --tls require --timeout 20s --output json > /tmp/tls.json || true
           python3 - <<'PY'
           import json, sys
+
           d = json.load(open('/tmp/tls.json'))
-          tls = [n for n in d['evidence']['nodes'] if n['step'] == 'tls.handshake']
-          if not tls or not all(n['state'] == 'PASS' for n in tls):
-              print('::error::TLS did not verify against the image system trust store')
+          nodes = d['evidence']['nodes']
+          tls = [n for n in nodes if n['step'] == 'tls.handshake']
+
+          # The whole evidence path, always — a failure here needs to be
+          # diagnosable from the log rather than from a rerun.
+          for n in nodes:
+              if n['step'] in ('dns.lookup', 'tcp.connect', 'tls.handshake'):
+                  a = n.get('attributes') or {}
+                  extra = ''
+                  if n['step'] == 'tls.handshake':
+                      extra = (f"  trust={(a.get('tls.trust_source') or {}).get('value')}"
+                               f" verified={(a.get('tls.verified') or {}).get('value')}")
+                  print(f"  {n['state']:<8} {n.get('failureClass', ''):<24} {n['id']}{extra}")
+
+          if not tls:
+              print('::error::no TLS handshake was attempted; the smoke proved nothing')
               sys.exit(1)
-          attrs = tls[0].get('attributes') or {}
-          src = (attrs.get('tls.trust_source') or {}).get('value')
-          ver = (attrs.get('tls.verified') or {}).get('value')
-          print('trust source:', src)
-          print('verified:', ver)
-          if src != 'system':
-              print(f'::error::trust source is {src!r}, expected "system"')
+
+          # The claim under test is that *the published image kept a usable system
+          # trust store*. One verified handshake proves it.
+          #
+          # It is deliberately not "every path verified". www.google.com resolves
+          # to both A and AAAA records and GitHub-hosted runners have no IPv6
+          # route, so some paths fail at TCP before TLS is reached. That is
+          # vantage — a fact about where this ran — and treating it as a broken
+          # CA store is precisely the "a local failure is not a remote failure"
+          # conflation svcdoctor exists to refuse. Measured: the first run of this
+          # step failed for exactly that reason while the trust store was fine.
+          good = [n for n in tls
+                  if n['state'] == 'PASS'
+                  and ((n.get('attributes') or {}).get('tls.trust_source') or {}).get('value') == 'system'
+                  and ((n.get('attributes') or {}).get('tls.verified') or {}).get('value') is True]
+          if not good:
+              print('::error::no path verified against the image system trust store')
               sys.exit(1)
-          if ver is not True:
-              print(f'::error::tls.verified is {ver!r}, expected true')
+
+          # The negative control. A missing or corrupt CA bundle does not make
+          # handshakes disappear — it makes them fail to verify, and this is the
+          # class that says so. Any occurrence is a real finding about the image.
+          unknown = [n for n in tls if n.get('failureClass') == 'TLS_UNKNOWN_AUTHORITY']
+          if unknown:
+              print(f'::error::{len(unknown)} handshake(s) could not verify the peer: '
+                    'the image trust store is missing or incomplete')
               sys.exit(1)
+
+          print(f'{len(good)}/{len(tls)} handshakes verified against the image system trust store')
           PY
 
   # Optional native arm64 smoke. GitHub's arm64 runners are free for public
