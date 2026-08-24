@@ -59,6 +59,13 @@ func parse(t *testing.T, name string) *ast.File {
 // and nothing else. The list is per-package rather than per-prefix precisely so
 // that `internal/adapter/kafka/wire` is still denied while
 // `internal/adapter/kafka` is allowed.
+//
+// The Redis entries arrived in Phase 7.5 and are two rather than three: the
+// Redis composition never reads internal/service/redis, because every fact it
+// branches on — whether the endpoint demanded authentication, whether it
+// identified itself as a Sentinel — comes from the adapter's own normalized
+// answer rather than from an attribute on the graph. A composition root that
+// read the vocabulary would be reading evidence it had just written.
 func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 	allowed := map[string]bool{
 		"github.com/hakanaltindag/svcdoctor/internal/domain":              true,
@@ -75,6 +82,13 @@ func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 		"github.com/hakanaltindag/svcdoctor/internal/security":            true,
 		"github.com/hakanaltindag/svcdoctor/internal/vocabulary":          true,
 		"github.com/hakanaltindag/svcdoctor/internal/service/kafka":       true,
+		// Phase 7.5. A third service adds its adapter and its diagnosis rules
+		// and nothing else: internal/service/redis is absent because the Redis
+		// composition reads the adapter's own answers rather than the graph, and
+		// internal/adapter/redis/wire stays denied for the same reason the other
+		// two wire packages are -- it holds this service's only Reveal.
+		"github.com/hakanaltindag/svcdoctor/internal/adapter/redis":   true,
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/redis": true,
 	}
 
 	for _, name := range productionFiles(t) {
@@ -429,6 +443,26 @@ func TestTheRunOwnsNoExitCode(t *testing.T) {
 	}
 }
 
+// adapterAuthAccessors are the adapter methods that may decide the candidate
+// class.
+//
+// One per service that has a class to decide, and each is that adapter's own
+// **normalized** answer rather than a protocol detail:
+//
+//	AuthMethod    PostgreSQL. The endpoint names a method, so the boolean is
+//	              derived from it by comparing against authMethodNone.
+//	AuthRequired  Redis. The endpoint names no method — it either refuses the
+//	              credential-free capability command with NOAUTH or it does not —
+//	              so the adapter's normalized answer already is the boolean.
+//
+// A name earns a place here when a service's adapter genuinely answers the
+// question. Adding one is the review a fourth service is forced through, and
+// TestEveryAdapterAuthAccessorIsUsed fails if a name here stops being used.
+var adapterAuthAccessors = map[string]bool{
+	"AuthMethod":   true,
+	"AuthRequired": true,
+}
+
 // TestTheCandidateClassComesFromTheAdapter pins the derivation an integration
 // test cannot reach in this environment.
 //
@@ -438,8 +472,18 @@ func TestTheRunOwnsNoExitCode(t *testing.T) {
 // end-to-end test would need an endpoint whose method differs by address family,
 // which Docker's port translation makes unreproducible here, so the invariant is
 // pinned structurally instead.
+//
+// # Phase 7.5 widened what it accepts, and narrowed how
+//
+// It asserted one method *name*, which described PostgreSQL rather than the
+// invariant. Redis answers the same question through a differently named
+// accessor because its protocol has no authentication method to compare. So the
+// name is now looked up in adapterAuthAccessors, and the expression must be a
+// **call** — a literal, a constant, a package-level variable and a field read all
+// fail, which is what the original check was really for.
 func TestTheCandidateClassComesFromTheAdapter(t *testing.T) {
-	assigned := false
+	assignments := 0
+	used := map[string]bool{}
 
 	for _, name := range productionFiles(t) {
 		ast.Inspect(parse(t, name), func(n ast.Node) bool {
@@ -451,31 +495,78 @@ func TestTheCandidateClassComesFromTheAdapter(t *testing.T) {
 			if !ok || key.Name != "authRequired" {
 				return true
 			}
-			assigned = true
-			if !mentionsAuthMethod(kv.Value) {
-				t.Errorf("%s sets authRequired from %s; it must come from the adapter's "+
-					"AuthMethod()", name, render(kv.Value))
+			assignments++
+			accessor, ok := adapterAuthCall(kv.Value)
+			if !ok {
+				t.Errorf("%s sets authRequired from %s; it must be a call to one of the "+
+					"adapter accessors in adapterAuthAccessors", name, render(kv.Value))
+				return true
 			}
+			used[accessor] = true
 			return true
 		})
 	}
 
-	if !assigned {
+	if assignments == 0 {
 		t.Error("no candidate assigns authRequired; the class partition has no source")
 	}
 }
 
-// mentionsAuthMethod reports whether an expression subtree reads the adapter's
-// normalized authentication method.
-func mentionsAuthMethod(n ast.Node) bool {
-	found := false
-	ast.Inspect(n, func(node ast.Node) bool {
-		if sel, ok := node.(*ast.SelectorExpr); ok && sel.Sel.Name == "AuthMethod" {
-			found = true
+// TestEveryAdapterAuthAccessorIsUsed keeps the allowlist from outliving its
+// producers.
+//
+// An entry nobody uses is an allowance nobody reviewed, and it would silently
+// pre-authorize a name for whoever wrote it next. This is the non-vacuity half of
+// the guard above: widening the list only holds if every widening is spent.
+func TestEveryAdapterAuthAccessorIsUsed(t *testing.T) {
+	used := map[string]bool{}
+	for _, name := range productionFiles(t) {
+		ast.Inspect(parse(t, name), func(n ast.Node) bool {
+			kv, ok := n.(*ast.KeyValueExpr)
+			if !ok {
+				return true
+			}
+			if key, ok := kv.Key.(*ast.Ident); !ok || key.Name != "authRequired" {
+				return true
+			}
+			if accessor, ok := adapterAuthCall(kv.Value); ok {
+				used[accessor] = true
+			}
+			return true
+		})
+	}
+	for accessor := range adapterAuthAccessors {
+		if !used[accessor] {
+			t.Errorf("adapterAuthAccessors allows %q but no composition uses it; "+
+				"remove it rather than leaving a pre-authorized name", accessor)
 		}
-		return !found
+	}
+}
+
+// adapterAuthCall reports the allowlisted adapter accessor an expression calls.
+//
+// It requires a CallExpr whose function is a selector, so `session.AuthRequired`
+// without parentheses, a bare `true`, and a package constant all fail. That is
+// deliberate: the invariant is that the value was *answered by the adapter for
+// this run*, not merely that it is spelled like one.
+func adapterAuthCall(n ast.Node) (string, bool) {
+	name := ""
+	ast.Inspect(n, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return name == ""
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return name == ""
+		}
+		if adapterAuthAccessors[sel.Sel.Name] {
+			name = sel.Sel.Name
+			return false
+		}
+		return true
 	})
-	return found
+	return name, name != ""
 }
 
 // TestTheRunChecksItsBudgetBeforeTheCredentialedStep pins the ordering ADR 0046

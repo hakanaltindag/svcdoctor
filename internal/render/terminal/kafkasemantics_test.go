@@ -842,9 +842,15 @@ func (g *kafkaGraph) unmeasured(nodeID int64, name, address string) {
 // --- the service table ---------------------------------------------------------
 
 // TestAServiceWithNoTableStillRenders keeps a future service from vanishing.
+//
+// The stand-in was "redis" until Phase 7.5, when Redis became a real service and
+// this test started asserting the opposite of what it means. That is the guard
+// working: a service arriving in the table has to displace every place it was
+// previously used as a placeholder. "mysql" is the stand-in now, and it is one
+// docs/SCOPE.md defers rather than one that could arrive quietly.
 func TestAServiceWithNoTableStillRenders(t *testing.T) {
 	g := newKafkaGraph(t)
-	g.b.service = "redis"
+	g.b.service = "mysql"
 	g.bootstrapPath(addrOne, passed(tcp, 190), passed(tlsStep, 1700))
 
 	text := renderKafka(t, g.report(), false)

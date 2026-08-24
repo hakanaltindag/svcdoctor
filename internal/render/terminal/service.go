@@ -1,9 +1,12 @@
 package terminal
 
 import (
+	"fmt"
+
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
+	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
 
@@ -87,6 +90,61 @@ type serviceView struct {
 	// It must be an attribute that survives redaction. Kafka's broker node
 	// identifier does: it names a position in a cluster rather than a host.
 	advertisementIdentity domain.AttributeKey
+
+	// observations are endpoint-reported facts a reader should see, in order.
+	//
+	// **They are observations and never findings.** Each is something the
+	// endpoint said about itself — what it calls itself, what version it
+	// reports, what mode it is in, what replication role it holds — and none of
+	// them is a problem without an expected-state contract svcdoctor does not
+	// have. Rendering them in the Result block rather than as findings is that
+	// distinction made visible.
+	//
+	// An empty slice renders nothing, which is what PostgreSQL and Kafka get.
+	observations []observationLine
+
+	// notes are conditional statements the Result block prints when an
+	// observation holds a particular value.
+	//
+	// They exist for the two cases where a *silence* would be misread. A
+	// cluster-mode endpoint that produced no topology findings looks like a
+	// healthy cluster unless the report says topology was not measured; and a
+	// Sentinel that stopped the run looks like a run that simply ended.
+	notes []conditionalNote
+}
+
+// observationLine names one endpoint-reported fact and how to print it.
+type observationLine struct {
+	// step is the node to read it from. The **last** node at that step wins,
+	// which matters for Redis: an endpoint that demanded authentication answers
+	// the first HELLO with a refusal and only the second one carries an
+	// identity.
+	step  domain.Step
+	key   domain.AttributeKey
+	label string
+
+	// render optionally formats the value. Nil means the value's own string.
+	render func(domain.AttrValue) string
+}
+
+// conditionalNote is a statement printed when one attribute holds one value.
+//
+// The lines are written out rather than composed, for the same reason
+// outcomeReached is: each was argued over, and a generated sentence would be a
+// claim nobody reviewed.
+type conditionalNote struct {
+	step  domain.Step
+	key   domain.AttributeKey
+	value string
+	lines []string
+
+	// replacesOutcome suppresses the outcome line entirely.
+	//
+	// A Sentinel stopped the journey before the probe, so printing
+	// "did NOT answer PING" beside the stop would invite a reader to treat the
+	// Sentinel as a data endpoint that failed rather than as the wrong kind of
+	// endpoint.
+	replacesOutcome bool
 }
 
 // The services this renderer has words for.
@@ -144,6 +202,70 @@ var services = map[domain.ServiceID]serviceView{
 		advertisementStep:     servicekafka.StepBrokerAdvertised,
 		advertisementLabel:    "Advertised broker",
 		advertisementIdentity: servicekafka.AttrBrokerNodeID,
+	},
+	// One row for both implementations. ADR 0066 section 6 freezes one adapter
+	// and one command, and the implementation is an *observation* below rather
+	// than a second row here — which is what stops the renderer from being the
+	// place a vendor branch reappears.
+	"redis": {
+		journey: []domain.Step{
+			vocabulary.StepTCPConnect,
+			vocabulary.StepTLSHandshake,
+			serviceredis.StepHello,
+			serviceredis.StepAuthentication,
+			serviceredis.StepPing,
+		},
+		narrowingSteps: []domain.Step{
+			serviceredis.StepAuthentication,
+			serviceredis.StepPing,
+		},
+		outcomeStep: serviceredis.StepPing,
+		// ADR 0063 section 4, word for word, and deliberately endpoint-scoped.
+		// **Not** "Redis is healthy", "the service is usable" or "the backend is
+		// available": a proxy can answer PING while what is behind it cannot
+		// serve anything, which is the pgBouncer lesson arriving in a third
+		// service.
+		outcomeReached:    "this endpoint answered PING on this connection",
+		outcomeNotReached: "this endpoint did NOT answer PING on this connection",
+
+		observations: []observationLine{
+			{step: serviceredis.StepHello, key: serviceredis.AttrServer, label: "implementation"},
+			{step: serviceredis.StepHello, key: serviceredis.AttrServerVersion, label: "version"},
+			{
+				step: serviceredis.StepHello, key: serviceredis.AttrProto, label: "protocol",
+				// The value is the negotiated RESP version as an integer. It is
+				// rendered rather than interpreted: nothing branches on it, and
+				// svcdoctor never compares it.
+				render: func(v domain.AttrValue) string {
+					if n, ok := v.Int(); ok {
+						return fmt.Sprintf("RESP%d", n)
+					}
+					return ""
+				},
+			},
+			{step: serviceredis.StepHello, key: serviceredis.AttrMode, label: "mode"},
+			{step: serviceredis.StepHello, key: serviceredis.AttrRole, label: "role"},
+		},
+
+		notes: []conditionalNote{
+			{
+				step: serviceredis.StepHello, key: serviceredis.AttrMode, value: "cluster",
+				lines: []string{
+					"Cluster mode was observed at this endpoint.",
+					"Cluster topology was NOT measured: no node was discovered, no slot",
+					"coverage was checked and no advertised address was probed.",
+				},
+			},
+			{
+				step: serviceredis.StepHello, key: serviceredis.AttrMode, value: "sentinel",
+				lines: []string{
+					"This endpoint identified itself as Redis Sentinel.",
+					"Redis/Valkey data-endpoint diagnosis stopped here, before any",
+					"credential was presented. The Sentinel itself was not diagnosed.",
+				},
+				replacesOutcome: true,
+			},
+		},
 	},
 }
 

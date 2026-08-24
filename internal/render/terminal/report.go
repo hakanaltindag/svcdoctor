@@ -323,12 +323,20 @@ func writeResult(out *bytes.Buffer, in render.Input, view serviceView) {
 	}
 	_, _ = fmt.Fprintf(tw, "  status\t%s\t%s\t\n", status, gloss)
 
-	if view.outcomeStep != "" {
+	notes := activeNotes(report.Graph(), view)
+	if view.outcomeStep != "" && !notesReplaceOutcome(notes) {
 		outcome := view.outcomeNotReached
 		if outcomeReached(report.Graph(), view) {
 			outcome = view.outcomeReached
 		}
 		_, _ = fmt.Fprintf(tw, "  outcome\t%s\t\t\n", outcome)
+	}
+
+	// Endpoint-reported facts, before the execution lines. They are observations
+	// and the block they sit in is the one a reader scans for facts rather than
+	// for verdicts.
+	for _, line := range observationLines(report.Graph(), view) {
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\t\t\n", line.label, line.value)
 	}
 
 	if line, ok := topologyLine(report.Graph(), view); ok {
@@ -355,6 +363,95 @@ func writeResult(out *bytes.Buffer, in render.Input, view serviceView) {
 	// one. TestTotalDurationComesFromRunMetadata guards it.
 	_, _ = fmt.Fprintf(tw, "  duration\t%s\t\t\n", formatDuration(report.Run().Duration()))
 	_ = tw.Flush()
+
+	// The conditional statements last, outside the aligned block, because each is
+	// prose rather than a field. They exist for the two silences a reader would
+	// misread: a cluster-mode endpoint with no findings, and a run that stopped
+	// at a Sentinel.
+	for _, note := range notes {
+		_, _ = fmt.Fprintln(out)
+		for _, line := range note.lines {
+			_, _ = fmt.Fprintf(out, "  %s\n", line)
+		}
+	}
+}
+
+// renderedObservation is one endpoint-reported fact, ready to print.
+type renderedObservation struct {
+	label string
+	value string
+}
+
+// observationLines reads the observations a service declared.
+//
+// **The last node at the step wins.** A Redis endpoint that demanded
+// authentication refuses the first HELLO and only answers the second, so reading
+// the first would report an identity nobody obtained.
+func observationLines(graph domain.Graph, view serviceView) []renderedObservation {
+	var out []renderedObservation
+	for _, observation := range view.observations {
+		node, ok := lastNodeAt(graph, observation.step)
+		if !ok {
+			continue
+		}
+		value, ok := node.Attribute(observation.key)
+		if !ok {
+			continue
+		}
+		text := ""
+		if observation.render != nil {
+			text = observation.render(value)
+		} else if str, ok := value.Str(); ok {
+			text = str
+		}
+		if text == "" {
+			continue
+		}
+		out = append(out, renderedObservation{label: observation.label, value: text})
+	}
+	return out
+}
+
+// activeNotes returns the conditional statements whose condition holds.
+func activeNotes(graph domain.Graph, view serviceView) []conditionalNote {
+	var out []conditionalNote
+	for _, note := range view.notes {
+		node, ok := lastNodeAt(graph, note.step)
+		if !ok {
+			continue
+		}
+		value, ok := node.Attribute(note.key)
+		if !ok {
+			continue
+		}
+		str, ok := value.Str()
+		if !ok || str != note.value {
+			continue
+		}
+		out = append(out, note)
+	}
+	return out
+}
+
+func notesReplaceOutcome(notes []conditionalNote) bool {
+	for _, note := range notes {
+		if note.replacesOutcome {
+			return true
+		}
+	}
+	return false
+}
+
+// lastNodeAt returns the final node recorded at one step.
+func lastNodeAt(graph domain.Graph, step domain.Step) (domain.Evidence, bool) {
+	var found domain.Evidence
+	ok := false
+	for _, node := range graph.Nodes() {
+		if node.Step() == step {
+			found, ok = node, true
+		}
+	}
+	return found, ok
 }
 
 // indent prefixes every line of a block, so multi-line prose from a finding
