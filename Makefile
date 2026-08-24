@@ -16,7 +16,7 @@ GOPKGS := $(shell $(GO) list ./... 2>/dev/null)
 
 NO_PKGS_MSG = no Go packages yet; gate activates with the first package (Phase 1)
 
-.PHONY: help fmt fmt-check test vet lint build check clean
+.PHONY: help fmt fmt-check test vet lint build check clean image image-dev
 
 help: ## Show available targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -68,6 +68,12 @@ build: ## Build the CLI (CGO_ENABLED=0)
 endif
 
 check: fmt-check test vet lint build ## Run the full local quality gate
+
+image: ## Build the official OCI image (requires a semver-tagged, clean HEAD; never pushes)
+	@./scripts/build-image.sh
+
+image-dev: ## Build a development OCI image tagged sha-<commit> (not reproducible, not official)
+	@./scripts/build-image.sh --dev --platform linux/$(shell go env GOARCH)
 
 clean: ## Remove build output
 	$(GO) clean
