@@ -26,9 +26,12 @@ Do:
 
 1. Read the failing gate. Do not re-run hoping.
 2. Decide whether the fault is in the *source* or in the *pipeline*.
-   - Pipeline-only (a runner, a flake, a rate limit): re-running the same tag is safe. Staging
-     is idempotent — it compares the existing tag's platform digests against a fresh
-     reproducible build and either reuses the identical digest or stops.
+   - Pipeline-only (a runner, a flake, a rate limit): re-running the same tag is safe. **Every
+     tag-writing step is idempotent by the same rule** — compare, then reuse or stop. Staging
+     compares `sha-<commit>`'s platform digests against a fresh reproducible build; `publish`
+     compares `:vX.Y.Z` against the digest this run validated. Each reuses an identical digest
+     without writing, and each **hard-stops** on a different one rather than re-pointing. So a
+     re-run either reproduces the release exactly or refuses; it cannot quietly replace it.
    - Source fix required: the next version is **vX.Y.(Z+1)**. The failed tag stays where it is.
 
 Never: delete the tag, move it, amend the release commit, or hand-publish the missing artifacts.
@@ -92,12 +95,55 @@ Do not delete the tag. `proxy.golang.org` may already serve it and `sum.golang.o
 recorded the module checksum permanently; removing the tag leaves a published checksum pointing
 at nothing and breaks `go install …@<version>` verification for anyone who fetched it.
 
-## D — OCI image published, GitHub Release missing
+## D — OCI image published, GitHub Release missing or its creation failed
 
 The container release is complete and correct; only the human surface is absent.
 
-**Do not rebuild the image.** Create the GitHub Release against the existing tag, referencing
-the existing digest. The Release is documentation of a release, not the release itself.
+**Do not rebuild the image.** The Release is documentation of a release, not the release
+itself, and the artifact it documents is already immutable.
+
+This is categorically different from A, B and B1, and the difference is worth stating plainly
+because the instinct after any red workflow is the same. There the *artifact* was in doubt, so
+a source fix meant a new version. Here the artifact passed every gate, is signed, is attested
+and resolves by digest. Nothing about it changes by re-running the Release step.
+
+So:
+
+- **Re-run the whole workflow for the same tag.** Every stage is idempotent, which is what makes
+  this the ordinary recovery rather than a special procedure. Staging reuses the existing
+  `sha-<commit>`; `publish` finds `:vX.Y.Z` already at the validated digest and writes nothing;
+  `release` creates the GitHub Release only if none exists, and otherwise verifies the existing
+  one against this run. A second run produces no second artifact and deletes nothing.
+
+  This is a change made *because of* v0.3.2. `publish` used to fail on any existing semver tag,
+  which was right while a release could only be published once and wrong the moment one had to
+  be resumed — it refused the resume on a tag the pipeline itself had just written correctly,
+  and pushed the recovery off the automated path onto a hand-made Release that carries none of
+  the checks. Presence is not evidence of an overwrite; a differing digest is, and that is now
+  what is tested.
+- **Never burn a patch version on a GitHub UI failure.** `v0.3.3` for a failed `gh release
+  create` would publish an identical image under a second version number and leave two tags
+  claiming to be the same release.
+- **Never create the Release by hand while the automated path is broken.** A hand-made Release
+  is not verified against the digest, and it is the automated path that carries the check.
+
+The one thing that must hold before re-running: the semver tag still resolves to the validated
+digest. The job re-checks this itself, immediately before publishing, and refuses if it does
+not — see §D1.
+
+## D1 — GitHub Release exists but names the wrong artifact
+
+The dangerous case, and the only one here that is not self-healing.
+
+If a Release for the version exists but disagrees with the run — a different tag, a draft, an
+unexpected prerelease, notes that do not record the published digest — **stop**. Do not delete
+it, do not edit it, do not re-point anything.
+
+A published Release is a public object. It may already have been linked to, cited or fetched by
+automation, and once immutable it cannot be rewritten at all. More importantly, a disagreement
+means two processes believed different things about one version, and overwriting one of them
+destroys the evidence of which. The workflow refuses this deliberately rather than reconciling
+it: **human review**, then a decision recorded here.
 
 ## E — GitHub Release exists but its notes or docs are wrong
 
@@ -133,7 +179,8 @@ anything may still reference it by digest.
 | Workflow fails, source fault | keep | none | **patch** |
 | Workflow fails, integration fixture fault | keep | none | **patch** |
 | Workflow never ran (missing machinery) | keep, retire version | none | **patch** |
-| Image published, Release missing | keep | none | same |
+| Image published, Release missing or its creation failed | keep | none | **same** — re-run the release job |
+| Release exists naming the wrong artifact | keep | none | stop; human review |
 | Docs or notes wrong | keep | none | same |
 | Signature/attestation wrong | keep | none | **patch** |
 | Image defective | keep | none | **patch** |

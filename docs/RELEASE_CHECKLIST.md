@@ -120,6 +120,21 @@ Watch the whole run, not just the build. Required gates:
 
 ## CLOSE
 
+- [ ] If this is a **re-run** of an already-published version: the workflow completed and
+      `publish` reported that the semver tag already held the validated digest and wrote
+      nothing. A re-run that *published* a tag which the pre-tag negative check said was absent
+      means something changed underneath; stop and read the digests.
+- [ ] **The `release` job created the GitHub Release.** It runs inside `release-oci.yml`, after
+      `publish`, and re-checks that the semver tag still resolves to the validated digest before
+      it announces anything. Creating the Release by hand skips that check and is not the
+      documented path.
+- [ ] Release is `Latest`, confirmed through the API rather than the web UI:
+      `gh api /repos/<owner>/<repo>/releases/latest --jq .tag_name`.
+- [ ] Release is not a draft and not a prerelease; title is `svcdoctor v<X.Y.Z>`.
+- [ ] The body records the index digest, and `sbom.cdx.json` is attached.
+- [ ] Re-running the `release` job is safe and was left safe: it verifies an existing Release
+      rather than recreating it. If it ever reports a mismatch, that is §D1 of the playbook and
+      needs a human, not a re-run.
 - [ ] GitHub Release created from the reviewed notes, referencing the tag. The Release is a
       human surface; it never defines the version.
 - [ ] README and Kubernetes examples reference the real published version and a real digest.

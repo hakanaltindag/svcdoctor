@@ -4112,6 +4112,130 @@ same run that PostgreSQL failed.
 - [ ] **`v0.3.2` is not tagged.** The candidate is proven on both platforms and awaits human
       authorization. `v0.3.1` stays exactly where it is.
 
+## Phase 7.2-R2 — GitHub Release publication: IMPLEMENTED, PENDING AUTHORIZATION
+
+v0.3.2 published its OCI artifact and stopped there. The Git tag, the image, the signature, the
+attestations and the notes all existed; the Releases page still showed v0.1.0 as Latest, because
+nothing in the pipeline created a GitHub Release. This closes that, and produced **zero
+production Go** — the only Go touched is four `_test.go` files.
+
+### What was verified before anything was written
+
+Independently, against the remote authorities rather than the previous run's green tick:
+
+| | |
+|---|---|
+| Git tag `v0.3.2` | annotated, targets `1a4fd078eeb3e03702d78fc8487dbb2b8bc43734` |
+| `:v0.3.2` resolves to | `sha256:687cf62deeb0399c41a0f39e0cb5a61c309e0f748579c52041a0b60b794ad552` |
+| equals the workflow's validated digest | yes |
+| `cosign verify` | passes, constrained to the release identity, both entries bound to the index digest |
+| CycloneDX attestation | one envelope, spec 1.7, 10 components, subject = index digest |
+| provenance | SLSA v1, names `refs/tags/v0.3.2` and the release commit, **no `refs/heads`** |
+| OCI labels | `version=v0.3.2`, `revision=1a4fd07…` on both platforms |
+| `:latest`, `:v0`, `:v0.3` | all 404 |
+
+### The `release` job
+
+`needs: [identity, stage-and-verify, publish]`, so GitHub will not schedule it until the semver
+tag is published. It builds nothing, signs nothing and pushes nothing.
+
+- **Identity comes from `identity`**, never a literal and never an input. The job also asserts
+  that the derived version equals the tag and the derived revision equals the run's commit.
+- **It re-resolves `:vX.Y.Z` against the registry immediately before announcing it**, over plain
+  HTTP rather than through buildx. `publish` checks this when it writes the tag; `imagetools
+  create --tag` re-points rather than refuses, so the window between the two jobs is real.
+- **The SBOM it attaches is the artifact the shared machinery signed**, downloaded rather than
+  re-exported. A second export would be a second document with no signature over it, and the
+  Release would be offering the unsigned one. ADR 0062 §17 wants it in both places; this
+  delivers one file twice.
+- **Idempotent and non-destructive.** Absent → create. Present → compare tag, title, draft,
+  prerelease, Latest and the recorded digest, then succeed. Never delete, never edit, never
+  `--clobber`. A mismatch stops for a human.
+- **Permissions**: `contents: write` and `packages: read`, on this job only. No `id-token`, no
+  `packages: write`, no PAT. The workflow default stays `contents: read`.
+
+### Semver publication became idempotent
+
+Adding the Release job exposed that the pipeline could not run twice. `publish` failed on any
+existing semver tag, so re-running v0.3.2 — the only way to reach the new job for an
+already-published version — would have failed on a tag this pipeline had just written correctly.
+That would have forced the recovery onto a hand-made Release carrying none of the checks, which
+is the opposite of what R2 is for.
+
+`publish` now applies the rule `stage` has always applied to `sha-<commit>` (ADR 0062 §21):
+
+| tag state | action |
+|---|---|
+| absent | publish |
+| present at the validated digest | reuse; `imagetools create` does not run at all |
+| present at any other digest | **STOP**, never overwrite |
+
+The third case is a reproducibility failure rather than a tagging problem: the tag was verified
+to name this commit and the build is reproducible, so different bits mean the source produced
+them. Re-pointing would invalidate every signature already made against the published digest.
+
+`identity`'s pre-flight became **observational**. It runs before the build and so cannot know
+which digest this commit produces; presence was the only question available to it, and presence
+cannot distinguish a resume from an overwrite. No safety was given up — `publish` compares and
+is the authority — only the fast-fail.
+
+Rehearsed against the live registry, read-only: `:v0.3.2` with the validated digest exits 0 and
+writes nothing, with a wrong digest exits 1 refusing, and an absent tag records a publish
+decision. **13 further mutations across the three branches, all caught.** Three escaped first,
+all the same defect in the guards rather than the workflow — they searched for strings instead
+of reading control flow, so an `exit 1` deleted from one branch was satisfied by a later step's,
+and a reuse message replaced by `exit 1` left its `exists=true` behind as dead code. The guards
+now parse the branches.
+
+### Failure classification, now written down
+
+Playbook §D and the new §D1. A failure *after* the image is published is not a failure of the
+image: the artifact passed every gate and is immutable, so the answer is to re-run the release
+job for the same tag, never to rebuild and never to burn a patch version on a GitHub UI
+problem. A Release that exists but names the wrong artifact is the one case that stops for a
+human, because overwriting it destroys the evidence of which process was wrong.
+
+### Guards
+
+**29 mutations across ordering, identity, idempotency, permissions and claims — all caught.**
+Seven escaped on the first pass and each exposed a real gap rather than a test bug:
+
+- the digest re-check kept its error message when its condition was neutered to `if false`, so
+  the guard now matches the comparison itself;
+- dropping `stage-and-verify` from `needs` still satisfied a transitive-reachability walk, while
+  `needs.stage-and-verify.outputs.digest` would have silently resolved to `""`; any
+  `needs.<job>.outputs` reference must now be declared;
+- the idempotency guard found the wrong `gh release view` — twice. It is now anchored to the one
+  that writes the file being compared;
+- `id-token: write` and a PAT on the release job were both unguarded;
+- the release notes were not covered by the `:latest`, retired-version, managed-provider or
+  Redpanda-narrowness rules, although they are now published as the Release body.
+
+Two long-standing guards changed sides rather than being deleted, each on the trigger its own
+comment named. `TestNoDocumentClaimsThePublishedImageExists` and
+`TestNoDocumentClaimsASemverImageExists` refused every pull instruction while nothing was
+published; an image exists now, so they became the inverse — the README must tell the reader how
+to run the released image, and no document may offer a version that published nothing. Both were
+re-proved non-vacuous.
+
+`neither`/`nor` joined the denial vocabulary. Its absence made a correct two-mechanism denial
+read as an overclaim; a support claim contains none of these words, so no positive claim gained
+an exemption.
+
+### Assets
+
+**No binary archives**, and this is a reading of the contract rather than a new policy. ADR 0062
+§17 names the SBOM as the Release artifact and says explicitly that if only one delivery can be
+made, the OCI attestation is the one that matters. v0.1.0's five archives were the pre-OCI
+delivery model. Inventing a binary-distribution policy here was out of scope.
+
+### Still open
+
+- [ ] **GitHub Release v0.3.2 does not exist.** The pipeline is implemented, guarded and
+      rehearsed against real API records and the live registry; creating it needs human
+      authorization and a re-run of `release-oci.yml` against the existing immutable tag, which
+      will reuse the published image and write no registry tag.
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6
