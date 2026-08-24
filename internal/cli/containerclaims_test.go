@@ -509,9 +509,8 @@ func TestTheDocsTellTheReaderHowToRunThePublishedImage(t *testing.T) {
 	} {
 		if strings.Contains(readme, stale) {
 			t.Errorf("the README still says %q.\n\n"+
-				"ghcr.io/hakanaltindag/svcdoctor:v0.3.2 is published, signed and "+
-				"attested. A reader following this would build an image they did "+
-				"not need to.", stale)
+				"A signed, attested image is published to GHCR. A reader following "+
+				"this would build an image they did not need to.", stale)
 		}
 	}
 

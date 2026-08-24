@@ -593,17 +593,17 @@ current delivery model, which is the container image plus `go install`; the arch
 for that older release rather than produced for new ones.
 `svcdoctor --version` reports the release the binary was built as, and the same value is
 recorded in every report. A binary installed from a tagged module —
-`go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.3.2` — reports that tag. A
+`go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.3.3` — reports that tag. A
 build from a working checkout reports `dev`, as does a build from a modified tree, because
 neither corresponds to a released commit. Release builders can also inject a value with
-`-ldflags "-X main.version=v0.3.2"`, which takes precedence over both.
+`-ldflags "-X main.version=v0.3.3"`, which takes precedence over both.
 
 ## Running in a container
 
 Official images are published to `ghcr.io/hakanaltindag/svcdoctor`:
 
 ```sh
-docker run --rm ghcr.io/hakanaltindag/svcdoctor:v0.3.2 \
+docker run --rm ghcr.io/hakanaltindag/svcdoctor:v0.3.3 \
   diagnose postgres --host db.internal --user app
 ```
 
@@ -858,7 +858,7 @@ cross-package and environment-dependent tests.
 ## Roadmap
 
 PostgreSQL-only v0.1.0 is tagged, and v0.2.0 added Kafka BASIC. Both are release-validated
-against real Apache Kafka 4.0.0 and PostgreSQL 18. v0.3.2 is the current release and the first
+against real Apache Kafka 4.0.0 and PostgreSQL 18. v0.3.3 is the current release and the first
 published as a signed, attested container image.
 
 

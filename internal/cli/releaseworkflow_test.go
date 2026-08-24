@@ -1340,3 +1340,63 @@ func TestTheGitHubReleaseCarriesTheSignedSBOM(t *testing.T) {
 			"Release job consumes")
 	}
 }
+
+// TestTheReleaseWorkflowIsSelfSufficientForATag is the permanent lesson of
+// v0.3.0 and v0.3.2, which failed the same way two releases apart.
+//
+// A tag runs the workflow from **its own tree**. Not from `main`, not from the
+// latest version of the file — from the commit the tag names. So release
+// machinery added after a tag was cut can never reach that tag, and no amount of
+// re-running fixes it:
+//
+//   - `v0.3.0` was tagged on a tree with no `release-oci.yml`. The push
+//     triggered nothing at all: no run, no error, no artifact.
+//   - `v0.3.2` was tagged on a tree whose `release-oci.yml` had no `release`
+//     job. It published a correct, signed image and could never produce a GitHub
+//     Release, because the job that makes one did not exist in the tree being
+//     built. It had to be succeeded by v0.3.3 rather than repaired.
+//
+// The checklist step that catches this reads the *tagged commit* with
+// `git ls-tree` and is pinned by TestTheReleaseCeremonyIsDocumented. This guard
+// covers the half that check cannot: file presence is not stage presence, and
+// `v0.3.2` had every file.
+//
+// Every stage below is load-bearing for a *complete* release. A tree missing any
+// one of them produces a release that is silently partial in exactly the way
+// this project has now twice discovered after the tag was immutable.
+func TestTheReleaseWorkflowIsSelfSufficientForATag(t *testing.T) {
+	wf := readRepoFile(t, releaseWorkflow)
+	doc := withoutComments(wf)
+
+	for _, stage := range []struct{ needle, what string }{
+		{"\n  identity:", "release identity"},
+		{"\n  source:", "source gates"},
+		{"\n  integration:", "integration suites"},
+		{"\n  stage-and-verify:", "build, scan, SBOM, provenance, signing and verification"},
+		{"\n  publish:", "semver tag publication"},
+		{"\n  release:", "GitHub Release creation"},
+	} {
+		if !strings.Contains(doc, stage.needle) {
+			t.Errorf("release-oci.yml has no %s job, so a tag cut from this tree would "+
+				"produce an incomplete release (%s).\n\n"+
+				"A tag runs the workflow from its own tree. Adding the job later cannot "+
+				"reach a tag that already exists — that is what happened to v0.3.2, "+
+				"which published a correct image and no GitHub Release.",
+				strings.TrimSpace(stage.needle), stage.what)
+		}
+	}
+
+	// The terminal claim of a complete release. Without these the pipeline can
+	// still succeed while leaving the Releases page pointing at an older
+	// version, which is indistinguishable from a release that never happened.
+	for _, g := range []struct{ needle, what string }{
+		{"gh release create", "creating the GitHub Release"},
+		{"--verify-tag", "binding the Release to the existing tag"},
+		{"--latest", "marking a stable release Latest"},
+		{"releases/latest", "verifying Latest from the API afterwards"},
+	} {
+		if !strings.Contains(doc, g.needle) {
+			t.Errorf("release-oci.yml no longer covers %s (looked for %q)", g.what, g.needle)
+		}
+	}
+}

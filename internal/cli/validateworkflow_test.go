@@ -37,7 +37,7 @@ const validateWorkflow = ".github/workflows/validate-oci.yml"
 // releaseNotes is the notes file for the release candidate currently being
 // prepared. Named once because it moves every time a tag burns: v0.3.0's notes
 // became v0.3.1's, and v0.3.1's became these.
-const releaseNotes = "docs/releases/v0.3.2.md"
+const releaseNotes = "docs/releases/v0.3.3.md"
 
 // stepBlock returns the body of the named workflow step.
 //
@@ -775,7 +775,7 @@ func TestTheSourceGateCanActuallyRunTheLinter(t *testing.T) {
 func TestEveryDocumentedSemverImageIsTheReleasedOne(t *testing.T) {
 	// The current release. One constant, so a version bump has one edit and the
 	// documents cannot drift apart from each other.
-	const released = "v0.3.2"
+	const released = "v0.3.3"
 
 	tagged := regexp.MustCompile(`(?i)ghcr\.io/[a-z0-9._/-]*svcdoctor:(v[0-9][0-9a-z.-]*)`)
 
@@ -1152,7 +1152,7 @@ func TestTheReleaseCeremonyIsDocumented(t *testing.T) {
 // treatment in documentation — and a guard written for one version does not
 // notice the next one.
 func TestNoDocumentPresentsTheRetiredVersionAsReleased(t *testing.T) {
-	for _, retired := range []string{"v0.3.0", "v0.3.1"} {
+	for _, retired := range []string{"v0.3.0", "v0.3.1", "v0.3.2"} {
 		assertRetiredVersionIsNotOffered(t, retired)
 	}
 }
@@ -1242,7 +1242,7 @@ func assertRetiredVersionIsNotOffered(t *testing.T, retired string) {
 	// And they must say why the intervening tags are not releases. Three of them
 	// now, which is the point: each burned tag has to be accounted for, or a
 	// reader counting versions concludes releases went missing.
-	for _, needle := range []string{"v0.2.0", "v0.3.0", "v0.3.1"} {
+	for _, needle := range []string{"v0.2.0", "v0.3.0", "v0.3.1", "v0.3.2"} {
 		if !strings.Contains(notes, needle) {
 			t.Errorf("the release notes do not account for the %s tag", needle)
 		}
