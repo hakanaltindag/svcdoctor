@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -487,56 +488,55 @@ func copiesWholeContext(directive string) bool {
 	return len(fields) >= 2 && (fields[1] == "." || fields[1] == "./")
 }
 
-// TestNoDocumentClaimsThePublishedImageExists pins the one claim in this phase
-// that is false the moment it is written and stays false until someone runs a
-// command nobody has run.
+// TestTheDocsTellTheReaderHowToRunThePublishedImage replaces the guard that
+// refused every pull instruction while nothing was published.
 //
-// # Why this is its own guard
-//
-// Phase 7.1 built, hardened, scanned and validated a multi-architecture image
-// and then published nothing. That gap is exactly where a confident sentence
-// gets written: "available from ghcr.io", "docker pull ghcr.io/…". Every part
-// of it would be true except the part that matters, and an operator following
-// it gets a manifest-unknown error from a registry that has never heard of
-// this project.
-//
-// The rule is therefore narrow and mechanical: a document may *name* the future
-// registry and it may show a `docker build`, but it may not tell anyone to pull
-// or run an image from a registry. When publication happens, this guard is
-// updated in the same change that publishes — which is the point.
-func TestNoDocumentClaimsThePublishedImageExists(t *testing.T) {
-	// A pull instruction is the operational claim; naming the registry in prose
-	// or in an example manifest's `image:` field is not.
-	pullClaims := []string{
-		"docker pull ghcr.io",
-		"docker pull docker.io",
-		"docker run ghcr.io",
-		"podman pull ghcr.io",
-		"crane pull ghcr.io",
+// That rule was correct and is now spent: v0.3.2 exists on GHCR, signed and
+// attested. Its comment said what to do at this moment — publish first, then
+// update the guard in the same change — so the rule changes sides rather than
+// being deleted. What it protects is unchanged: the README must state the truth
+// about publication, and the failure it now catches is a README still insisting
+// nothing is published while an image is.
+func TestTheDocsTellTheReaderHowToRunThePublishedImage(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+
+	// The stale denials, each of which was true and is no longer.
+	for _, stale := range []string{
+		"no container image is published to any registry",
+		"no container image is\npublished to any registry",
+		"**No image is published.**",
+		"Nothing has been pushed to GHCR",
+	} {
+		if strings.Contains(readme, stale) {
+			t.Errorf("the README still says %q.\n\n"+
+				"ghcr.io/hakanaltindag/svcdoctor:v0.3.2 is published, signed and "+
+				"attested. A reader following this would build an image they did "+
+				"not need to.", stale)
+		}
 	}
-	for _, name := range []string{"README.md", "examples/kubernetes/README.md"} {
+
+	// And it must give the operational instruction, so the guard cannot be
+	// satisfied by removing the subject entirely. Matched with flags allowed
+	// between the verb and the reference: the README writes `docker run --rm …`,
+	// and a literal check for "docker run ghcr.io" missed it.
+	if !regexp.MustCompile(`docker\s+(run|pull)[^\n]*ghcr\.io/hakanaltindag/svcdoctor:v`).
+		MatchString(readme) {
+		t.Error("the README does not tell the reader how to run the published image")
+	}
+
+	// The one thing that stays forbidden. A moving tag is not published and
+	// never will be, so an instruction to pull one is a command that fails.
+	for _, name := range []string{"README.md", "examples/kubernetes/README.md", releaseNotes} {
 		doc, ok := readRepoFileOptional(t, name)
 		if !ok {
 			continue
 		}
-		lower := strings.ToLower(doc)
-		for _, claim := range pullClaims {
-			if strings.Contains(lower, claim) {
-				t.Errorf("%s tells the reader to %q, but no image has been published "+
-					"to any registry.\n\n"+
-					"Publish first, then update this guard in the same change.", name, claim)
+		for _, moving := range []string{"svcdoctor:latest", "svcdoctor:v0\n", "svcdoctor:v0.3\n"} {
+			if strings.Contains(doc, moving) {
+				t.Errorf("%s names the moving tag %q, which is deliberately never published",
+					name, strings.TrimSuffix(moving, "\n"))
 			}
 		}
-	}
-
-	// And the README must keep saying so, so the absence is recorded rather
-	// than merely true.
-	readme := readRepoFile(t, "README.md")
-	if !strings.Contains(readme, "no container image is\npublished to any registry") &&
-		!strings.Contains(readme, "no container image is published to any registry") {
-		t.Error("the README no longer states that no container image is published.\n\n" +
-			"Either publication happened — in which case update this guard — or a " +
-			"true statement was deleted.")
 	}
 }
 

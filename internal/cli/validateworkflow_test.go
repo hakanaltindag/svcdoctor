@@ -757,17 +757,27 @@ func TestTheSourceGateCanActuallyRunTheLinter(t *testing.T) {
 // Documentation claims
 // ---------------------------------------------------------------------------
 
-// TestNoDocumentClaimsASemverImageExists pins the release-claim discipline that
-// `docs/COMPATIBILITY.md` and `docs/FINDINGS.md` already impose on the product.
+// TestEveryDocumentedSemverImageIsTheReleasedOne is the inverse of the guard
+// this used to be, and the inversion is the whole point.
 //
-// Phase 7.1-V publishes a `sha-<commit>` image and no semver tag. Until a
-// release tag is pushed, `ghcr.io/hakanaltindag/svcdoctor:v0.3.0` does not
-// exist, and a document that tells an operator to pull it is telling them to
-// run a command that fails. Saying "SHA-only validation passed" is true and is
-// allowed; saying the image is available is not.
-func TestNoDocumentClaimsASemverImageExists(t *testing.T) {
-	pull := regexp.MustCompile(`(?i)docker\s+(pull|run)[^\n` + "`" + `]*svcdoctor:v[0-9]`)
-	tagged := regexp.MustCompile(`(?i)ghcr\.io/[a-z0-9._/-]*svcdoctor:v[0-9]`)
+// Until v0.3.2 no semver image existed, so the rule was that no document could
+// offer one: `TestNoDocumentClaimsASemverImageExists` refused every
+// `docker pull …:vX.Y.Z`, and it was right to. Publication happened, and that
+// guard's own comment said what to do next — publish first, then update the
+// guard in the same change.
+//
+// The guard did not become weaker. It kept its shape and changed sides. The
+// question is no longer "does any semver image exist" but "is the one being
+// offered the released one", which is the failure that replaces the old one: a
+// document naming a version that was tagged but never published sends an
+// operator to a `manifest unknown`, and this project has produced three such
+// tags.
+func TestEveryDocumentedSemverImageIsTheReleasedOne(t *testing.T) {
+	// The current release. One constant, so a version bump has one edit and the
+	// documents cannot drift apart from each other.
+	const released = "v0.3.2"
+
+	tagged := regexp.MustCompile(`(?i)ghcr\.io/[a-z0-9._/-]*svcdoctor:(v[0-9][0-9a-z.-]*)`)
 
 	for _, name := range []string{
 		"README.md",
@@ -775,6 +785,9 @@ func TestNoDocumentClaimsASemverImageExists(t *testing.T) {
 		"docs/COMPATIBILITY.md",
 		"docs/ARCHITECTURE.md",
 		"examples/kubernetes/README.md",
+		"examples/kubernetes/job-postgres.yaml",
+		"examples/kubernetes/job-kafka.yaml",
+		releaseNotes,
 		"docs/decisions/0062-oci-runtime-and-kubernetes-execution-model.md",
 	} {
 		doc, ok := readRepoFileOptional(t, name)
@@ -782,22 +795,30 @@ func TestNoDocumentClaimsASemverImageExists(t *testing.T) {
 			continue
 		}
 		for _, line := range strings.Split(doc, "\n") {
-			if !pull.MatchString(line) && !tagged.MatchString(line) {
+			m := tagged.FindStringSubmatch(line)
+			if m == nil || m[1] == released {
 				continue
 			}
-			// A line that says the image does *not* exist yet is the document
-			// doing its job.
+			// A line explaining that some other version is *not* available is the
+			// document doing its job — the retired tags have to be nameable.
 			lower := strings.ToLower(line)
-			if strings.Contains(lower, "does not exist") || strings.Contains(lower, "not published") ||
-				strings.Contains(lower, "will be") || strings.Contains(lower, "once ") ||
-				strings.Contains(lower, "after ") || strings.Contains(lower, "no ") ||
-				strings.Contains(lower, "never") {
+			if denies(line) || strings.Contains(lower, "retired") ||
+				strings.Contains(lower, "does not exist") || strings.Contains(lower, "will be") ||
+				strings.Contains(lower, "once ") || strings.Contains(lower, "after ") {
 				continue
 			}
-			t.Errorf("%s presents a semver GHCR image as available:\n  %s\n\n"+
-				"No semver image has been published. Phase 7.1-V validated "+
-				"sha-<commit> staging only.", name, strings.TrimSpace(line))
+			t.Errorf("%s offers the image %s, but the released version is %s:\n  %s\n\n"+
+				"v0.2.0, v0.3.0 and v0.3.1 are Git tags that published no image. "+
+				"Pointing an operator at one is pointing them at a manifest that "+
+				"does not resolve.", name, m[1], released, strings.TrimSpace(line))
 		}
+	}
+
+	// And the README must actually offer the released one, so this guard cannot
+	// pass by the documents saying nothing at all.
+	readme := readRepoFile(t, "README.md")
+	if !strings.Contains(readme, "ghcr.io/hakanaltindag/svcdoctor:"+released) {
+		t.Errorf("the README does not tell the reader how to run the published %s image", released)
 	}
 }
 
@@ -1086,6 +1107,10 @@ func TestTheReleaseCeremonyIsDocumented(t *testing.T) {
 		// already immutable. A local run is not this check.
 		{"native Linux", "requiring the integration suites on the release runner class"},
 		{"validate-integration", "naming the workflow that provides that proof"},
+		// The Release is now produced by the pipeline, so the checklist verifies
+		// it rather than describing how to make one by hand.
+		{"releases/latest", "confirming Latest through the API rather than the web UI"},
+		{"sbom.cdx.json", "the SBOM attached to the Release (ADR 0062 §17)"},
 	} {
 		if !strings.Contains(checklist, g.needle) {
 			t.Errorf("the release checklist no longer covers %s (looked for %q)", g.what, g.needle)
@@ -1101,6 +1126,11 @@ func TestTheReleaseCeremonyIsDocumented(t *testing.T) {
 		{"succeeded, not repaired", "the patch-release rule"},
 		{"never ran", "the silent-failure case that lost v0.3.0"},
 		{"Do not rebuild the image", "the missing-GitHub-Release case"},
+		// The distinction R2 exists to make permanent: a failure after the image
+		// is published is not a failure of the image, and burning a patch version
+		// on it would publish identical bits under a second version number.
+		{"Never burn a patch version on a GitHub UI failure", "the post-publication failure class"},
+		{"names the wrong artifact", "the case that must stop for a human"},
 	} {
 		if !strings.Contains(playbook, g.needle) {
 			t.Errorf("the failure playbook no longer covers %s (looked for %q)", g.what, g.needle)
@@ -1136,26 +1166,62 @@ func assertRetiredVersionIsNotOffered(t *testing.T, retired string) {
 		"examples/kubernetes/README.md",
 		"examples/kubernetes/job-postgres.yaml",
 		"examples/kubernetes/job-kafka.yaml",
+		// The release notes account for every burned tag by name, which is
+		// exactly why they can get it wrong: describing one as shipped is a
+		// single word's difference from describing why it was not, and this file
+		// is now published as the GitHub Release body.
+		releaseNotes,
 	} {
 		doc, ok := readRepoFileOptional(t, name)
 		if !ok {
 			continue
 		}
-		for _, line := range strings.Split(doc, "\n") {
-			if !strings.Contains(line, retired) {
+		// Claim units rather than raw lines. Markdown wraps prose, so a bullet
+		// explaining *why* a tag published nothing routinely puts the version on
+		// one line and the denial on the next — and a line-wise guard sees the
+		// first half alone. That is the same defect the compatibility guards
+		// already learned, and it surfaced here the moment the release notes
+		// joined the list, because accounting for burned tags is what they do.
+		for _, unit := range claimUnits(doc) {
+			if !strings.Contains(unit, retired) {
 				continue
 			}
-			lower := strings.ToLower(line)
-			// Explaining that it was retired is the document doing its job.
-			if strings.Contains(lower, "retired") || strings.Contains(lower, "never") ||
-				strings.Contains(lower, "not ") || strings.Contains(lower, "cannot") ||
-				strings.Contains(lower, "published nothing") {
+			lower := strings.ToLower(unit)
+			// Explaining that it was retired is the document doing its job. A
+			// denial word, or any of the vocabulary of a failed release.
+			if denies(unit) {
 				continue
 			}
-			t.Errorf("%s references the retired version %s as if it were usable:\n  %s\n\n"+
+			retrospective := false
+			for _, w := range []string{"retired", "cannot", "stopped", "failed",
+				"skipped", "burned", "abandoned", "superseded", "unpublished"} {
+				if strings.Contains(lower, w) {
+					retrospective = true
+					break
+				}
+			}
+			if retrospective {
+				continue
+			}
+			// What is left is a unit naming a retired version without saying so.
+			// It only matters if it offers the version — as something to obtain,
+			// or as something that shipped.
+			offers := ""
+			for _, verb := range []string{"docker pull", "go install", "image:", "imagetools",
+				"install", "upgrade to", "released", "shipped", "published to", "available"} {
+				if strings.Contains(lower, verb) {
+					offers = verb
+					break
+				}
+			}
+			if offers == "" {
+				continue
+			}
+			t.Errorf("%s presents the retired version %s as %s:\n  %s\n\n"+
 				"ADR 0062 §21c: a semver tag that published nothing is retired, never "+
-				"reused, because the Go checksum database records it permanently.",
-				name, retired, strings.TrimSpace(line))
+				"reused, because the Go checksum database records it permanently. "+
+				"Naming it is fine; offering it is not.",
+				name, retired, offers, strings.TrimSpace(unit))
 		}
 	}
 

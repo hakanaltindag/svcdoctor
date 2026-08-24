@@ -63,6 +63,16 @@ var managedProviders = []string{
 var denials = map[string]bool{
 	"not": true, "no": true, "never": true, "none": true,
 	"nothing": true, "deferred": true, "unproven": true, "without": true,
+	// "neither … nor" is the natural way to deny two mechanisms at once, which
+	// is exactly what release notes do when they account for MSK's SCRAM-SHA-512
+	// and AWS_MSK_IAM in one sentence. Omitting it made a correct denial read as
+	// an overclaim.
+	//
+	// This completes the negation vocabulary rather than widening the guard:
+	// every word here can only appear in a statement that negates something, so
+	// no positive claim gains an exemption. TestTheDocsClaimGuardsCanFail holds
+	// that line — an actual support claim contains none of these.
+	"neither": true, "nor": true,
 }
 
 // TestTheREADMENeverClaimsManagedCompatibility keeps provider names where they
@@ -76,10 +86,28 @@ var denials = map[string]bool{
 // not yet done and requiring a denial word on each of its bullets would be
 // noise.
 func TestTheREADMENeverClaimsManagedCompatibility(t *testing.T) {
-	readme := readRepoFile(t, "README.md")
+	for _, name := range unqualifiedClaimDocuments {
+		t.Run(name, func(t *testing.T) { assertNoManagedCompatibilityClaim(t, name) })
+	}
+
+	// And the backlog item stays visible in the README, so the absence is
+	// recorded rather than merely true. This half is README-specific: it is a
+	// statement about future work, which release notes have no reason to carry.
+	if !strings.Contains(readRepoFile(t, "README.md"), "managed-service protocol compatibility") {
+		t.Error("the README no longer lists managed-service compatibility as future work")
+	}
+}
+
+// assertNoManagedCompatibilityClaim was the body of the test above, which read
+// only the README. The release notes now *are* the GitHub Release body, so a
+// provider named there reaches more readers than one named in the README ever
+// did; scoping this rule to a single file was an accident of where it was first
+// needed, not a decision.
+func assertNoManagedCompatibilityClaim(t *testing.T, name string) {
+	t.Helper()
 
 	inRoadmap := false
-	for _, line := range strings.Split(readme, "\n") {
+	for _, line := range strings.Split(readRepoFile(t, name), "\n") {
 		if strings.HasPrefix(line, "## ") {
 			inRoadmap = strings.Contains(line, "Roadmap")
 		}
@@ -95,21 +123,16 @@ func TestTheREADMENeverClaimsManagedCompatibility(t *testing.T) {
 				if !strings.Contains(sentence, provider) || denies(sentence) {
 					continue
 				}
-				t.Errorf("the README names %s outside the Roadmap without denying "+
+				t.Errorf("%s names %s outside the Roadmap without denying "+
 					"support:\n  %s\n\n"+
 					"Kafka BASIC is validated against Apache Kafka and PostgreSQL "+
 					"BASIC against PostgreSQL and pgBouncer. Protocol similarity is "+
 					"not evidence, and managed-service compatibility is an open "+
-					"backlog item.", provider, sentence)
+					"backlog item.", name, provider, sentence)
 			}
 		}
 	}
 
-	// And the backlog item stays visible, so the absence is recorded rather than
-	// merely true.
-	if !strings.Contains(readme, "managed-service protocol compatibility") {
-		t.Error("the README no longer lists managed-service compatibility as future work")
-	}
 }
 
 // TestTheDocsRecordIPLiteralSupport is the inverse of the guard Phase 6.5 held
@@ -643,6 +666,31 @@ var operatorFacingDocuments = []string{
 	"README.md",
 	"docs/COMPATIBILITY.md",
 	"docs/validation/RELEASE_NOTES_v0.2.0_DRAFT.md",
+	// The live release notes, which the comment above has always claimed were
+	// covered while only a superseded *draft* actually was. They are also no
+	// longer only a document: `release-oci.yml` publishes this file as the
+	// GitHub Release body, so an overclaim here is served to every reader of the
+	// Releases page rather than to whoever opens the repository.
+	releaseNotes,
+}
+
+// unqualifiedClaimDocuments are the documents that make claims in running prose,
+// where naming a provider *is* the claim.
+//
+// Deliberately narrower than operatorFacingDocuments, and the exclusions are
+// reasons rather than exemptions. `docs/COMPATIBILITY.md` exists precisely to
+// name providers, each against a graded level, and that grading is the denial —
+// it is held instead by TestOnlyRealTestedPlatformsClaimLevelTwoOrThree and
+// TestEveryRealTestedPlatformSaysSo, which are stricter than a prose rule could
+// be. The v0.2.0 draft is a superseded artifact that lists providers under a
+// heading denying all of them.
+//
+// The mechanism and health rules stay on the wider list: those are shape-
+// agnostic, because naming SCRAM-SHA-512 is an overclaim in a table cell just as
+// much as in a sentence.
+var unqualifiedClaimDocuments = []string{
+	"README.md",
+	releaseNotes,
 }
 
 // healthClaims are the things svcdoctor observes nothing about.
@@ -739,7 +787,15 @@ func TestTheREADMEsRedpandaClaimStaysNarrow(t *testing.T) {
 	// column, so "says nothing about Redpanda Cloud" lands on two lines and a
 	// line-wise guard sees the claim without its denial. That is the same defect
 	// the compatibility guard already learned.
-	for _, sentence := range claimUnits(readmeOutsideRoadmap(t)) {
+	for _, doc := range unqualifiedClaimDocuments {
+		assertRedpandaClaimStaysNarrow(t, doc, testedVersion)
+	}
+}
+
+func assertRedpandaClaimStaysNarrow(t *testing.T, name, testedVersion string) {
+	t.Helper()
+
+	for _, sentence := range claimUnits(docOutsideRoadmap(t, name)) {
 		lower := strings.ToLower(sentence)
 		if !strings.Contains(lower, "redpanda") {
 			continue
@@ -747,7 +803,7 @@ func TestTheREADMEsRedpandaClaimStaysNarrow(t *testing.T) {
 
 		for _, over := range redpandaOverclaims {
 			if strings.Contains(lower, over.phrase) && !denies(sentence) {
-				t.Errorf("the README claims %q: %s\n\n  %s", over.phrase, over.why, sentence)
+				t.Errorf("%s claims %q: %s\n\n  %s", name, over.phrase, over.why, sentence)
 			}
 		}
 
@@ -815,12 +871,16 @@ func TestTheRedpandaClaimGuardCanFail(t *testing.T) {
 // guard: its entire content is work not yet done, so naming a platform there
 // claims nothing. "Redpanda Cloud" appears in it as an open item and must keep
 // being allowed to.
-func readmeOutsideRoadmap(t *testing.T) string {
+// docOutsideRoadmap is the same exclusion for any operator-facing document. The
+// Roadmap exemption is harmless where there is no Roadmap section, which is what
+// lets one rule cover the README and the release notes without either needing a
+// copy of it.
+func docOutsideRoadmap(t *testing.T, name string) string {
 	t.Helper()
 
 	var kept []string
 	inRoadmap := false
-	for _, line := range strings.Split(readRepoFile(t, "README.md"), "\n") {
+	for _, line := range strings.Split(readRepoFile(t, name), "\n") {
 		if strings.HasPrefix(line, "## ") {
 			inRoadmap = strings.Contains(line, "Roadmap")
 		}

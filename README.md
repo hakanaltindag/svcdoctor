@@ -585,22 +585,33 @@ The binary is statically linkable and builds with `CGO_ENABLED=0`. It needs no s
 no configuration file and no runtime data directory.
 
 There are currently no Homebrew, apt or RPM distributions.
-Prebuilt release archives are available from GitHub Releases.
+Published container images are on GHCR: `ghcr.io/hakanaltindag/svcdoctor`, `linux/amd64` and
+`linux/arm64`. See [Running in a container](#running-in-a-container).
 
-A `Dockerfile` is in the repository and builds a working image, but **no container image is
-published to any registry** — not GHCR, not Docker Hub, not anywhere. Build it yourself
-(see [Running in a container](#running-in-a-container)) or use a release archive.
+Prebuilt binary archives were attached to the v0.1.0 GitHub Release. They are not part of the
+current delivery model, which is the container image plus `go install`; the archives are kept
+for that older release rather than produced for new ones.
 `svcdoctor --version` reports the release the binary was built as, and the same value is
 recorded in every report. A binary installed from a tagged module —
-`go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.1.0` — reports that tag. A
+`go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.3.2` — reports that tag. A
 build from a working checkout reports `dev`, as does a build from a modified tree, because
 neither corresponds to a released commit. Release builders can also inject a value with
-`-ldflags "-X main.version=v0.1.0"`, which takes precedence over both.
+`-ldflags "-X main.version=v0.3.2"`, which takes precedence over both.
 
 ## Running in a container
 
-**No image is published.** Nothing has been pushed to GHCR, Docker Hub or any other registry.
-The `Dockerfile` in the repository builds one locally:
+Official images are published to `ghcr.io/hakanaltindag/svcdoctor`:
+
+```sh
+docker run --rm ghcr.io/hakanaltindag/svcdoctor:v0.3.2 \
+  diagnose postgres --host db.internal --user app
+```
+
+Pin the digest for anything that matters — a tag is a name resolved at pull time, a digest is
+the artifact. There is deliberately no `latest`, no `v0` and no `v0.3`: a moving tag has no
+reproducible identity, so none is published.
+
+The `Dockerfile` in the repository also builds one locally:
 
 ```sh
 scripts/build-image.sh --dev --platform linux/arm64   # or linux/amd64
@@ -609,9 +620,9 @@ docker run --rm svcdoctor:sha-$(git rev-parse --short HEAD) \
 ```
 
 The build recipe derives the version from Git rather than accepting one, so a local build
-reports `0.0.0-dev+<commit>` and is addressed by its commit. It cannot label itself `v0.3.0`,
-because no such release exists and an image that claimed one would be indistinguishable from
-a real release that had gone missing.
+reports `0.0.0-dev+<commit>` and is addressed by its commit. It cannot label itself with a
+release version at all: an image that claimed one would be indistinguishable from a published
+release, and only the tag-triggered pipeline may make that claim.
 
 The image is `gcr.io/distroless/static-debian12:nonroot` plus one static binary. It has **no
 shell and no package manager**, runs as **UID 65532**, and works with a **read-only root
@@ -663,9 +674,9 @@ svcdoctor runs, reports and exits, so it belongs in a **Job**, not a Deployment.
 ### The release contract for images
 
 Fixed in [ADR 0062](docs/decisions/0062-oci-runtime-and-kubernetes-execution-model.md)
-§12–§20, and normative once publication begins:
+§12–§20, and in force:
 
-- **The canonical registry will be `ghcr.io/hakanaltindag/svcdoctor`** — one registry, not
+- **The canonical registry is `ghcr.io/hakanaltindag/svcdoctor`** — one registry, not
   mirrored.
 - **The Git semver tag is the only version authority.** The binary version, the
   `org.opencontainers.image.version` label and the OCI tag are all projections of it. An OCI
@@ -847,7 +858,8 @@ cross-package and environment-dependent tests.
 ## Roadmap
 
 PostgreSQL-only v0.1.0 is tagged, and v0.2.0 added Kafka BASIC. Both are release-validated
-against real Apache Kafka 4.0.0 and PostgreSQL 18.
+against real Apache Kafka 4.0.0 and PostgreSQL 18. v0.3.2 is the current release and the first
+published as a signed, attested container image.
 
 
 Next, in no committed order:
