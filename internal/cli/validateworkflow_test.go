@@ -639,6 +639,44 @@ func TestPipelinePermissionsAreScopedToTheJobThatNeedsThem(t *testing.T) {
 	}
 }
 
+// TestTheSourceGateCanActuallyRunTheLinter pins a defect the first real run of
+// validate-oci.yml found in the release workflow.
+//
+// `make check` runs golangci-lint and refuses to pretend it passed when the
+// binary is absent — which is right, and means a job calling `make check` has to
+// install one. Neither the release nor the validation source gate did. Both
+// would have failed at the linter step, and for `release-oci.yml` that would
+// have happened on the v0.3.0 tag push, on the run that was supposed to produce
+// the first public artifact.
+//
+// The version must match the Makefile's, or the gate runs a linter whose
+// findings the repository has never agreed to.
+func TestTheSourceGateCanActuallyRunTheLinter(t *testing.T) {
+	makefile := readRepoFile(t, "Makefile")
+	m := regexp.MustCompile(`GOLANGCI_LINT_VERSION\s+\?=\s+(v\S+)`).FindStringSubmatch(makefile)
+	if m == nil {
+		t.Fatal("the Makefile no longer pins a golangci-lint version")
+	}
+	want := m[1]
+
+	for _, name := range []string{releaseWorkflow, validateWorkflow} {
+		wf := withoutComments(readRepoFile(t, name))
+		if !strings.Contains(wf, "run: make check") {
+			t.Errorf("%s no longer runs the source quality gate", name)
+			continue
+		}
+		install := "go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@" + want
+		if !strings.Contains(wf, install) {
+			t.Errorf("%s runs `make check` without installing golangci-lint %s.\n\n"+
+				"`make check` fails closed when the binary is missing, so the gate "+
+				"would fail on the release tag rather than at review time.", name, want)
+		}
+		if !strings.Contains(wf, `echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"`) {
+			t.Errorf("%s installs golangci-lint but does not put it on PATH", name)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Documentation claims
 // ---------------------------------------------------------------------------

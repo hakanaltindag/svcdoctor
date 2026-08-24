@@ -144,6 +144,22 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26'
+      # `make check` runs golangci-lint and refuses to pretend it passed when the
+      # binary is absent, which is correct — and means CI has to install it.
+      # ci.yml does that with golangci-lint-action; this pipeline cannot, because
+      # that action *runs* the linter rather than installing one for `make check`
+      # to call. Pinned to the version the Makefile requires, installed through
+      # the Go module proxy so it is checksum-verified rather than fetched by a
+      # piped shell script into a job that later holds packages: write.
+      #
+      # Found by the first real run of validate-oci.yml: the release workflow had
+      # the same gap and would have failed here on v0.3.0.
+      - name: Install golangci-lint
+        run: |
+          set -eu
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Quality gate
         run: make check
       - name: Race detector
