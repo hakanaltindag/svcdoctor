@@ -290,9 +290,41 @@ func TestTheSemverTagIsAppliedLast(t *testing.T) {
 			t.Errorf("the shared machinery no longer defines job %q, so depending on it proves nothing", job)
 		}
 	}
-	// A gate that cannot fail the call is not a gate.
-	if strings.Contains(shared, "continue-on-error") {
-		t.Error("a job in the shared machinery is continue-on-error; its failure would not block publication")
+	// A gate that cannot fail the call is not a gate. `continue-on-error` is
+	// permitted on exactly one kind of step — one that records evidence and
+	// decides nothing — and never on a job, which would let the whole call
+	// succeed with its gates broken.
+	//
+	// The allowlist exists because the first real run proved the opposite
+	// mistake is also real: a diagnostic step that *could* fail aborted the job
+	// before `cosign verify` ran. Evidence steps must not be gates in either
+	// direction.
+	evidenceOnly := map[string]bool{
+		"Record the certificate claims this run actually produced": true,
+		"Record the Rekor transparency entry":                      true,
+	}
+	// Walked positionally, tracking the step in scope. Resolving each hit by
+	// searching the document for its own text does not work: every
+	// `continue-on-error: true` line is identical, so the search always finds
+	// the first one and reports the allowlisted step no matter which step was
+	// mutated. Found by mutation.
+	step := ""
+	for _, line := range strings.Split(shared, "\n") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "- name: ") {
+			step = strings.TrimSpace(strings.TrimPrefix(trimmed, "- name: "))
+		}
+		if !strings.Contains(line, "continue-on-error") {
+			continue
+		}
+		if indent := len(line) - len(strings.TrimLeft(line, " ")); indent <= 4 {
+			t.Errorf("a job in the shared machinery is continue-on-error; its failure "+
+				"would not block publication:\n  %s", strings.TrimSpace(line))
+			continue
+		}
+		if !evidenceOnly[step] {
+			t.Errorf("step %q is continue-on-error but is not an evidence-only step.\n\n"+
+				"A gate that cannot fail the run is not a gate.", step)
+		}
 	}
 	if strings.Contains(caller, "uses: ./.github/workflows/oci-stage-verify.yml") &&
 		strings.Contains(caller, "if: always()\n    uses:") {

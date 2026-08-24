@@ -532,39 +532,59 @@ jobs:
       # requires a narrow identity constraint, and the only honest way to write
       # one is to read the certificate the run actually produced rather than to
       # guess a pattern and widen it until it passes.
+      # Evidence, deliberately placed *before* the gate and deliberately unable to
+      # fail it. ADR 0062 §17 requires a narrow identity constraint, and the only
+      # honest way to write one is to read the certificate the run actually
+      # produced rather than to guess a pattern and widen it until it passes.
+      #
+      # `continue-on-error` is the point, not a concession: the first real run of
+      # this workflow died here on a JSON key name, which skipped `cosign verify`
+      # — the actual gate, which passes. A diagnostic that can block a gate is a
+      # liability, and the gate below is what decides the run.
       - name: Record the certificate claims this run actually produced
+        continue-on-error: true
         run: |
           set -eu
+          # `cosign download signature` returns one JSON object per signature.
+          # The certificate is under "Cert", capitalised, and is an object whose
+          # "Raw" field is base64 DER — not a PEM string.
           cosign download signature "${IMAGE}@${{ needs.stage.outputs.digest }}" \
-            | python3 -c 'import json,sys;[print(json.loads(l)["cert"]) for l in sys.stdin if l.strip()]' \
-            > /tmp/cert.pem
-          echo "== subject alternative name and issuer =="
-          openssl x509 -in /tmp/cert.pem -noout -text \
-            | grep -A2 -E 'Subject Alternative Name|X509v3 Subject Key' || true
-          echo "== Fulcio GitHub claims =="
+            | head -1 > /tmp/sig.json
           python3 - <<'PY'
-          import re, subprocess
+          import base64, json
+          d = json.load(open('/tmp/sig.json'))['Cert']
+          raw = d['Raw'] if isinstance(d, dict) else d
+          open('/tmp/cert.der', 'wb').write(base64.b64decode(raw))
+          PY
+          echo "== subject alternative name =="
+          openssl x509 -inform DER -in /tmp/cert.der -noout -ext subjectAltName
+          echo "== issuer and validity =="
+          openssl x509 -inform DER -in /tmp/cert.der -noout -issuer -dates
+          echo "== Fulcio GitHub claims =="
+          openssl x509 -inform DER -in /tmp/cert.der -noout -text > /tmp/cert.txt
+          python3 - <<'PY'
+          import re
           # Fulcio's documented GitHub Actions extension OIDs.
           oids = {
-              '1.3.6.1.4.1.57264.1.1': 'oidc issuer',
               '1.3.6.1.4.1.57264.1.2': 'trigger event',
               '1.3.6.1.4.1.57264.1.3': 'commit sha',
               '1.3.6.1.4.1.57264.1.4': 'workflow name',
               '1.3.6.1.4.1.57264.1.5': 'repository',
               '1.3.6.1.4.1.57264.1.6': 'ref',
+              '1.3.6.1.4.1.57264.1.8': 'oidc issuer',
               '1.3.6.1.4.1.57264.1.9': 'build signer uri',
               '1.3.6.1.4.1.57264.1.10': 'build signer digest',
+              '1.3.6.1.4.1.57264.1.11': 'runner environment',
               '1.3.6.1.4.1.57264.1.12': 'source repository uri',
               '1.3.6.1.4.1.57264.1.13': 'source repository digest',
               '1.3.6.1.4.1.57264.1.14': 'source repository ref',
-              '1.3.6.1.4.1.57264.1.18': 'run invocation uri',
+              '1.3.6.1.4.1.57264.1.21': 'run invocation uri',
           }
-          text = subprocess.run(['openssl', 'x509', '-in', '/tmp/cert.pem', '-noout', '-text'],
-                                capture_output=True, text=True).stdout
+          text = open('/tmp/cert.txt').read()
           for oid, label in oids.items():
-              m = re.search(re.escape(oid) + r':\s*\n\s*(?:\.+)?(\S.*)', text)
+              m = re.search(re.escape(oid) + r':\s*\n\s*(.*)', text)
               if m:
-                  print(f'  {label:24} {m.group(1).strip()}')
+                  print(f'  {label:24} {m.group(1).strip().lstrip(".").strip()}')
           PY
 
       # Signing succeeding is not the gate. Verification against a *constrained*
@@ -735,41 +755,61 @@ jobs:
           cid="$(docker create --platform linux/amd64 "$ref")"
           docker export "$cid" > /tmp/rootfs.tar
           docker rm "$cid" > /dev/null
-          tar -tf /tmp/rootfs.tar > /tmp/files.txt
-          echo "== filesystem entries: $(wc -l < /tmp/files.txt) =="
           python3 - <<'PY'
           import re, sys, tarfile
-          names = [n.rstrip('/') for n in open('/tmp/files.txt').read().split('\n') if n.strip()]
+
+          t = tarfile.open('/tmp/rootfs.tar')
+          members = t.getmembers()
+          files = [m for m in members if m.isfile()]
+          names = [m.name.rstrip('/') for m in members]
+          print(f'== entries: {len(members)}  regular files: {len(files)} ==')
+
           bad = []
           if not any(n in ('svcdoctor', './svcdoctor', '/svcdoctor') for n in names):
               bad.append('/svcdoctor is missing')
           if not any('ca-certificates.crt' in n for n in names):
               bad.append('the CA bundle is missing')
-          forbidden = {
+
+          # Executable-shaped findings are about *files*. Measured on the first
+          # real run: distroless static-debian12 ships the directories `etc/dpkg`
+          # and `var/lib/dpkg` — package *metadata*, which is what lets a scanner
+          # enumerate the base packages at all — and no dpkg binary. Matching on
+          # names alone reported a package manager that is not in the image.
+          executable = {
               r'(^|/)(bash|sh|dash|busybox|ash)$': 'a shell',
               r'(^|/)(apk|apt|apt-get|dpkg|yum|dnf|rpm)$': 'a package manager',
+          }
+          for pat, what in executable.items():
+              hits = [m.name for m in files if re.search(pat, m.name.rstrip('/'))]
+              if hits:
+                  bad.append(f'{what}: {hits[:5]}')
+
+          # These are wrong at any file type.
+          anywhere = {
               r'(^|/)\.git(/|$)': 'repository metadata',
               r'\.go$': 'Go source',
               r'(^|/)go\.(mod|sum)$': 'Go module files',
               r'(^|/)testdata(/|$)': 'test fixtures',
-              r'\.(pem|key|crt|p12|pfx)$': 'key or certificate material',
+              r'\.(pem|key|p12|pfx)$': 'key material',
+              r'\.crt$': 'certificate material',
           }
-          for pat, what in forbidden.items():
+          for pat, what in anywhere.items():
               hits = [n for n in names if re.search(pat, n)]
               # The distroless CA bundle is the one certificate that belongs here.
               hits = [h for h in hits if 'ca-certificates.crt' not in h]
               if hits:
                   bad.append(f'{what}: {hits[:5]}')
+
           # Credential canary: nothing in the image may contain fixture secrets.
-          with tarfile.open('/tmp/rootfs.tar') as t:
-              for m in t.getmembers():
-                  if not m.isfile() or m.size > 64 * 1024 * 1024:
-                      continue
-                  data = t.extractfile(m).read()
-                  for canary in (b'svcdoctor-test-password', b'BEGIN RSA PRIVATE KEY',
-                                 b'BEGIN PRIVATE KEY', b'BEGIN EC PRIVATE KEY'):
-                      if canary in data:
-                          bad.append(f'{m.name} contains {canary!r}')
+          for m in files:
+              if m.size > 64 * 1024 * 1024:
+                  continue
+              data = t.extractfile(m).read()
+              for canary in (b'svcdoctor-test-password', b'BEGIN RSA PRIVATE KEY',
+                             b'BEGIN PRIVATE KEY', b'BEGIN EC PRIVATE KEY'):
+                  if canary in data:
+                      bad.append(f'{m.name} contains {canary!r}')
+
           if bad:
               for b in bad:
                   print(f'::error::{b}')
