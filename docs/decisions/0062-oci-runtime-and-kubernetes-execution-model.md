@@ -2,25 +2,35 @@
 
 ## Status
 
-**Accepted; runtime and publication pipeline implemented, never executed.**
+**Accepted; runtime and publication pipeline implemented. The shared publication
+machinery has been executed against real GHCR under a SHA-only identity; no
+semver release has been published.**
 
-Read that wording literally. **Accepted** applies to every decision below.
-**Runtime implemented** means the image, its security properties and the
-Kubernetes execution model exist and are validated. **Publication pipeline
-implemented** means `.github/workflows/release-oci.yml` now mechanically
-enforces §12–§20. **Never executed** means the workflow has never run: no image
-has been pushed to GHCR, nothing has been signed or attested, and no `v0.3.0`
-tag exists. Phase 7.1-P validated the pipeline's mechanisms against a local
-registry and its logic locally; it deliberately published nothing.
+Read that wording literally, because the distinctions in it are the whole point.
 
-Two obligations remain open and are recorded in §21: the workflow's first real
-run, and native `linux/amd64` execution, which needs a GitHub-hosted amd64
-runner and therefore cannot be demonstrated from an arm64 workstation.
+**Accepted** applies to every decision below. **Runtime implemented** means the
+image, its security properties and the Kubernetes execution model exist and are
+validated.
 
-Phase 7.1-V built the instrument for closing both without releasing anything —
-a SHA-only validation workflow sharing one machinery file with the release
-workflow, recorded in §21a — and **it too has never run.** "Never executed"
-above still holds for every workflow in the repository.
+**Publication pipeline implemented** means the build, staging, scan, SBOM,
+provenance, signing, verification and smoke machinery exists in
+`.github/workflows/oci-stage-verify.yml`, and that `release-oci.yml` and
+`validate-oci.yml` both call it (§21a).
+
+**Executed under a SHA-only identity** means that machinery has run against real
+GHCR: images have been pushed, signed keylessly and attested, and Rekor holds the
+transparency entries. Phase 7.1-P had validated its mechanisms against a local
+registry only; Phase 7.1-V ran them for real and closed all four of §21's open
+obligations, including native `linux/amd64` execution — which needs a
+GitHub-hosted amd64 runner and could never be demonstrated from an arm64
+workstation.
+
+**No semver release has been published** means exactly that, and it is the
+property the identity split exists to guarantee: no `v0.3.0` Git tag and no
+`:v0.3.0`, `:v0.3`, `:v0` or `:latest` OCI tag exists. GHCR holds `sha-<commit>`
+staging tags and their cosign referrers, and nothing else. `release-oci.yml`
+itself has still never run — only the machinery it shares with the validation
+path.
 
 Phase 7.1 built and measured the runtime. Phase 7.1-R reviewed it, resolved the
 four questions Phase 7.1 left open, and added the release contract in §12–§19.
@@ -720,14 +730,18 @@ with attestations:**
   `franz-go/kmsg`;
 - the workflow's reproducibility step reproduces both platform digests exactly.
 
-**[FACT] Not proved, because it cannot be without publishing:**
+**[FACT] Not proved by Phase 7.1-P, because it could not be without publishing.**
+This list is kept as the record of what was and was not known at that point.
+**All four were closed by Phase 7.1-V (§21a), which published under a SHA-only
+identity and released nothing.**
 
 - **The workflow has never run.** Every claim above is about its mechanisms and
   its logic, tested in isolation.
 - **Native `linux/amd64` execution.** Phase 7.1 ran amd64 only under emulation.
   The workflow performs a native amd64 pull-by-digest smoke on `ubuntu-latest`,
-  which is native amd64 — but that requires a real run. This remains **the one
-  open evidence obligation before first publication**, exactly as §22 records.
+  which is native amd64 — but that requires a real run. This was **the one open
+  evidence obligation before first publication**. *Closed in §21a: measured
+  `uname -m` `x86_64`, `RUNNER_ARCH` `X64`, Docker daemon `amd64`.*
 - **cosign keyless signing and verification.** Keyless signing requires an OIDC
   identity that exists only in CI. It was deliberately *not* exercised locally:
   signing with a throwaway key would have uploaded a signature to the public
@@ -803,8 +817,38 @@ escaped on the first pass, every one because a whole-file substring guard surviv
 needle that appears in several steps; the guards are now step-scoped and count runtime
 references.
 
-**[FACT] Never run.** As of this record the validation workflow has not executed, the GHCR
-package does not exist, and no semver Git or OCI tag exists.
+**[FACT] Run, and passed.** `validate-oci.yml` executed against GHCR on a GitHub-hosted
+runner at commit `66e277f`, publishing
+`ghcr.io/hakanaltindag/svcdoctor:sha-66e277f698c3bfd04df2ee3ce7a8688c70e57a4c` →
+`sha256:eb2e9b6b31106121552b4ae3e7b80f78993853fa177b771db9c7faaba17e2a10` and nothing else.
+Full evidence is in `docs/BACKLOG.md` under Phase 7.1-V. The four §21 obligations are closed:
+
+- **Native `linux/amd64`** — `uname -m` `x86_64`, `RUNNER_ARCH` `X64`, Docker daemon `amd64`,
+  no emulation. This was "the one open evidence obligation before first publication".
+- **GHCR behaviour** — `GITHUB_TOKEN` authenticates and pushes; a `HEAD` on an absent tag
+  returns 404, which is what makes the immutability refusal implementable against the real
+  registry rather than a local one; the package associates with this repository and is public.
+- **Keyless signing and constrained verification** — certificate identity
+  `.../oci-stage-verify.yml@refs/heads/feat/v0.3.0`, issuer
+  `https://token.actions.githubusercontent.com`, Rekor log index `2579293960`. Signing a
+  reusable workflow's run produces a SAN naming the **called** workflow at the caller's ref,
+  which is why the caller computes that value and passes it in.
+- **Pull-by-digest** — the published digest pulls and runs hardened on a native amd64 runner,
+  and anonymously with no credentials at all.
+
+**[FACT] Still no release.** No `v0.3.0` Git tag and no `:v0.3.0`, `:v0.3`, `:v0` or `:latest`
+OCI tag exists. The registry holds staging tags and cosign referrers only.
+
+**[FACT] Publishing found four defects that review had not**, every one of them in code that
+builds or observes the image rather than in the image. The one that matters: neither
+publication workflow installed `golangci-lint`, which `make check` requires and fails closed
+without — so `release-oci.yml` would have failed on the `v0.3.0` tag push, on the run meant to
+produce the first public artifact. The others were a signing-evidence step that aborted its own
+job and skipped `cosign verify`; a content audit that reported distroless' dpkg *metadata
+directories* as a package manager; and a CA smoke that required every resolved path to succeed
+and therefore called a runner without an IPv6 route a broken trust store. That last one had
+reintroduced, inside the workflow that validates svcdoctor, precisely the conflation svcdoctor
+exists to refuse.
 
 ### Open: two SBOM formats
 

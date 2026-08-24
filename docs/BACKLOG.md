@@ -3770,32 +3770,134 @@ substring guard stayed green when a needle that appears in several steps was del
 of them. The guards are now scoped to the step they are about, and count runtime references
 rather than merely finding one.
 
-### Still never run
+### Result: PASSED, on real infrastructure
 
-**Nothing has been published.** The validation workflow has never executed. No image exists at
-GHCR — the package does not exist at all — and no `v0.3.0` Git tag, `:v0.3.0`, `:v0.3`, `:v0`
-or `:latest` OCI tag exists. Everything in Phase 7.1-P's "before the first public release"
-checklist above therefore remains open; this phase built the instrument, not the measurement.
+`validate-oci.yml` ran against GHCR on a GitHub-hosted runner. **Nothing was
+released**: the only references it created are `sha-<commit>` and cosign's `.sig` and `.att`.
 
-- [ ] **Run `validate-oci.yml` for real.** Requires pushing the branch. Publishes a
-      `sha-<commit>` image and writes a public Rekor transparency-log entry, which is
-      permanent and cannot be withdrawn.
-- [ ] **Decide the SHA staging artifact's retention.** Recommended: retain until v0.3.0 is
-      released, so its signature and attestations stay inspectable and the release run can be
-      compared against it. Deleting it would orphan its referrers.
-- [ ] **Record GHCR package visibility.** A newly created GHCR package is private by default;
-      whether v0.3.0 requires a manual visibility change is unknown until a package exists.
+| | |
+|---|---|
+| Commit | `66e277f698c3bfd04df2ee3ce7a8688c70e57a4c` |
+| Version | `0.0.0-dev+66e277f` |
+| Staging tag | `sha-66e277f698c3bfd04df2ee3ce7a8688c70e57a4c` |
+| Index digest | `sha256:eb2e9b6b31106121552b4ae3e7b80f78993853fa177b771db9c7faaba17e2a10` |
+| `linux/amd64` | `sha256:7539216ccaa35da431a1df8d627514e25f36780e8acd9dd4c57bce9f5760ae34` |
+| `linux/arm64` | `sha256:3dabdafb184236a8b6e52ae65b14f133cea6a9d74e62438d1e5198e76eac2bce` |
 
-### Open finding, not a blocker
+**Native `linux/amd64` — the one open evidence obligation from §21 — is closed.**
+`Linux 6.17.0-1022-azure`, `uname -m` = `x86_64`, `RUNNER_ARCH` = `X64`, Docker
+daemon `amd64`. No emulation. `--version` reported `0.0.0-dev+66e277f`; the image
+ran read-only, `cap-drop=ALL`, `no-new-privileges`, as `65532:65532`; and the
+pulled amd64 manifest equals the one the reproducibility job produced.
 
-- [ ] **The image carries two SBOM formats.** ADR 0062 §17 says CycloneDX JSON, "one format
-      only — a second format is duplicate surface that can disagree with the first". The build
-      passes `--sbom=true`, which makes BuildKit attach an **SPDX** attestation, while the
-      canonical CycloneDX SBOM is attached separately by cosign. Both are bound to the digest,
-      by different mechanisms, and they can disagree. Left as-is deliberately: setting
-      `--sbom=false` changes the release build recipe, and doing that unreviewed during a
-      validation phase is the kind of change this phase exists to avoid. It needs an ADR 0062
-      decision before v0.3.0.
+- **Reproducible.** Both platform digests IDENTICAL across two cold-cache builds,
+  and the *published* manifests equal them.
+- **GHCR.** `GITHUB_TOKEN` only. No PAT, no Docker Hub, no static registry secret.
+  The package is **public** — anonymous pull-by-digest works with no credentials.
+- **Index.** Exactly `linux/amd64` and `linux/arm64`, plus 2 `unknown/unknown`
+  attestation manifests, each bound to its platform image by
+  `vnd.docker.reference.digest`.
+- **Vulnerabilities.** 0 CRITICAL, 0 HIGH — at the configured `HIGH,CRITICAL`
+  threshold, with nothing suppressed (`.trivyignore` has no active entries).
+  Lower severities were not enumerated, so this is not a "zero vulnerabilities"
+  claim. Positive proof the scan analysed something: Trivy detected
+  `debian 12.15` and scanned the `gobinary` target as well as OS packages.
+- **SBOM.** CycloneDX, 10 components, attached with `cosign attest --type
+  cyclonedx` and proven bound by `cosign verify-attestation`.
+- **Provenance.** 60 806 bytes, names this repository and the exact commit, and
+  contains **no** `refs/tags/vX.Y.Z` — checked, because a validation build that
+  could describe itself as a release would look like evidence.
+- **Keyless signing.** Certificate identity
+  `https://github.com/hakanaltindag/svcdoctor/.github/workflows/oci-stage-verify.yml@refs/heads/feat/v0.3.0`,
+  issuer `https://token.actions.githubusercontent.com`, trigger `workflow_dispatch`,
+  10-minute Fulcio certificate. `cosign verify` passed against that exact identity
+  plus the repository and commit — no regexp. Rekor log index `2579293960`.
+- **Signature target.** `:sha256-eb2e9b6b….sig`, and the verified payload names
+  `sha256:eb2e9b6b…` — the **index**, not a tag and not a platform manifest.
+- **Native arm64** also passed, unconditionally in validation because this
+  repository is public and the runners are free.
+
+### Staging-tag immutability, measured both ways
+
+Run 4 found `sha-66e277f...` **absent** (HTTP 404) and published it. Re-dispatching the
+same workflow on the **same commit** found it present at
+`sha256:eb2e9b6b...`, compared its platform manifests against a fresh cold-cache
+rebuild, and reported:
+
+```
+staging tag sha-66e277f698c3bfd04df2ee3ce7a8688c70e57a4c already exists at sha256:eb2e9b6b...
+published platform digests are identical to the rebuild — idempotent re-run
+```
+
+Nothing was pushed and **the index digest did not change**. That is the property that
+makes recovery from a mid-run failure safe: a re-run either reuses the identical
+artifact or stops, and it can never re-point an immutable identity at different bits.
+Cosign referrers accumulate across re-runs — a second `.sig` layer under the same
+`.sig` tag — which is expected and does not alter the image digest.
+
+The mismatch branch is not exercised by any run, because producing it would require
+the same source to build differently. It is covered by mutation instead: deleting the
+comparison, ignoring a mismatch, or dropping the `sys.exit(1)` beneath it each fail
+the build.
+
+### What publishing found that review had not
+
+Four defects, all in code written to build or observe the image, none in the
+image. Each was invisible locally and would have fired on the release run.
+
+1. **Neither source gate installed `golangci-lint`.** `make check` runs it and
+   fails closed when it is missing; `ci.yml` installs it with an action that
+   *runs* the linter rather than providing one for `make check` to call. Nothing
+   local caught it because the binary is on a developer's PATH. **On
+   `release-oci.yml` this would have failed the v0.3.0 tag push itself.**
+2. **The certificate evidence dump read the wrong JSON key** — `cert` rather than
+   `Cert`, whose value is an object carrying base64 DER, not PEM. Worse, being an
+   ordinary step it took the job down and **skipped `cosign verify`**, the actual
+   gate. It is now `continue-on-error`: a diagnostic that can abort a gate is a
+   liability.
+3. **The image content audit reported a package manager that is not there.**
+   distroless `static-debian12` ships the directories `etc/dpkg` and
+   `var/lib/dpkg` — package metadata, which is what lets a scanner enumerate base
+   packages at all — and no dpkg binary. Executable-shaped findings now consider
+   regular files only.
+4. **The system-CA smoke was testing the runner's network, not the image.** It
+   required *every* `tls.handshake` to PASS. `www.google.com` resolves to 8 A and
+   8 AAAA records and GitHub-hosted runners have no IPv6 route, so the measured
+   evidence is 8 × `tcp.connect` PASS → `tls.handshake` PASS
+   (`trust_source=system`, `verified=true`) and 8 × `tcp.connect`
+   FAIL/`TCP_NETWORK_UNREACHABLE` → `tls.handshake`
+   SKIPPED/`EXEC_SKIPPED_PREREQUISITE_FAILED`.
+
+   That last row is svcdoctor's own layered short-circuiting working correctly —
+   a failed prerequisite yields SKIPPED, never a fabricated FAIL — and the check
+   was wrong because it treated SKIPPED as failure. **It had reintroduced, in the
+   workflow that validates svcdoctor, exactly the conflation svcdoctor exists to
+   refuse: a local path failure is not proof about the target.** The gate now
+   requires at least one verified handshake and keeps a negative control — no
+   handshake may carry `TLS_UNKNOWN_AUTHORITY`, which is what a missing or
+   incomplete CA bundle actually produces.
+
+### Still open
+
+- [ ] **Decide the SHA staging artifacts' retention.** Recommended: retain until
+      v0.3.0 is released, so signatures and attestations stay inspectable and the
+      release run can be compared against them. Deleting them orphans their
+      referrers.
+- [ ] **The image carries two SBOM formats.** `--sbom=true` makes BuildKit attach
+      an **SPDX** attestation while the canonical CycloneDX SBOM is attached by
+      cosign. Both are bound to the digest, by different mechanisms, and ADR 0062
+      §17 says one format only. Not fixed here: `--sbom=false` changes the release
+      build recipe, and changing it unreviewed during a validation phase is the
+      failure mode this phase exists to avoid. Needs an ADR 0062 decision before
+      v0.3.0.
+- [ ] **`cosign triangulate` is deprecated** and is removed in cosign v4. The
+      signature-target check uses it. The stronger half of that check — the
+      verified payload naming the staged digest — does not.
+- [ ] **`validate-oci.yml` is registered on `main`** because GitHub only lists a
+      `workflow_dispatch` workflow from the default branch. The run executes the
+      file from the dispatched ref. A run dispatched against `main` fails at
+      identity derivation and can publish nothing, since the shared machinery is
+      not on `main`.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
