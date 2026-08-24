@@ -180,9 +180,22 @@ integration-kafka: kafka-up kafka-test kafka-down ## Full Kafka validation gate
 
 PG_ENV := test/integration/postgres/env
 PG_COMPOSE := docker compose -f $(PG_ENV)/compose.yaml
+# Read from the compose file rather than repeated, so the diagnostics below and
+# gen-certs.sh cannot disagree with what actually runs.
+PG_IMAGE := $(shell awk '/^[[:space:]]*image:[[:space:]]*/ {print $$2; exit}' $(PG_ENV)/compose.yaml)
 
 .PHONY: postgres-up postgres-down postgres-test integration-postgres
 
+# `pg_isready` is a protocol-level readiness question and stays: it is the only
+# check that distinguishes "the container is running" from "the server will
+# answer". The v0.3.1 release failed here, and the reason the failure cost a
+# release tag is that the message said only "servers did not become ready" —
+# which is a symptom. The server had exited at startup over its TLS key
+# ownership, and nothing printed said so.
+#
+# So on failure the fixture now says why. Bounded output, both services, and the
+# original non-zero exit is preserved: diagnostics explain a failure, they never
+# convert one into success.
 postgres-up: ## Start the PostgreSQL validation server
 	@$(PG_ENV)/gen-certs.sh
 	@$(PG_COMPOSE) up -d
@@ -192,7 +205,19 @@ postgres-up: ## Start the PostgreSQL validation server
 			&& docker exec svcd-pg-plaintext pg_isready -q -U app -d appdb 2>/dev/null; then \
 			printf ' ready\n'; exit 0; fi; \
 		printf '.'; sleep 1; \
-	done; printf '\nservers did not become ready\n'; exit 1
+	done; \
+	printf '\nservers did not become ready\n'; \
+	printf '\n--- container state ---\n'; \
+	$(PG_COMPOSE) ps || true; \
+	for svc in postgres postgres-plaintext; do \
+		printf '\n--- %s (last 40 lines) ---\n' "$$svc"; \
+		$(PG_COMPOSE) logs --tail=40 --no-color "$$svc" 2>&1 || true; \
+	done; \
+	printf '\n--- TLS key as the container sees it ---\n'; \
+	docker run --rm -v "$$PWD/$(PG_ENV)/certs:/c" $(PG_IMAGE) \
+		sh -c 'stat -c "server.key uid=%u gid=%g mode=%a" /c/server.key; \
+		       echo "postgres uid=$$(id -u postgres) gid=$$(id -g postgres)"' 2>&1 || true; \
+	exit 1
 
 postgres-down: ## Stop the validation server and delete its volume
 	@$(PG_COMPOSE) down -v --remove-orphans

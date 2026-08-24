@@ -33,6 +33,46 @@ Do:
 
 Never: delete the tag, move it, amend the release commit, or hand-publish the missing artifacts.
 
+### B1 — the failing gate is an integration fixture
+
+A fixture fault reads like a pipeline fault, and that resemblance is the trap. Both look like
+"CI broke"; only one is safe to re-run. The discriminator is not how the failure *feels* but
+whether the tagged tree would produce it again:
+
+- **Pipeline fault** — the same commit passed this gate before, on this runner class, and the
+  failure names something outside the repository: a pull rate limit, a runner disappearing, a
+  registry 5xx. Re-running the tag is safe.
+- **Fixture fault** — the gate has never passed on this runner class, or it fails identically on
+  every re-run. The fixture is part of the source. Re-running cannot fix it, and each attempt
+  spends the tag's credibility while proving nothing.
+
+The cheap test: run the suite again on the same runner class *without* a tag, using
+`validate-integration.yml`. If it fails again, the fault is in the tree and the version is spent.
+
+A fixture fault is a **source fault** for the purposes of the table below, even though no
+production Go changed. The next version is **vX.Y.(Z+1)**.
+
+#### Recorded instance — v0.3.1
+
+`v0.3.1` failed at `Integration (postgres)` (run `32689503708`). `Publish semver tag` and `OCI`
+were **skipped** by `job.needs`, so:
+
+| | |
+|---|---|
+| Git tag `v0.3.1` | exists, immutable, untouched |
+| `ghcr.io/…:v0.3.1` | **never created** — only `sha-*` staging tags exist |
+| GitHub Release v0.3.1 | **never created** |
+| Production Go implicated | none |
+| Fault | fixture: the PostgreSQL TLS private key was bind-mounted with the runner's ownership, and PostgreSQL refuses to start on a key it does not own |
+| Succeeded by | v0.3.2 |
+
+Two lessons were paid for here and are now mechanical rather than remembered. The fixture
+normalizes key ownership inside the pinned image and a guard asserts it on the real files
+(`test/integration/postgres/fixture_test.go`). And the suites can be run on a native Linux
+runner *before* a tag exists (`validate-integration.yml`) — the gap that let this reach a tag
+was not a missing gate but a gate that could only be reached too late.
+
+
 ## C — tag pushed but the workflow never ran
 
 The symptom is silence: no run, no error, no artifact.
@@ -91,6 +131,7 @@ anything may still reference it by digest.
 | Fails before tag | none yet | none | same |
 | Workflow fails, pipeline fault | keep | none | same, re-run |
 | Workflow fails, source fault | keep | none | **patch** |
+| Workflow fails, integration fixture fault | keep | none | **patch** |
 | Workflow never ran (missing machinery) | keep, retire version | none | **patch** |
 | Image published, Release missing | keep | none | same |
 | Docs or notes wrong | keep | none | same |

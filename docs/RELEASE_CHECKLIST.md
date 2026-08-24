@@ -28,6 +28,17 @@ fetched it. The tag is immutable whether or not we agree to treat it that way.
       `go mod tidy` (no change), `make check`.
 - [ ] Integration suites, **sequentially** — they contend for ports and containers:
       `make integration-postgres`, `make integration-kafka`, `make integration-redpanda`.
+- [ ] **The same suites on a native Linux amd64 runner**, via
+      `gh workflow run validate-integration.yml --ref <branch>` (or a
+      `validate-integration/**` branch push), and all three green.
+
+      A local run does not answer this. The developer platform differs from the runner in ways
+      the fixtures are sensitive to — most concretely, macOS bind mounts report a host file as
+      root-owned and grant the read regardless, so a container's file-ownership check passes on
+      a value the host never had. Docker Desktop, Colima and arm64 emulation reproduce that
+      masking rather than the condition. **`v0.3.1` was lost exactly here:** the suites were
+      green locally, had never been run on Linux for that tree, and failed on the release
+      runner after the tag was already immutable.
 - [ ] Security invariants unchanged: SchemaVersion 1, `Reveal` 2, `SecretFor` 2,
       Kafka `wire.Authenticate` 1, advertised `SecretFor`/`Reveal`/SASL bytes 0.
 - [ ] Blocker inventory: every open item classified *release blocker* / *documented
@@ -56,6 +67,10 @@ fetched it. The tag is immutable whether or not we agree to treat it that way.
       tree without `release-oci.yml` triggers no workflow, produces no error, and publishes
       nothing. `v0.3.0` was lost exactly this way.
 - [ ] `origin/main == local main`, tree clean, gates re-run after the merge.
+- [ ] **Native Linux integration proof on the merge commit itself**, not on the branch head it
+      came from. The merge result is the tree that gets tagged, and a clean merge can still
+      combine two individually-green trees into a failing one. Confirm the green
+      `validate-integration` run's commit SHA equals the commit about to be tagged.
 
 ## PRE-TAG NEGATIVE CHECK
 

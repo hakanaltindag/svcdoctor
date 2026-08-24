@@ -1,0 +1,148 @@
+# Runs the integration suites on a GitHub-hosted Linux runner, without a tag.
+#
+# # Why this workflow exists
+#
+# The v0.3.1 release failed at `Integration (postgres)`. The gate worked — it
+# caught a fixture defect that every developer machine had hidden. What went
+# wrong is that there was no way to *ask the question earlier*. `ci.yml` runs
+# only the quality gates, `validate-oci.yml` deliberately skips the integration
+# suites because the OCI machinery is what it rehearses, and `release-oci.yml`
+# runs them only on a `v*` tag. So the first native-Linux execution of the
+# fixtures happened after an immutable tag had already been pushed, which is the
+# one moment at which learning it is most expensive.
+#
+# This workflow closes that gap. It runs exactly what the release runs —
+# `make integration-<suite>` on `ubuntu-latest` — and publishes nothing.
+#
+# # Why the runner matters, and why local Docker is not a substitute
+#
+# The defect was a bind-mount ownership difference. On macOS the mount layer
+# reports a host file as root-owned and grants the read regardless, so
+# PostgreSQL's private-key ownership check passes on a value the host never had.
+# On a Linux runner the host uid passes through unchanged and the check refuses
+# it. Docker Desktop, Colima and arm64 emulation all reproduce the *masking*,
+# not the condition. Only a native Linux amd64 runner answers this question.
+#
+# # What it is not
+#
+# Not a release gate. `release-oci.yml` already enforces that structurally:
+# `stage-and-verify` and `publish` both sit behind `needs: integration`, so
+# GitHub will not schedule publication until the suites have passed on this same
+# runner class. This workflow is the same measurement made available *before* a
+# tag exists, so a release candidate can be proven rather than attempted.
+
+name: Validate integration (Linux, no publication)
+
+on:
+  # Registered on the default branch so a candidate commit on any branch can be
+  # validated on demand. This is the lesson of the v0.3.0 release machinery: a
+  # `workflow_dispatch` workflow that exists only on a feature branch cannot be
+  # dispatched at all.
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Which suites to run'
+        required: true
+        default: all
+        type: choice
+        options: [all, postgres, kafka, redpanda]
+  # Pushing a branch under this prefix runs the suites immediately. It is how a
+  # fixture change proves itself on Linux before the workflow is registered on
+  # the default branch, and it needs no dispatch permission.
+  push:
+    branches:
+      - 'validate-integration/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A tag ref would make this look like a release rehearsal, and it is not one:
+  # it holds no `packages: write`, stages nothing and verifies no artifact. The
+  # refusal keeps the two paths from being confused for each other.
+  guard:
+    name: Refuse to run on a tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: This workflow does not validate releases
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "::error::validate-integration runs on branches only." \
+                 "A tag is validated by release-oci.yml, which owns publication."
+            exit 1
+          fi
+          echo "ref=${GITHUB_REF} type=${GITHUB_REF_TYPE}"
+
+  # The matrix is chosen at runtime so a single suite can be re-run cheaply while
+  # a fixture is being fixed, without editing the workflow to narrow it. `all` is
+  # the default, and it is the same three suites the release gate runs: dropping
+  # one here would make a green result mean less than it appears to.
+  suites:
+    name: Suites to run
+    runs-on: ubuntu-latest
+    needs: guard
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        run: |
+          case "${{ inputs.suite || 'all' }}" in
+            all) echo 'matrix=["postgres","kafka","redpanda"]' >> "$GITHUB_OUTPUT" ;;
+            *)   echo 'matrix=["${{ inputs.suite }}"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  integration:
+    name: Integration (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    needs: suites
+    strategy:
+      # Every suite reports. A cancelled sibling would leave the run ambiguous
+      # about whether the others would have passed, which is the opposite of
+      # what this workflow is for.
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.suites.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26'
+
+      # Printed before the suite runs, because the whole v0.3.1 investigation
+      # turned on which uid the runner writes fixture files as. Having it in the
+      # log means the next person does not have to reproduce the environment to
+      # find out.
+      - name: Record the runner's file identity
+        run: |
+          printf 'runner uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
+          printf 'runner arch=%s\n' "$(uname -m)"
+          docker version --format 'docker {{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}'
+
+      - name: Run suite
+        run: make integration-${{ matrix.suite }}
+
+  summary:
+    name: Validation summary
+    runs-on: ubuntu-latest
+    needs: integration
+    if: always()
+    steps:
+      - name: Write summary
+        run: |
+          {
+            printf '## Integration validation\n\n'
+            printf '| field | value |\n|---|---|\n'
+            printf '| commit | `%s` |\n' "${GITHUB_SHA}"
+            printf '| ref | `%s` |\n' "${GITHUB_REF}"
+            printf '| runner | ubuntu-latest (Linux amd64, native) |\n'
+            printf '| suites | %s |\n' "${{ inputs.suite || 'all' }}"
+            printf '| result | %s |\n' "${{ needs.integration.result }}"
+            printf '\nNo artifact was staged, signed or published.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail if any suite failed
+        if: needs.integration.result != 'success'
+        run: exit 1

@@ -4022,6 +4022,96 @@ two-SBOM configuration, `9abdc6d` and `cf3f123` the corrected one.
       is statically verified and the machinery it shares is remotely validated; the semver
       publication step itself runs first at v0.3.0.
 
+## Phase 7.2-R1 — PostgreSQL fixture portability: COMPLETE
+
+`v0.3.1` was stopped by its own integration gate. `Integration (postgres)` failed on the Linux
+runner (run `32689503708`); `job.needs` held, so `OCI` and `Publish semver tag` were **skipped**
+and no `:v0.3.1` image or GitHub Release was ever created. No production Go was implicated, and
+none changed in this phase — the only Go files touched are three `_test.go` files.
+
+### The defect
+
+`gen-certs.sh` set the TLS private key's mode and not its owner, and the comment above the
+`chmod` described the ownership requirement it did not implement.
+
+Measured against `postgres:18` on a Linux-native filesystem, `postgres` being uid 999:
+
+| owner | mode | result |
+|---|---|---|
+| `1001:1001` (host) | 0600 | FATAL: must be owned by the database user or root |
+| `999:999` | 0600 | starts |
+| `999:999` | 0400 | starts |
+| `999:999` | 0640 | FATAL: has group or world access |
+| `0:0` (root) | 0600 | FATAL: could not load …: Permission denied |
+| `0:0` (root) | 0640 | FATAL: could not load …: Permission denied |
+| `0:999` | 0640 | starts |
+
+Three refusals, not two. PostgreSQL checks owner and mode; the operating system then has to let
+the *server process* — which runs as `postgres`, not root — actually open the file. Root
+ownership passes both of PostgreSQL's checks and fails at `open()`. The last two rows are why
+the guard requires the database user rather than accepting root as PostgreSQL nominally would.
+
+### Why every local run hid it
+
+Not general laxity — a specific reported value. Measured on Docker Desktop with a host key owned
+by the developer (501) and never chowned, which is the exact pre-fix state:
+
+| view | uid | gid | mode | result |
+|---|---|---|---|---|
+| host | 501 | 0 | 0600 | — |
+| container | **0** | 0 | 0600 | **starts** |
+
+The mount layer reports the file as root-owned and grants the read regardless, so both checks
+pass on a value the host never had. On Linux the runner's 1001 passes through and the first
+check refuses it. `0:0` is therefore not a benign alternative to the fix: it is the broken state
+wearing an acceptable-looking owner, which is why the guard refuses it.
+
+### What changed
+
+- **Ownership is normalized inside the pinned image**, so the uid comes from the image rather
+  than a literal — `postgres:18` is a floating tag and may renumber its user. Unconditional, so
+  a `certs/` directory left from an earlier run cannot keep stale ownership. No host `sudo`, no
+  new dependency, no OS branch: an OS-conditional fix would reproduce the original asymmetry.
+- **The guard reads the real files through a container** (`test/integration/postgres/fixture_test.go`).
+  Grepping the script for `chown` would prove it contains a word; the defect was the gap between
+  what the script said and what the filesystem delivered.
+- **A readiness failure now explains itself.** `pg_isready` stays — it is what distinguishes a
+  running container from a server that will answer, and the failing run had the former. On
+  timeout the fixture prints compose state, bounded per-service logs, and the key ownership the
+  container sees beside the identity it is compared against. Non-zero exit preserved; no key
+  material, no credential values.
+- **`validate-integration.yml`** runs the suites on `ubuntu-latest` without a tag. This is the
+  actual process gap: the gate was never missing, it just could not be reached until after the
+  tag was immutable.
+
+### Kafka and Redpanda: audited, unchanged
+
+Neither has this defect, and the reason is mechanical rather than lucky. Both generate keys
+`chmod 644` — world-readable, so any container uid can read them — and neither Kafka's JVM nor
+Redpanda performs PostgreSQL's ownership check. Both already do `mkdir -p certs` before `cd`
+(Phase 7.0b). The trade-off is deliberate and recorded: a throwaway, gitignored, per-run key is
+made readable rather than owned, which is exactly what removes the ownership dependency.
+Empirically confirmed — both suites passed on `ubuntu-latest` with runner-owned certs in the
+same run that PostgreSQL failed.
+
+### Evidence
+
+- Native Linux amd64 (`runner` uid 1001, `x86_64`, docker `linux/amd64`): all three suites pass
+  on the candidate commit.
+- macOS Docker Desktop (arm64): fresh checkout passes cold; **5/5** clean PostgreSQL runs, each
+  from deleted certs and deleted volumes; Kafka and Redpanda pass sequentially.
+- Diagnostic non-vacuity: ownership broken deliberately → readiness fails, the ownership FATAL
+  is printed, exit is non-zero, 86 bounded lines, no key or credential material.
+- Mutation matrix: 9 ownership, 7 readiness/diagnostic and 9 release mutations, **all caught**.
+  Two guard gaps were found this way and closed — `scripts/build-image.sh` was absent from the
+  tagged-tree check, and deleting the publish-side semver re-check escaped every guard while
+  leaving `imagetools create --tag` free to overwrite a tag that appeared mid-run.
+
+### Still open
+
+- [ ] **`v0.3.2` is not tagged.** The candidate is proven on both platforms and awaits human
+      authorization. `v0.3.1` stays exactly where it is.
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6
