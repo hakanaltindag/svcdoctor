@@ -116,22 +116,42 @@ jobs:
       # ADR 0062 section 13: a published semver tag is immutable. Checking
       # before building means a re-release attempt fails in seconds rather than
       # after the whole pipeline, and it can never be resolved by overwriting.
-      - name: Refuse to overwrite an existing semver tag
+      # Observation, not a gate — and the distinction is the whole of ADR 0062
+      # §21's idempotency rule applied here.
+      #
+      # This used to fail on any existing tag. It could not do otherwise: it runs
+      # before the build, so it does not yet know the digest this commit
+      # produces, and "the tag exists" was the only question available. That made
+      # it a gate that could not tell a legitimate re-run from an overwrite, and
+      # the first time a release had to be resumed it refused the resume.
+      #
+      # The authority moved to `publish`, which runs after the build and can
+      # compare. Nothing was given up: `publish` reuses the tag only when it
+      # already resolves to the exact validated digest, and hard-stops otherwise,
+      # so no path here or there can re-point a published semver tag. What is
+      # lost is failing fast, which cost a few minutes on a case that is now
+      # usually legitimate.
+      - name: Record whether the semver tag is already published
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
+          repo="${GITHUB_REPOSITORY,,}"
           token="$(curl -fsSL -u "x:${GH_TOKEN}" \
-            "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY,,}:pull&service=ghcr.io" \
+            "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          accept='application/vnd.oci.image.index.v1+json'
           code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json' \
-            "https://ghcr.io/v2/${GITHUB_REPOSITORY,,}/manifests/${GITHUB_REF_NAME}")"
-          if [ "$code" = "200" ]; then
-            echo "::error::${IMAGE}:${GITHUB_REF_NAME} already exists. Semver tags are immutable (ADR 0062 §13); release the next patch version instead."
-            exit 1
+            -H "Accept: $accept" "https://ghcr.io/v2/${repo}/manifests/${GITHUB_REF_NAME}")"
+          if [ "$code" != "200" ]; then
+            echo "${GITHUB_REF_NAME} is unpublished (HTTP $code) — first publication"
+            exit 0
           fi
-          echo "tag is unpublished (HTTP $code) — safe to proceed"
+          existing="$(curl -sI -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/${GITHUB_REF_NAME}" \
+            | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')"
+          echo "::notice::${GITHUB_REF_NAME} is already published at ${existing}."
+          echo "::notice::This run will reuse it if the build reproduces that exact digest, and stop if it does not. The publish job decides."
 
   # ---------------------------------------------------------------------------
   # 2. Source gates
@@ -249,6 +269,7 @@ jobs:
       packages: write
     outputs:
       digest: ${{ needs.stage-and-verify.outputs.digest }}
+      reused: ${{ steps.preflight.outputs.exists }}
     steps:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -257,32 +278,79 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Re-checked immediately before writing. The earlier check was cheap
-      # insurance; this one closes the window between then and now.
-      - name: Semver tag still does not exist
+      # Re-checked immediately before writing, and the check is a three-way
+      # decision rather than a refusal.
+      #
+      # The earlier version failed on any existing tag. That was right while a
+      # release could only ever be published once, and wrong the moment a run had
+      # to be resumed: v0.3.2 published its image and then stopped before the
+      # GitHub Release existed, and re-running the only workflow that can create
+      # one would have failed here — on a tag this very pipeline had just written
+      # correctly. A gate that cannot distinguish "already done" from "done
+      # differently" forces the recovery path off the automated route, which is
+      # exactly where mistakes get made.
+      #
+      # So the rule is the one `stage` already applies to `sha-<commit>`
+      # (ADR 0062 §21): compare, then reuse or stop.
+      #
+      #   absent                          -> publish
+      #   present, validated digest       -> reuse; write nothing
+      #   present, any other digest       -> STOP. Never overwrite.
+      #
+      # The third case is not a tagging problem and must not be treated as one.
+      # The tag was verified to name this commit and the build is reproducible,
+      # so a different digest means the source produced different bits — and
+      # re-pointing the tag would replace an artifact that signatures already
+      # attest to. ADR 0062 §13: release the next patch version instead.
+      - name: The semver tag is absent, or already holds the validated digest
+        id: preflight
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WANT: ${{ needs.stage-and-verify.outputs.digest }}
         run: |
           set -eu
+          [ -n "$WANT" ] || { echo "::error::no validated digest was produced"; exit 1; }
+          repo="${GITHUB_REPOSITORY,,}"
           token="$(curl -fsSL -u "x:${GH_TOKEN}" \
-            "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY,,}:pull&service=ghcr.io" \
+            "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
-          code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json' \
-            "https://ghcr.io/v2/${GITHUB_REPOSITORY,,}/manifests/${GITHUB_REF_NAME}")"
-          [ "$code" = "200" ] && { echo "::error::${GITHUB_REF_NAME} appeared during this run; refusing to overwrite"; exit 1; }
-          echo "still unpublished (HTTP $code)"
+          accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/${GITHUB_REF_NAME}")"
+
+          if [ "$code" != "200" ]; then
+            echo "semver tag ${GITHUB_REF_NAME} is absent (HTTP $code) — will publish"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          existing="$(curl -sI -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/${GITHUB_REF_NAME}" \
+            | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')"
+
+          if [ "$existing" != "$WANT" ]; then
+            echo "::error::${IMAGE}:${GITHUB_REF_NAME} already exists. Semver tags are immutable (ADR 0062 §13)."
+            echo "::error::published: ${existing}"
+            echo "::error::validated: ${WANT}"
+            echo "::error::Refusing to re-point it. The tag names this commit and the build is reproducible, so a different digest is a reproducibility failure, not a tagging problem. Release the next patch version instead."
+            exit 1
+          fi
+
+          echo "semver tag already resolves to the validated digest — idempotent re-run, nothing to write"
+          echo "exists=true" >> "$GITHUB_OUTPUT"
 
       - name: Point the semver tag at the validated digest
+        if: steps.preflight.outputs.exists != 'true'
         run: |
           set -eu
           docker buildx imagetools create \
             --tag "${IMAGE}:${GITHUB_REF_NAME}" \
             "${IMAGE}@${{ needs.stage-and-verify.outputs.digest }}"
 
-      # The tag must resolve to the digest that passed every gate. If it does
-      # not, something re-indexed the image and the release is not what was
-      # verified.
+      # Unconditional, because it is the assertion both paths have to satisfy:
+      # the one that just wrote the tag, and the one that decided not to.
       - name: Confirm the tag resolves to the verified digest
         run: |
           set -eu
@@ -293,12 +361,243 @@ jobs:
           echo "${IMAGE}:${GITHUB_REF_NAME} -> $got"
 
   # ---------------------------------------------------------------------------
-  # 6. Release summary
+  # 6. GitHub Release — the human surface, last of all
+  # ---------------------------------------------------------------------------
+  #
+  # A GitHub Release is a *publication surface bound to an immutable Git tag*. It
+  # is not a version authority, not an OCI publication authority, and not a
+  # second release pipeline. Everything it publishes already exists and has
+  # already been verified: the tag, the digest, the signature, the SBOM and the
+  # reviewed notes. This job builds nothing.
+  #
+  # It runs last because a Release is a claim that an artifact is available. Made
+  # before `publish`, it would be a link to a tag that does not resolve; made in
+  # parallel, it would be a race. `needs` is the enforcement, as everywhere else
+  # here — GitHub will not schedule this until the semver tag has been published
+  # and confirmed.
+  #
+  # v0.3.1 is the reason the failure semantics are written down rather than
+  # assumed. A failure *here* is categorically different from a failure in the
+  # gates: the OCI release is already valid and immutable, so the fix is to retry
+  # this path for the same tag and digest, never to rebuild and never to burn a
+  # patch version on a GitHub UI problem. See docs/RELEASE_FAILURE_PLAYBOOK.md §D.
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [identity, stage-and-verify, publish]
+    permissions:
+      # Scoped to this job alone, and to the two things it actually does: write
+      # the Release, and read back the signed SBOM attestation. The workflow
+      # default stays `contents: read`, so no other job gains write.
+      #
+      # Deliberately absent: `id-token: write` (this job signs nothing — signing
+      # happens in the shared machinery, against the digest) and
+      # `packages: write` (this job publishes no image; `publish` above owns the
+      # only registry write in the pipeline).
+      contents: write
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The version is taken from `identity`, which derived it from Git. There is
+      # no workflow input to supply one and no literal to edit, so there is no
+      # way for this job to publish a Release naming a version the pipeline did
+      # not build. The equality check makes the coupling explicit rather than
+      # implicit in an expression.
+      - name: Release identity is the tag, and comes from `identity`
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+          REVISION: ${{ needs.identity.outputs.revision }}
+        run: |
+          set -eu
+          [ -n "$VERSION" ] || { echo "::error::identity produced no version"; exit 1; }
+          if [ "$VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::identity says $VERSION, the tag says ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          if [ "$REVISION" != "${GITHUB_SHA}" ]; then
+            echo "::error::identity says $REVISION, the run is on ${GITHUB_SHA}"
+            exit 1
+          fi
+          echo "publishing $VERSION at $REVISION"
+
+      # The independent re-check ADR 0062 §20 step 13 leaves implicit. `publish`
+      # confirmed the tag resolves to the validated digest at the moment it wrote
+      # it; this asks the registry again, immediately before making a public
+      # claim about it, and over plain HTTP rather than through buildx — so a
+      # tag re-pointed between the two jobs stops the Release rather than being
+      # advertised by it.
+      - name: The semver tag still resolves to the validated digest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WANT: ${{ needs.stage-and-verify.outputs.digest }}
+        run: |
+          set -eu
+          [ -n "$WANT" ] || { echo "::error::no validated digest was produced"; exit 1; }
+          token="$(curl -fsSL -u "x:${GH_TOKEN}" \
+            "https://ghcr.io/token?scope=repository:${GITHUB_REPOSITORY,,}:pull&service=ghcr.io" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          got="$(curl -fsSI -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            "https://ghcr.io/v2/${GITHUB_REPOSITORY,,}/manifests/${GITHUB_REF_NAME}" \
+            | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}')"
+          if [ "$got" != "$WANT" ]; then
+            echo "::error::${IMAGE}:${GITHUB_REF_NAME} resolves to '$got', expected '$WANT'. Refusing to announce it."
+            exit 1
+          fi
+          echo "${IMAGE}:${GITHUB_REF_NAME} -> $got"
+          echo "DIGEST=$got" >> "$GITHUB_ENV"
+
+      # ADR 0062 §17 requires the SBOM on the GitHub Release *as well as* on the
+      # digest. The shared machinery already exported it and used that exact file
+      # as the `cosign attest` predicate, so this downloads the bytes that were
+      # signed rather than producing a second export — two exports are two
+      # documents that can disagree, and only one of them would be attested.
+      #
+      # Downloading rather than recovering it from the attestation is also what
+      # keeps verification in one place: a job here that pulled the attestation
+      # back and checked it would be a second implementation of a gate that
+      # `oci-stage-verify.yml` owns.
+      - name: Fetch the attested CycloneDX SBOM
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sbom-${{ needs.identity.outputs.sha_tag }}
+
+      - name: The SBOM is present and is CycloneDX
+        run: |
+          set -eu
+          [ -s sbom.cdx.json ] || { echo "::error::sbom.cdx.json is missing or empty"; exit 1; }
+          python3 - <<'PY'
+          import json
+          b = json.load(open('sbom.cdx.json'))
+          assert b.get('bomFormat') == 'CycloneDX', b.get('bomFormat')
+          print(f"CycloneDX {b.get('specVersion')}, {len(b.get('components', []))} components")
+          PY
+
+      # The checked-in notes are the human authority and are reviewed before the
+      # tag exists; the digest is machine truth and is only known now. Appending
+      # rather than editing keeps them one source each — a digest hand-copied
+      # into a tracked file is a second authority that silently goes stale.
+      - name: Compose the release body
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+          REVISION: ${{ needs.identity.outputs.revision }}
+          AMD64: ${{ needs.stage-and-verify.outputs.amd64_digest }}
+          ARM64: ${{ needs.stage-and-verify.outputs.arm64_digest }}
+        run: |
+          set -eu
+          notes="docs/releases/${VERSION}.md"
+          [ -f "$notes" ] || { echo "::error::$notes does not exist in the tagged tree"; exit 1; }
+          cp "$notes" /tmp/body.md
+          {
+            printf '\n---\n\n## Published artifact\n\n'
+            printf 'Verified at publication, from the tagged commit `%s`.\n\n' "$REVISION"
+            printf '| | |\n|---|---|\n'
+            printf '| Image | `%s:%s` |\n' "$IMAGE" "$VERSION"
+            printf '| Index digest | `%s` |\n' "$DIGEST"
+            printf '| `linux/amd64` | `%s` |\n' "$AMD64"
+            printf '| `linux/arm64` | `%s` |\n' "$ARM64"
+            printf '\nPin the digest in production; a tag is a name resolved at pull time.\n\n'
+            printf '```sh\ndocker pull %s@%s\n```\n\n' "$IMAGE" "$DIGEST"
+            printf 'The attached `sbom.cdx.json` is the CycloneDX SBOM recovered from the\n'
+            printf 'signed attestation on this digest, not a separate export of it.\n'
+          } >> /tmp/body.md
+
+      # Stable semver is Latest; a prerelease never is. `identity` currently
+      # accepts only vX.Y.Z, so this is always true today — it is written as a
+      # rule anyway so that widening the tag shape later cannot silently promote
+      # an `-rc.1` to the thing users land on.
+      - name: Decide the Latest flag
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+        run: |
+          set -eu
+          case "$VERSION" in
+            v*.*.*-*) echo "LATEST=false" >> "$GITHUB_ENV"; echo "$VERSION is a prerelease" ;;
+            *)        echo "LATEST=true"  >> "$GITHUB_ENV"; echo "$VERSION is a stable release" ;;
+          esac
+
+      # Create, or verify what is already there. Re-running a release must be
+      # safe, and "safe" here means *non-destructive*: an existing Release is
+      # never deleted, recreated or edited, because it is a public object that
+      # may already have been linked to and, once immutable, cannot be rewritten
+      # at all. A mismatch stops the run for a human rather than being repaired
+      # automatically — silently overwriting a Release that disagrees with this
+      # run is exactly the failure this refuses to automate.
+      - name: Create the GitHub Release, or verify the existing one
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.identity.outputs.version }}
+        run: |
+          set -eu
+          title="svcdoctor ${VERSION}"
+
+          if ! gh release view "$VERSION" --json tagName >/dev/null 2>&1; then
+            echo "no Release for $VERSION; creating it"
+            args=""
+            [ "$LATEST" = "true" ] && args="--latest" || args="--prerelease"
+            # shellcheck disable=SC2086
+            gh release create "$VERSION" \
+              --verify-tag \
+              --title "$title" \
+              --notes-file /tmp/body.md \
+              $args \
+              sbom.cdx.json
+            echo "created"
+            exit 0
+          fi
+
+          echo "a Release already exists for $VERSION; verifying rather than replacing it"
+          gh release view "$VERSION" --json tagName,name,isDraft,isPrerelease,body > /tmp/existing.json
+          gh api "/repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' > /tmp/latest.txt || echo "" > /tmp/latest.txt
+          python3 - <<'PY'
+          import json, os, sys
+          want_tag  = os.environ['VERSION']
+          want_name = f"svcdoctor {want_tag}"
+          want_pre  = os.environ['LATEST'] != 'true'
+          digest    = os.environ['DIGEST']
+          r = json.load(open('/tmp/existing.json'))
+          latest = open('/tmp/latest.txt').read().strip()
+          bad = []
+          if r['tagName']     != want_tag:  bad.append(f"tag is {r['tagName']!r}, expected {want_tag!r}")
+          if r['name']        != want_name: bad.append(f"title is {r['name']!r}, expected {want_name!r}")
+          if r['isDraft']:                  bad.append("release is a draft")
+          if r['isPrerelease'] != want_pre: bad.append(f"prerelease is {r['isPrerelease']}, expected {want_pre}")
+          if not want_pre and latest != want_tag:
+                                            bad.append(f"Latest is {latest!r}, expected {want_tag!r}")
+          if digest not in (r.get('body') or ''):
+                                            bad.append(f"body does not record the release digest {digest}")
+          if bad:
+              print("::error::the existing Release does not match this run. Not overwriting it.")
+              for b in bad: print(f"::error::  - {b}")
+              sys.exit(1)
+          print(f"existing Release for {want_tag} matches this run; nothing to do")
+          PY
+
+      # Read back from the API rather than trusting the create step's exit code.
+      - name: Verify the published Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.identity.outputs.version }}
+        run: |
+          set -eu
+          gh release view "$VERSION" --json tagName,name,isDraft,isPrerelease,url,body \
+            --jq '"tag=\(.tagName) title=\(.name) draft=\(.isDraft) prerelease=\(.isPrerelease)", "url=\(.url)"'
+          latest="$(gh api "/repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          if [ "$LATEST" = "true" ] && [ "$latest" != "$VERSION" ]; then
+            echo "::error::Latest is $latest, expected $VERSION"
+            exit 1
+          fi
+          echo "Latest = $latest"
+
+  # ---------------------------------------------------------------------------
+  # 7. Release summary
   # ---------------------------------------------------------------------------
   summary:
     name: Release summary
     runs-on: ubuntu-latest
-    needs: [identity, stage-and-verify, publish]
+    needs: [identity, stage-and-verify, publish, release]
     if: always()
     steps:
       - name: Write summary
@@ -318,6 +617,11 @@ jobs:
             echo "| Architectures | linux/amd64, linux/arm64 |"
             echo "| Scan, SBOM, provenance, signature | ${{ needs.stage-and-verify.result }} |"
             echo "| Semver tag published | ${{ needs.publish.result }} |"
+            if [ "${{ needs.publish.outputs.reused }}" = "true" ]; then
+              echo "| Semver tag | already held the validated digest; nothing was written |"
+            else
+              echo "| Semver tag | pointed at the validated digest by this run |"
+            fi
             echo
             echo "Pin the digest in production:"
             echo

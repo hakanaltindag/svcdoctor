@@ -120,17 +120,25 @@ func TestTheReleaseWorkflowUsesMinimalPermissions(t *testing.T) {
 				"it cannot push to GHCR or sign keylessly without it", required)
 		}
 	}
-	if strings.Contains(wf, "contents: write") {
-		t.Error("the release workflow requests contents: write. Publishing an image " +
-			"needs no write access to the repository.")
-	}
+	// `contents: write` used to be forbidden outright, and that was right while
+	// the pipeline only published an image. Creating a GitHub Release is a write
+	// to the repository, so the rule becomes a scoping rule rather than a ban:
+	// exactly one job may hold it, and it is the job that creates the Release.
+	//
+	// A ban would have been the easier guard to keep and the wrong one — it
+	// would have been deleted the first time someone needed a Release, taking
+	// the workflow-wide protection with it.
+	assertContentsWriteIsScopedToTheReleaseJob(t)
+
 	// Every file in the pipeline must default to read-only and escalate per job.
 	for _, name := range []string{releaseWorkflow, sharedWorkflow, validateWorkflow} {
 		doc := withoutComments(readRepoFile(t, name))
 		if !strings.HasPrefix(strings.TrimSpace(afterLine(doc, "permissions:")), "contents: read") {
 			t.Errorf("%s: the default permission block is not contents: read", name)
 		}
-		if strings.Contains(doc, "contents: write") {
+		// The shared machinery and the validation pipeline still write nothing to
+		// the repository. Only release-oci.yml has a Release job.
+		if name != releaseWorkflow && strings.Contains(doc, "contents: write") {
 			t.Errorf("%s requests contents: write; publishing an image needs no repository write access", name)
 		}
 		for _, never := range []string{"actions: write", "administration:", "packages: admin"} {
@@ -139,6 +147,59 @@ func TestTheReleaseWorkflowUsesMinimalPermissions(t *testing.T) {
 			}
 		}
 	}
+}
+
+// assertContentsWriteIsScopedToTheReleaseJob holds the boundary that replaced an
+// outright ban on `contents: write`.
+//
+// Three separate things have to be true, and the middle one is the one a
+// careless edit breaks: the workflow default stays read-only, the escalation
+// appears under exactly one job, and that job is `release`. A workflow-level
+// grant would hand repository write to the build and publish jobs too, which is
+// precisely the blast radius the per-job model exists to avoid.
+func assertContentsWriteIsScopedToTheReleaseJob(t *testing.T) {
+	t.Helper()
+
+	doc := withoutComments(readRepoFile(t, releaseWorkflow))
+
+	// The workflow-level block, which is everything before the first job.
+	header, _, _ := strings.Cut(doc, "\njobs:")
+	if strings.Contains(header, "contents: write") {
+		t.Error("release-oci.yml grants contents: write at the workflow level.\n\n" +
+			"That gives every job in the pipeline write access to the repository, " +
+			"including the ones that build and push the image. The Release job is " +
+			"the only one that writes anything here, and it is the only one that " +
+			"may hold it.")
+	}
+
+	owners := jobsHolding(doc, "contents: write")
+	switch {
+	case len(owners) == 0:
+		t.Error("no job requests contents: write, so the GitHub Release cannot be created")
+	case len(owners) > 1:
+		t.Errorf("contents: write is held by %v; only the Release job may hold it", owners)
+	case owners[0] != "release":
+		t.Errorf("contents: write is held by job %q, not by the Release job", owners[0])
+	}
+}
+
+// jobsHolding reports which top-level jobs contain the given directive. Walked
+// positionally, because every job's permission block looks identical and
+// searching the document for the directive always finds the first one.
+func jobsHolding(wf, directive string) []string {
+	_, jobsBlock, _ := strings.Cut(wf, "\njobs:\n")
+	var out []string
+	current := ""
+	for _, line := range strings.Split(jobsBlock, "\n") {
+		if trimmed := strings.TrimLeft(line, " "); trimmed != "" &&
+			len(line)-len(trimmed) == 2 && strings.HasSuffix(trimmed, ":") {
+			current = strings.TrimSuffix(trimmed, ":")
+		}
+		if strings.Contains(line, directive) && current != "" {
+			out = append(out, current)
+		}
+	}
+	return out
 }
 
 // TestTheReleaseWorkflowUsesNoLongLivedCredential pins ADR 0062 section 17.
@@ -356,26 +417,209 @@ func TestTheSemverTagIsAppliedLast(t *testing.T) {
 		t.Error("the workflow no longer refuses to overwrite an existing semver tag")
 	}
 
-	// The check is made twice on purpose, and the second one is the load-bearing
-	// half. The pre-flight check in `identity` runs before the gates; the whole
-	// pipeline then takes minutes, and `imagetools create --tag` overwrites a tag
-	// rather than refusing it. So the window between the two is a window in which
-	// a tag can appear — from a concurrent run, or a hand-pushed one — and be
-	// silently overwritten by this one.
+	// The authoritative check is in `publish`, immediately before the write, and
+	// it is a three-way decision rather than a refusal. `identity` cannot make
+	// it: that job runs before the build and does not yet know what digest this
+	// commit produces, so "the tag exists" is the only question available to it —
+	// which cannot distinguish a legitimate re-run from an overwrite.
 	//
-	// Deleting this step leaves the pre-flight check in place and passes every
-	// other guard here, which is exactly why it needs its own. Found by mutation.
-	publishStep := strings.Index(caller, "docker buildx imagetools create")
-	recheck := strings.Index(caller, "Semver tag still does not exist")
-	if recheck < 0 {
-		t.Error("the publish job no longer re-checks that the semver tag is absent " +
-			"immediately before creating it.\n\n" +
-			"The pre-flight check in `identity` runs minutes earlier, and " +
-			"`imagetools create --tag` overwrites rather than refuses. Without the " +
-			"re-check, a tag that appears mid-run is silently overwritten.")
-	} else if publishStep >= 0 && recheck > publishStep {
-		t.Error("the semver-tag re-check runs after the tag is created, which is " +
-			"an audit rather than a guard")
+	// Deleting this leaves `identity`'s observation in place and passes every
+	// other guard here, while `imagetools create --tag` overwrites rather than
+	// refuses. Found by mutation.
+	assertSemverPublicationIsIdempotent(t)
+}
+
+// assertSemverPublicationIsIdempotent pins ADR 0062 §13 and §21 as they apply to
+// the semver tag: compare, then reuse or stop, and never re-point.
+//
+// The three branches are the contract, and each is a different failure if it
+// goes missing:
+//
+//   - **absent -> publish.** Losing this makes a first release impossible.
+//   - **present at the validated digest -> reuse.** Losing this makes a resumed
+//     release impossible, which is what forced v0.3.2's GitHub Release off the
+//     automated path in the first place.
+//   - **present at any other digest -> STOP.** Losing this permits the one thing
+//     the whole release contract exists to prevent: a published semver tag
+//     re-pointed at different bits, invalidating every signature already made
+//     against it.
+func assertSemverPublicationIsIdempotent(t *testing.T) {
+	t.Helper()
+
+	doc := withoutComments(readRepoFile(t, releaseWorkflow))
+	_, job, found := strings.Cut(doc, "\n  publish:")
+	if !found {
+		t.Fatal("release-oci.yml has no publish job")
+	}
+	if end := regexp.MustCompile(`(?m)^  [a-z][a-z0-9-]*:`).FindStringIndex(job); end != nil {
+		job = job[:end[0]]
+	}
+
+	// It must resolve the tag and compare against the validated digest.
+	if !strings.Contains(job, "manifests/${GITHUB_REF_NAME}") {
+		t.Error("the publish job does not resolve the semver tag before writing it")
+	}
+	if !strings.Contains(job, "needs.stage-and-verify.outputs.digest") {
+		t.Error("the publish job does not read the validated digest, so it cannot " +
+			"be comparing anything against it")
+	}
+
+	// The three branches are read out of the preflight script's actual control
+	// flow, not by searching the job for strings.
+	//
+	// Searching was tried and does not work here. Replacing the reuse message
+	// with `exit 1` left `exists=true` in the file as dead code and the guard
+	// green; deleting the mismatch branch's `exit 1` left a later step's `exit 1`
+	// for a substring search to find. Presence of a line says nothing about
+	// whether it can be reached — the same lesson the digest re-check already
+	// taught. Found by mutation, three times.
+	script := shellStep(t, job, "The semver tag is absent, or already holds the validated digest")
+
+	absent := shellBlock(t, script, `if [ "$code" != "200" ]; then`)
+	if !strings.Contains(absent, `echo "exists=false"`) || !strings.Contains(absent, "exit 0") {
+		t.Errorf("the absent-tag branch does not record a publish decision and return.\n\n"+
+			"Without it a first release cannot be published at all.\n\nbranch:\n%s", absent)
+	}
+
+	mismatch := shellBlock(t, script, `if [ "$existing" != "$WANT" ]; then`)
+	if !strings.Contains(mismatch, "exit 1") {
+		t.Errorf("the differing-digest branch does not fail the job, so execution "+
+			"falls through to the write.\n\n"+
+			"This is the branch the entire release contract exists for: re-pointing "+
+			"a published semver tag invalidates every signature already made "+
+			"against it.\n\nbranch:\n%s", mismatch)
+	}
+	if !strings.Contains(mismatch, "already exists. Semver tags are immutable") {
+		t.Error("the differing-digest branch no longer says why it refuses")
+	}
+
+	// What follows both branches is the reuse path, and it has to be reachable:
+	// an `exit 1` between the mismatch `fi` and the reuse decision would turn
+	// every resumed release into a failure while leaving both branches intact.
+	_, reuse, _ := strings.Cut(script, mismatch)
+	if strings.Contains(reuse, "exit 1") {
+		t.Errorf("the reuse path exits non-zero.\n\n"+
+			"A tag that already holds the validated digest is a successful "+
+			"idempotent re-run, not a failure — that is the whole point of "+
+			"comparing digests rather than checking existence.\n\npath:\n%s", reuse)
+	}
+	if !strings.Contains(reuse, `echo "exists=true"`) {
+		t.Error("the reuse path does not record that the tag is already correct")
+	}
+
+	// Branch 2: a matching digest reuses, and reuse means writing nothing. The
+	// `if:` on the create step is what makes that true — a create that ran
+	// anyway would re-point the tag to the same digest, which is harmless today
+	// and is exactly the habit that stops being harmless.
+	create := regexp.MustCompile(`(?s)- name: Point the semver tag at the validated digest\n(.*?)run:`).
+		FindStringSubmatch(job)
+	if create == nil {
+		t.Fatal("the publish job no longer creates the semver tag")
+	}
+	if !strings.Contains(create[1], "if: steps.preflight.outputs.exists != 'true'") {
+		t.Error("the semver tag is created unconditionally.\n\n" +
+			"On an idempotent re-run the tag already holds the validated digest and " +
+			"nothing should be written at all.")
+	}
+
+	// Branch 1: absence is an explicit publish decision, not a fall-through.
+	if !strings.Contains(job, `echo "exists=false" >> "$GITHUB_OUTPUT"`) {
+		t.Error("the publish job does not record that an absent tag will be published")
+	}
+	if !strings.Contains(job, `echo "exists=true" >> "$GITHUB_OUTPUT"`) {
+		t.Error("the publish job does not record that an existing validated tag is reused")
+	}
+
+	// And the confirmation must run on both paths. Gating it on the write would
+	// leave the reuse path asserting nothing about what the tag resolves to,
+	// which is the path taken by every resumed release.
+	confirm := regexp.MustCompile(`(?s)- name: Confirm the tag resolves to the verified digest\n(.*?)run:`).
+		FindStringSubmatch(job)
+	if confirm == nil {
+		t.Fatal("the publish job no longer confirms what the tag resolves to")
+	}
+	if strings.Contains(confirm[1], "if:") {
+		t.Error("the tag confirmation is conditional. It is the assertion both the " +
+			"write path and the reuse path have to satisfy.")
+	}
+}
+
+// shellStep returns the `run:` script of a named step, dedented enough to read.
+func shellStep(t *testing.T, job, name string) string {
+	t.Helper()
+	_, after, found := strings.Cut(job, "- name: "+name)
+	if !found {
+		t.Fatalf("no step named %q", name)
+	}
+	if end := regexp.MustCompile(`(?m)^      - `).FindStringIndex(after); end != nil {
+		after = after[:end[0]]
+	}
+	return after
+}
+
+// shellBlock returns one `if ...; then ... fi` block, opener included, matched by
+// counting nesting rather than by finding the next `fi`. A nested conditional
+// would otherwise end the block early and hide whatever followed it.
+func shellBlock(t *testing.T, script, opener string) string {
+	t.Helper()
+	lines := strings.Split(script, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.TrimSpace(l) == opener {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("the preflight script has no %q branch", opener)
+	}
+	depth := 0
+	for i := start; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "if ") {
+			depth++
+		}
+		if trimmed == "fi" {
+			depth--
+			if depth == 0 {
+				return strings.Join(lines[start:i+1], "\n")
+			}
+		}
+	}
+	t.Fatalf("the %q branch is never closed", opener)
+	return ""
+}
+
+// TestTheIdentityJobObservesTheSemverTagRatherThanGatingOnIt records why the
+// pre-flight check stopped being a gate.
+//
+// It runs before the build, so the only question it can ask is whether the tag
+// exists — and that question cannot distinguish a resumed release from an
+// overwrite. Answering it with a failure made every resume impossible. The
+// authority is in `publish`, which runs after the build and can compare digests;
+// this guard exists so that nobody restores the fast-fail and re-breaks resume
+// while believing they are tightening something.
+func TestTheIdentityJobObservesTheSemverTagRatherThanGatingOnIt(t *testing.T) {
+	doc := withoutComments(readRepoFile(t, releaseWorkflow))
+	_, job, _ := strings.Cut(doc, "\n  identity:")
+	if end := regexp.MustCompile(`(?m)^  [a-z][a-z0-9-]*:`).FindStringIndex(job); end != nil {
+		job = job[:end[0]]
+	}
+
+	probe := strings.Index(job, "manifests/${GITHUB_REF_NAME}")
+	if probe < 0 {
+		return // it no longer looks at all, which is permitted: publish decides.
+	}
+	// If it does look, it must not refuse on presence alone.
+	after := job[probe:]
+	if regexp.MustCompile(`(?m)^\s*\[ "\$code" = "200" \].*exit 1`).MatchString(after) ||
+		strings.Contains(after, `refusing to overwrite`) {
+		t.Error("the identity job fails when the semver tag already exists.\n\n" +
+			"It runs before the build and cannot know which digest this commit " +
+			"produces, so presence alone is not evidence of an overwrite. Refusing " +
+			"here makes a resumed release impossible — which is how v0.3.2's " +
+			"GitHub Release came to need a manual path. `publish` compares digests " +
+			"and is the authority.")
 	}
 }
 
@@ -703,6 +947,11 @@ func TestNoDocumentRecommendsAMutableTagForDeployment(t *testing.T) {
 		"README.md",
 		"examples/kubernetes/README.md",
 		"docs/decisions/0062-oci-runtime-and-kubernetes-execution-model.md",
+		// The release notes, which `release-oci.yml` publishes as the GitHub
+		// Release body. Its Install section is the most-copied shell in the
+		// project, so a `:latest` there is pasted into more deployments than one
+		// in any of the documents above.
+		releaseNotes,
 	} {
 		doc, ok := readRepoFileOptional(t, name)
 		if !ok {
@@ -778,5 +1027,316 @@ func TestNoDocumentClaimsKubernetesAuthorityIsRequired(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GitHub Release publication (Phase 7.2-R2)
+// ---------------------------------------------------------------------------
+
+// releaseJob returns the `release` job block of release-oci.yml, comments
+// stripped. Cut at the next two-space-indented job key, because every nested key
+// also starts with two spaces once you are inside the block.
+func releaseJob(t *testing.T) string {
+	t.Helper()
+	doc := withoutComments(readRepoFile(t, releaseWorkflow))
+	_, job, found := strings.Cut(doc, "\n  release:")
+	if !found {
+		t.Fatal("release-oci.yml defines no `release` job, so no GitHub Release is ever created")
+	}
+	if end := regexp.MustCompile(`(?m)^  [a-z][a-z0-9-]*:`).FindStringIndex(job); end != nil {
+		job = job[:end[0]]
+	}
+	return job
+}
+
+// TestTheGitHubReleaseIsCreatedLastAndBuildsNothing pins the ordering half of
+// the release state machine.
+//
+// A GitHub Release is a claim that an artifact is available. Made before the
+// semver tag is published it is a link to a tag that does not resolve; made in
+// parallel with publication it is a race. So it depends on `publish`, which
+// itself depends on every gate, and `needs` is the enforcement — there is no
+// ordering inside a script to get wrong.
+//
+// It also builds nothing. A Release job that could produce an artifact would be
+// a second release pipeline, and the two would differ on the first edit that
+// touched only one.
+func TestTheGitHubReleaseIsCreatedLastAndBuildsNothing(t *testing.T) {
+	doc := withoutComments(readRepoFile(t, releaseWorkflow))
+	needs := jobNeeds(doc)
+
+	for _, dep := range []string{"publish", "stage-and-verify", "identity", "source", "integration"} {
+		if !reaches(needs, "release", dep) {
+			t.Errorf("the GitHub Release job does not depend on %q.\n\n"+
+				"Publishing a Release announces an artifact. Announcing one before %s "+
+				"has succeeded advertises something that may not exist.", dep, dep)
+		}
+	}
+
+	// Transitive reachability is the ordering property, but it is not the whole
+	// contract: `needs.<job>.outputs` resolves to an empty string unless <job> is
+	// named in this job's own `needs`. Dropping `stage-and-verify` from the list
+	// still satisfies the walk above, because `publish` depends on it — and the
+	// digest silently becomes "". Found by mutation.
+	declared := map[string]bool{}
+	for _, d := range needs["release"] {
+		declared[d] = true
+	}
+	for _, m := range regexp.MustCompile(`needs\.([a-z][a-z0-9-]*)\.outputs`).
+		FindAllStringSubmatch(releaseJob(t), -1) {
+		if !declared[m[1]] {
+			t.Errorf("the Release job reads needs.%s.outputs but does not list %q in "+
+				"its own `needs`.\n\n"+
+				"That expression resolves to an empty string, so the value would be "+
+				"silently blank rather than wrong-and-loud.", m[1], m[1])
+		}
+	}
+
+	job := releaseJob(t)
+	// Nothing that produces or moves an artifact belongs here.
+	for _, forbidden := range []struct{ needle, why string }{
+		{"docker build", "the Release job would be a second build"},
+		{"buildx build", "the Release job would be a second build"},
+		{"imagetools create", "the Release job would re-point a registry tag; `publish` owns that"},
+		{"docker push", "the Release job publishes no image"},
+		{"cosign sign", "signing happens against the digest, in the shared machinery"},
+		{"git tag", "the Git tag already exists and is immutable"},
+	} {
+		if strings.Contains(job, forbidden.needle) {
+			t.Errorf("the GitHub Release job runs %q: %s", forbidden.needle, forbidden.why)
+		}
+	}
+}
+
+// TestTheGitHubReleaseRechecksTheDigestItAnnounces pins the check that makes the
+// announcement honest.
+//
+// `publish` confirms the tag resolves to the validated digest at the moment it
+// writes it. This job runs later, and `imagetools create --tag` re-points rather
+// than refuses, so the window between them is real. Asking the registry again,
+// immediately before publishing the Release, is what turns "it was correct when
+// we wrote it" into "it is correct as we announce it".
+func TestTheGitHubReleaseRechecksTheDigestItAnnounces(t *testing.T) {
+	job := releaseJob(t)
+
+	if !strings.Contains(job, "needs.stage-and-verify.outputs.digest") {
+		t.Error("the Release job never reads the validated digest, so it cannot be " +
+			"comparing anything against it")
+	}
+	if !strings.Contains(job, "manifests/${GITHUB_REF_NAME}") {
+		t.Error("the Release job does not re-resolve the semver tag against the registry.\n\n" +
+			"Without that, a tag re-pointed between `publish` and this job would be " +
+			"announced as the validated release.")
+	}
+	// The comparison must actually compare. Checking only that an error message
+	// survives somewhere in the job is not enough: neutering the condition to
+	// `if false` left the message in place and the guard green. Found by
+	// mutation.
+	if !regexp.MustCompile(`if \[ "\$got" != "\$WANT" \]; then`).MatchString(job) {
+		t.Error("the digest re-check no longer compares the resolved digest against " +
+			"the validated one.\n\n" +
+			"An unreachable failure branch is not a check — the error text can " +
+			"survive a mutation that makes it impossible to reach.")
+	}
+	if !strings.Contains(job, "Refusing to announce it") {
+		t.Error("the digest re-check cannot fail the job")
+	}
+	// And the digest that is announced must be the one that was re-resolved,
+	// not the one the earlier job reported. Writing DIGEST from the registry
+	// response is what makes those the same value.
+	if !strings.Contains(job, `DIGEST=$got`) {
+		t.Error("the announced digest is not the one read back from the registry")
+	}
+}
+
+// TestTheGitHubReleaseTakesItsIdentityFromGit pins ADR 0062 §12 through this new
+// surface: the Git tag is the version authority, and nothing here may introduce
+// a second one.
+func TestTheGitHubReleaseTakesItsIdentityFromGit(t *testing.T) {
+	doc := withoutComments(readRepoFile(t, releaseWorkflow))
+	job := releaseJob(t)
+
+	if !strings.Contains(job, "needs.identity.outputs.version") {
+		t.Error("the Release job does not take its version from the `identity` job")
+	}
+	// A literal version anywhere in the job is a second authority that goes
+	// stale on the next release and names the wrong artifact.
+	if m := regexp.MustCompile(`v\d+\.\d+\.\d+`).FindString(job); m != "" {
+		t.Errorf("the Release job hard-codes the version %q; it must come from `identity`", m)
+	}
+	// The notes file is derived, for the same reason.
+	if !strings.Contains(job, `docs/releases/${VERSION}.md`) {
+		t.Error("the Release job does not derive its notes file from the release version")
+	}
+	// The tag must already exist and must be verified to. `--verify-tag` is what
+	// stops `gh` from creating one.
+	if !strings.Contains(job, "--verify-tag") {
+		t.Error("the Release job does not pass --verify-tag.\n\n" +
+			"Without it `gh release create` will happily create a tag that does not " +
+			"exist, which would make this job a version authority.")
+	}
+	// And no manual input anywhere in the workflow.
+	if strings.Contains(doc, "workflow_dispatch") || strings.Contains(doc, "inputs:") {
+		t.Error("release-oci.yml accepts an input. The tag is the only release authority.")
+	}
+}
+
+// TestTheGitHubReleaseIsIdempotentAndNonDestructive pins the re-run contract.
+//
+// A release workflow gets re-run — after an operational failure, or by hand. The
+// second run must not produce a second Release object, and must not repair a
+// disagreement by overwriting it: a published Release is a public object that
+// may already have been linked to, and once immutable it cannot be rewritten at
+// all. Verify, or stop for a human. Never delete and recreate.
+func TestTheGitHubReleaseIsIdempotentAndNonDestructive(t *testing.T) {
+	job := releaseJob(t)
+
+	// It must look before it creates.
+	view := strings.Index(job, "gh release view")
+	create := strings.Index(job, "gh release create")
+	if view < 0 || create < 0 {
+		t.Fatal("the Release job does not both check for and create a Release")
+	}
+	if view > create {
+		t.Error("the Release job creates before checking whether a Release exists, " +
+			"so a re-run would attempt a duplicate")
+	}
+
+	for _, forbidden := range []struct{ needle, why string }{
+		{"gh release delete", "a published Release is never deleted; that is the whole rule"},
+		{"gh release edit", "a re-run must verify an existing Release, not rewrite it"},
+		{"--clobber", "overwriting assets silently repairs a disagreement that needs a human"},
+	} {
+		if strings.Contains(job, forbidden.needle) {
+			t.Errorf("the Release job uses %q: %s", forbidden.needle, forbidden.why)
+		}
+	}
+
+	// A mismatch must stop the run rather than be reconciled.
+	if !strings.Contains(job, "Not overwriting it") {
+		t.Error("the Release job does not refuse a mismatching existing Release")
+	}
+	// The properties it compares. Dropping any one turns the idempotency path
+	// into an existence check, which would let a draft or an accidental
+	// prerelease pass as a completed release.
+	//
+	// Read from the `--json` field list rather than from the job text: the field
+	// names also appear in the Python that inspects them, so removing them from
+	// the query left the guard green while the values became unavailable. Found
+	// by mutation.
+	// The idempotency query specifically — the one whose output is compared —
+	// identified by where it writes rather than by being the first or the
+	// fattest match. The job runs three `gh release view` calls: a cheap
+	// existence probe, this comparison, and a final read-back. Searching for
+	// "some query that asks for everything" found the read-back and stayed green
+	// while the comparison had been narrowed to a single field. Found by
+	// mutation, twice — the first fix moved the bug rather than removing it.
+	want := []string{"tagName", "name", "isDraft", "isPrerelease", "body"}
+	q := regexp.MustCompile(`gh release view "\$VERSION" --json ([a-zA-Z,]+) > /tmp/existing\.json`).
+		FindStringSubmatch(job)
+	if q == nil {
+		t.Fatal("the idempotency check does not read the existing Release into a file " +
+			"for comparison, so there is nothing to verify it against")
+	}
+	for _, prop := range want {
+		if !strings.Contains(q[1], prop) {
+			t.Errorf("the idempotency comparison does not request %q (requested: %s).\n\n"+
+				"Without it the check degrades toward an existence test, and a draft "+
+				"or an accidental prerelease would pass as a completed release.",
+				prop, q[1])
+		}
+	}
+}
+
+// TestTheGitHubReleaseJobHoldsNothingItDoesNotNeed pins the negative half of the
+// permission model. The positive half — that `contents: write` exists and is
+// scoped to this job — lives in TestTheReleaseWorkflowUsesMinimalPermissions.
+//
+// Both escalations below are the plausible kind. `id-token: write` looks
+// harmless and would let this job mint an OIDC identity and sign things, which
+// would put a second signer in a pipeline whose whole signing story is that
+// there is one. `packages: write` looks convenient and would let the job that
+// writes public release text also re-point registry tags.
+func TestTheGitHubReleaseJobHoldsNothingItDoesNotNeed(t *testing.T) {
+	job := releaseJob(t)
+	perms, _, _ := strings.Cut(job, "\n    steps:")
+
+	for _, never := range []struct{ directive, why string }{
+		{"id-token: write", "this job signs nothing; signing happens against the digest in the shared machinery"},
+		{"packages: write", "this job publishes no image; `publish` owns the only registry write"},
+		{"actions: write", "nothing here rewrites workflow state"},
+	} {
+		if strings.Contains(perms, never.directive) {
+			t.Errorf("the GitHub Release job requests %q: %s", never.directive, never.why)
+		}
+	}
+
+	// The token must be the ambient one. A PAT is a long-lived credential whose
+	// compromise is silent and whose scope is whatever the person who made it
+	// happened to tick.
+	for _, m := range regexp.MustCompile(`secrets\.([A-Z_][A-Z0-9_]*)`).FindAllStringSubmatch(job, -1) {
+		if m[1] != "GITHUB_TOKEN" {
+			t.Errorf("the GitHub Release job uses secrets.%s.\n\n"+
+				"GITHUB_TOKEN is scoped to this run and expires with it; a repository "+
+				"secret is long-lived and outlives every reason it was created.", m[1])
+		}
+	}
+}
+
+// TestTheGitHubReleaseMarksStableVersionsLatest pins the Latest policy.
+//
+// `identity` accepts only vX.Y.Z today, so the prerelease branch is unreachable
+// — and it is written anyway. The rule belongs with the decision, not with the
+// tag-shape gate that currently happens to make it moot: widening that gate
+// later must not silently promote an `-rc.1` to the release users land on.
+func TestTheGitHubReleaseMarksStableVersionsLatest(t *testing.T) {
+	job := releaseJob(t)
+
+	if !strings.Contains(job, "--latest") {
+		t.Error("the Release job never marks a stable release Latest, so the Releases " +
+			"page would keep pointing at an older version")
+	}
+	if !strings.Contains(job, "--prerelease") {
+		t.Error("the Release job has no prerelease path. A vX.Y.Z-rc.N must never " +
+			"become the Latest release.")
+	}
+	if !strings.Contains(job, "v*.*.*-*") {
+		t.Error("the Release job does not distinguish a prerelease version from a stable one")
+	}
+	// And it must confirm the outcome rather than assume the flag worked.
+	if !strings.Contains(job, "releases/latest") {
+		t.Error("the Release job does not read Latest back from the API after publishing")
+	}
+}
+
+// TestTheGitHubReleaseCarriesTheSignedSBOM pins ADR 0062 §17's delivery model:
+// the SBOM goes on the Release *and* on the digest.
+//
+// The attached file must be the one that was attested. A second export would be
+// a second document with no signature over it, and the Release would be offering
+// the unsigned one.
+func TestTheGitHubReleaseCarriesTheSignedSBOM(t *testing.T) {
+	job := releaseJob(t)
+	shared := withoutComments(readRepoFile(t, sharedWorkflow))
+
+	if !strings.Contains(job, "sbom.cdx.json") {
+		t.Error("the GitHub Release does not carry the CycloneDX SBOM (ADR 0062 §17)")
+	}
+	if !strings.Contains(job, "download-artifact") {
+		t.Error("the Release job does not download the SBOM produced by the shared machinery")
+	}
+	// Re-exporting it here would produce an unattested copy.
+	for _, forbidden := range []string{"trivy-action", "cosign attest", "cosign verify"} {
+		if strings.Contains(job, forbidden) {
+			t.Errorf("the Release job runs %q; the SBOM it publishes must be the "+
+				"artifact the shared machinery already exported and signed, not a "+
+				"second one", forbidden)
+		}
+	}
+	// And the producing side must still upload it.
+	if !strings.Contains(shared, "upload-artifact") || !strings.Contains(shared, "sbom.cdx.json") {
+		t.Error("the shared machinery no longer publishes the SBOM artifact the " +
+			"Release job consumes")
 	}
 }
