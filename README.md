@@ -680,6 +680,12 @@ Reproducibility is a consistency property, not a safety proof: a reproducible bu
 compromised source reproduces the compromise. Signing and provenance are what address
 authenticity.
 
+Releases are produced by [`.github/workflows/release-oci.yml`](.github/workflows/release-oci.yml),
+which is triggered by a `v*` tag, stages the image under `sha-<commit>`, validates that digest —
+scan, SBOM, provenance, signature, and a native amd64 pull-by-digest smoke — and only then points
+the semver tag at the digest that passed. **That workflow has never run**, so nothing exists at
+GHCR yet.
+
 Build an image yourself with the same recipe a release uses:
 
 ```sh
