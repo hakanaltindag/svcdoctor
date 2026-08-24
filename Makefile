@@ -227,6 +227,90 @@ postgres-test: ## Run the PostgreSQL integration suite against a running server
 
 integration-postgres: postgres-up postgres-test postgres-down ## Full PostgreSQL validation gate
 
+# --- Redis and Valkey integration validation (Phase 7.5 gate) ---------------
+#
+# Deliberately not part of `check`, for the reason the other three are not: they
+# need Docker, while the ordinary gate must stay fast and hermetic.
+# See test/integration/redis/README.md.
+#
+# The two suites share no container and are never run concurrently: a Valkey
+# server answering on a Redis port would make "server=valkey" a coincidence
+# rather than a measurement.
+
+REDIS_ENV := test/integration/redis/env
+REDIS_COMPOSE := docker compose -f $(REDIS_ENV)/compose.yaml
+VALKEY_ENV := test/integration/valkey/env
+VALKEY_COMPOSE := docker compose -f $(VALKEY_ENV)/compose.yaml
+
+.PHONY: redis-up redis-down redis-test integration-redis
+.PHONY: valkey-up valkey-down valkey-test integration-valkey
+
+# Readiness is asked at the protocol level, not at the container level. A running
+# container that has not yet bound its port would make the first scenario measure
+# a race instead of a server.
+redis-up: ## Start the Redis validation servers
+	@$(REDIS_ENV)/gen-certs.sh
+	@$(REDIS_COMPOSE) up -d
+	@printf 'waiting for redis'
+	@for i in $$(seq 1 60); do \
+		if docker exec svcd-redis redis-cli ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-redis-pw redis-cli -a s3cr3t-pw ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-redis-acl redis-cli ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-redis-cluster redis-cli ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-redis-replica redis-cli ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-redis-sentinel redis-cli -p 26379 ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-redis-tls redis-cli --tls --cacert /etc/redis-certs/server.crt \
+				-a tls-pw ping 2>/dev/null | grep -q PONG; then \
+			printf ' ready\n'; exit 0; fi; \
+		printf '.'; sleep 1; \
+	done; \
+	printf '\nservers did not become ready\n'; \
+	printf '\n--- container state ---\n'; \
+	$(REDIS_COMPOSE) ps || true; \
+	for svc in redis redis-pw redis-acl redis-tls redis-mtls redis-replica redis-cluster redis-sentinel; do \
+		printf '\n--- %s (last 30 lines) ---\n' "$$svc"; \
+		$(REDIS_COMPOSE) logs --tail=30 --no-color "$$svc" 2>&1 || true; \
+	done; \
+	exit 1
+
+redis-down: ## Stop the Redis validation servers and delete their volumes
+	@$(REDIS_COMPOSE) down -v --remove-orphans
+
+redis-test: ## Run the Redis integration suite against running servers
+	$(GO) test -tags integration -count=1 -timeout 15m ./test/integration/redis/...
+
+integration-redis: redis-up redis-test redis-down ## Full Redis validation gate
+
+valkey-up: ## Start the Valkey validation servers
+	@$(VALKEY_ENV)/gen-certs.sh
+	@$(VALKEY_COMPOSE) up -d
+	@printf 'waiting for valkey'
+	@for i in $$(seq 1 60); do \
+		if docker exec svcd-valkey valkey-cli ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-valkey-acl valkey-cli ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-valkey-cluster valkey-cli ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-valkey-replica valkey-cli ping 2>/dev/null | grep -q PONG \
+			&& docker exec svcd-valkey-tls valkey-cli --tls --cacert /etc/valkey-certs/server.crt \
+				-a tls-pw ping 2>/dev/null | grep -q PONG; then \
+			printf ' ready\n'; exit 0; fi; \
+		printf '.'; sleep 1; \
+	done; \
+	printf '\nservers did not become ready\n'; \
+	$(VALKEY_COMPOSE) ps || true; \
+	for svc in valkey valkey-acl valkey-tls valkey-replica valkey-cluster; do \
+		printf '\n--- %s (last 30 lines) ---\n' "$$svc"; \
+		$(VALKEY_COMPOSE) logs --tail=30 --no-color "$$svc" 2>&1 || true; \
+	done; \
+	exit 1
+
+valkey-down: ## Stop the Valkey validation servers and delete their volumes
+	@$(VALKEY_COMPOSE) down -v --remove-orphans
+
+valkey-test: ## Run the Valkey integration suite against running servers
+	$(GO) test -tags integration -count=1 -timeout 15m ./test/integration/valkey/...
+
+integration-valkey: valkey-up valkey-test valkey-down ## Full Valkey validation gate
+
 # --- Redpanda integration validation (Phase 7.0b gate) ----------------------
 #
 # Deliberately not part of `check`, for the reason the other two are not: it

@@ -1,0 +1,154 @@
+# The Redis BASIC validation environment.
+#
+# Seven servers, each existing because one scenario cannot be measured without
+# it. Nothing here is shared between scenarios that must stay distinguishable:
+# a server that both required a password and served a replica would make
+# "the credential was withheld" and "the role is replica" impossible to attribute.
+#
+# The image tag is exact. `latest` would make a passing suite mean nothing a
+# week later, and docs/COMPATIBILITY.md records the version this file pins.
+services:
+  # R-00, R-11, R-18, R-19 baseline: plaintext, no authentication at all.
+  redis:
+    image: redis:8.2.1-alpine
+    container_name: svcd-redis
+    ports:
+      - "56379:6379"
+    command: ["redis-server", "--protected-mode", "no"]
+
+  # R-01, R-02, R-13: a password, and nothing else.
+  redis-pw:
+    image: redis:8.2.1-alpine
+    container_name: svcd-redis-pw
+    ports:
+      - "56380:6379"
+    command: ["redis-server", "--protected-mode", "no", "--requirepass", "s3cr3t-pw"]
+
+  # R-03 to R-07: the ACL matrix. Four users whose differences are the point:
+  #   app        can run PING
+  #   noperm     authenticates and cannot run PING
+  #   disabled   is off, so AUTH is refused
+  #   nopassuser accepts every password
+  redis-acl:
+    image: redis:8.2.1-alpine
+    container_name: svcd-redis-acl
+    ports:
+      - "56381:6379"
+    volumes:
+      - ./users.acl:/etc/redis/users.acl:ro
+    command:
+      - redis-server
+      - --protected-mode
+      - "no"
+      - --aclfile
+      - /etc/redis/users.acl
+
+  # R-08, R-09, R-10, R-14: TLS only.
+  #
+  # `tls-auth-clients no` is deliberate and is the fixture's honest admission of
+  # a product limit: Redis defaults that setting to `yes`, svcdoctor implements
+  # no client certificate (ADR 0064 section 8), and a fixture that hid the
+  # default behind a passing test would be claiming an ability svcdoctor does
+  # not have. The default case is measured in R-20 instead, against its own
+  # server, where the expected outcome is a handshake failure.
+  redis-tls:
+    image: redis:8.2.1-alpine
+    container_name: svcd-redis-tls
+    ports:
+      - "56382:6379"
+    volumes:
+      - ./certs:/etc/redis-certs:ro
+    command:
+      - redis-server
+      - --protected-mode
+      - "no"
+      - --port
+      - "0"
+      - --tls-port
+      - "6379"
+      - --tls-cert-file
+      - /etc/redis-certs/server.crt
+      - --tls-key-file
+      - /etc/redis-certs/server.key
+      - --tls-ca-cert-file
+      - /etc/redis-certs/server.crt
+      - --tls-auth-clients
+      - "no"
+      - --requirepass
+      - tls-pw
+
+  # R-20: the Redis default, `tls-auth-clients yes`. svcdoctor presents no client
+  # certificate, so the handshake must fail — truthfully, and without claiming
+  # the endpoint is unhealthy.
+  redis-mtls:
+    image: redis:8.2.1-alpine
+    container_name: svcd-redis-mtls
+    ports:
+      - "56383:6379"
+    volumes:
+      - ./certs:/etc/redis-certs:ro
+    command:
+      - redis-server
+      - --protected-mode
+      - "no"
+      - --port
+      - "0"
+      - --tls-port
+      - "6379"
+      - --tls-cert-file
+      - /etc/redis-certs/server.crt
+      - --tls-key-file
+      - /etc/redis-certs/server.key
+      - --tls-ca-cert-file
+      - /etc/redis-certs/server.crt
+
+  # R-15: a replica of the baseline server, so `role` is measured rather than
+  # asserted.
+  redis-replica:
+    image: redis:8.2.1-alpine
+    container_name: svcd-redis-replica
+    depends_on:
+      - redis
+    ports:
+      - "56384:6379"
+    command:
+      - redis-server
+      - --protected-mode
+      - "no"
+      - --replicaof
+      - redis
+      - "6379"
+
+  # R-16: one node with cluster mode enabled. It is deliberately **not** a formed
+  # cluster: BASIC measures the endpoint journey and no topology, so a node that
+  # reports mode=cluster is the whole of what this scenario needs.
+  redis-cluster:
+    image: redis:8.2.1-alpine
+    container_name: svcd-redis-cluster
+    ports:
+      - "56385:6379"
+    command:
+      - redis-server
+      - --protected-mode
+      - "no"
+      - --cluster-enabled
+      - "yes"
+
+  # R-17: a real Sentinel. It answers PING, AUTH and HELLO, which is exactly why
+  # the guard exists.
+  redis-sentinel:
+    image: redis:8.2.1-alpine
+    container_name: svcd-redis-sentinel
+    depends_on:
+      - redis
+    ports:
+      - "56386:26379"
+    volumes:
+      - ./sentinel.conf:/etc/redis/sentinel.conf:ro
+    # Sentinel rewrites its own configuration at runtime, and a bind-mounted file
+    # cannot be renamed over. Copying it to a writable path first is what stops
+    # the container filling its log with "Resource busy" every few seconds.
+    command:
+      - sh
+      - -c
+      - cp /etc/redis/sentinel.conf /tmp/sentinel.conf && redis-sentinel /tmp/sentinel.conf

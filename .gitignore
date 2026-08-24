@@ -54,3 +54,7 @@ test-results/
 *.local.json
 *.local.yaml
 *.local.yml
+
+# Throwaway TLS material for the Redis and Valkey validation environments.
+test/integration/redis/env/certs/
+test/integration/valkey/env/certs/
