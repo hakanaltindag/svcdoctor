@@ -58,6 +58,7 @@ Usage:
 Services:
   kafka       diagnose a Kafka bootstrap endpoint
   postgres    diagnose a PostgreSQL endpoint
+  redis       diagnose a Redis or Valkey endpoint
 
 Run "svcdoctor diagnose <service> --help" for its flags.
 `)
@@ -232,5 +233,93 @@ Exit codes:
   4   a report was produced but svcdoctor's own execution did not finish
 
 Exit code 0 does not mean a session was established. Read the report.
+`)
+}
+
+func (a *App) usageRedis(w io.Writer) {
+	_, _ = fmt.Fprint(w, `Diagnose a Redis or Valkey endpoint.
+
+svcdoctor behaves as the client you describe and reports what it observed at
+every stage: name resolution, the connection, the TLS handshake, the RESP
+capability exchange, authentication and one usability probe.
+
+One command diagnoses both implementations. Which one answered is read from the
+endpoint's own reply and shown in the report; typing "redis" is not a claim that
+the endpoint is Redis.
+
+What this measures, and what it does not:
+  * It names no key. There is no read, no write and no keyspace access of any
+    kind, so no customer data is touched and none can appear in the report.
+  * A successful probe means this endpoint answered PING on this connection. It
+    does not mean Redis is healthy, that a backend behind a proxy is available,
+    that a cluster is healthy, or that your application's own commands would be
+    permitted.
+  * Cluster mode is observed and reported. Cluster topology is NOT measured: no
+    node is discovered, no slot coverage is checked and no advertised address is
+    probed.
+  * A Sentinel endpoint is detected and the run stops there, before any
+    credential is sent. Sentinel itself is not diagnosed.
+  * The credential is sent at most once, in one AUTH command, and only over a
+    channel whose peer identity was verified. A plaintext connection and a
+    connection with --tls-insecure are both refused, and neither a loopback nor
+    a private address changes that. The credential is sent at most once.
+
+Usage:
+  svcdoctor diagnose redis --host <host> [flags]
+
+Required:
+  --host string             the endpoint to diagnose: a hostname or an IPv4 or
+                            IPv6 address literal. An address is connected to
+                            directly and nothing is resolved, so the report
+                            records no name resolution for one. Give IPv6
+                            unbracketed and separately from the port:
+                            --host ::1 --port 6379
+
+Connection:
+  --port uint               the port to connect to (default 6379)
+
+Execution budget:
+  --timeout duration        bound on the whole run (default 30s)
+  --step-timeout duration   bound on each individual exchange (default 10s)
+
+Transport encryption:
+  --tls string              "require" or "disable" (default "require").
+                            Redis serves TLS on a separate port rather than
+                            negotiating it in band, so "require" performs an
+                            ordinary handshake on the port you named and does
+                            not look for a TLS port. "disable" performs no
+                            handshake, so the three flags below describe
+                            nothing and are refused rather than ignored
+  --tls-ca-file path        PEM trust source; empty uses the system store.
+                            A supplied file replaces the system roots, it does
+                            not add to them, so only its issuers are accepted
+  --tls-server-name string  identity to verify and send in SNI; empty uses
+                            the host
+  --tls-insecure            do not verify the endpoint's identity. Explicit,
+                            never automatic, and recorded in the report. The
+                            channel is then unverified, which the credential
+                            transport policy refuses, so a credential would be
+                            withheld rather than sent
+
+Credential:
+  --username string         the ACL user to authenticate as. Omit it to send
+                            the password-only form of AUTH. The two forms are
+                            not equivalent: against a server whose default user
+                            is configured nopass, the password-only form
+                            reports that no password is configured and the
+                            username form succeeds with any password. svcdoctor
+                            sends the form you asked for and never substitutes
+                            "default"
+  --password-file path      read the credential from a file
+  --password-stdin          read the credential from stdin
+                            The two sources are mutually exclusive, and there
+                            is no flag that takes a password as a value: an
+                            argument is visible to every process on the host.
+                            With no credential at all, a run against an endpoint
+                            that demands one records that and exits 0
+
+Output:
+  --output string           "text" or "json" (default "text")
+  --shareable               produce the redacted report intended for sharing
 `)
 }

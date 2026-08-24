@@ -70,6 +70,7 @@ type App struct {
 	// reverse.
 	diagnosePostgres func(context.Context, app.PostgresParams) (app.Result, error)
 	diagnoseKafka    func(context.Context, app.KafkaParams) (app.Result, error)
+	diagnoseRedis    func(context.Context, app.RedisParams) (app.Result, error)
 }
 
 // New builds the production command environment.
@@ -81,6 +82,7 @@ func New(stdin io.Reader, stdout, stderr io.Writer, version string) *App {
 		Version:          version,
 		diagnosePostgres: app.DiagnosePostgres,
 		diagnoseKafka:    app.DiagnoseKafka,
+		diagnoseRedis:    app.DiagnoseRedis,
 	}
 }
 
@@ -153,6 +155,9 @@ func (a *App) diagnose(ctx context.Context, args []string) int {
 
 	case "kafka":
 		return a.diagnoseKafkaCommand(ctx, args[1:])
+
+	case "redis":
+		return a.diagnoseRedisCommand(ctx, args[1:])
 
 	default:
 		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: unknown service %q\n\n", args[0])
