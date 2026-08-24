@@ -221,8 +221,8 @@ the same run"). Evidence is immutable (ADR 0003), so the first node is never ame
 | `-NOPERM` | **UNKNOWN** | `AUTHZ_DENIED` | OK, WARN finding | false | 0 |
 | `-LOADING` | UNKNOWN | `PROTOCOL_UNEXPECTED_RESPONSE` + prefix attribute | OK, WARN | false | 0 |
 | `-MASTERDOWN` | UNKNOWN | `PROTOCOL_UNEXPECTED_RESPONSE` + prefix attribute | OK, WARN | false | 0 |
-| `-NOAUTH` | UNKNOWN | `PROTOCOL_UNEXPECTED_RESPONSE` + prefix attribute | OK | false | 0 |
-| generic `-ERR` | UNKNOWN | `PROTOCOL_UNEXPECTED_RESPONSE` | OK | false | 0 |
+| `-NOAUTH` | UNKNOWN | `PROTOCOL_UNEXPECTED_RESPONSE` + prefix attribute | OK, WARN | false | 0 |
+| generic `-ERR` | UNKNOWN | `PROTOCOL_UNEXPECTED_RESPONSE` | OK, WARN | false | 0 |
 | local timeout | UNKNOWN | `EXEC_LOCAL_TIMEOUT` | either | **true** | 4 |
 | peer close | FAIL | `PROTOCOL_PEER_CLOSED` | PROBLEMS_FOUND | false | 1 |
 | malformed frame | FAIL | `PROTOCOL_MALFORMED_RESPONSE` | PROBLEMS_FOUND | false | 1 |
@@ -230,6 +230,21 @@ the same run"). Evidence is immutable (ADR 0003), so the first node is never ame
 **`NOPERM` is UNKNOWN, not FAIL.** The service did not fail; svcdoctor's measurement was blocked.
 That is the frozen rule that missing privilege is not healthy and not a FAIL, and it matches the
 `POSTGRES_CREDENTIAL_NOT_CONFIGURED` precedent: WARN, status OK, complete run, exit 0.
+
+**Amended in Phase 7.6B: the WARN column above.** As drafted, the `-NOAUTH` and generic `-ERR`
+rows read `OK` where `LOADING` and `MASTERDOWN` read `OK, WARN`, which implied those two produce
+no finding. They always did: `REDIS_ENDPOINT_NOT_SERVING` keys on the *failure class*, so every
+condition reaching `PROTOCOL_UNEXPECTED_RESPONSE` produces it. The table was the incomplete half
+and is corrected; the producer is not narrowed, because a probe refused for a condition svcdoctor
+did not anticipate deserves the same attention as one it did. `SummaryStatus`, completeness and
+exit code are unchanged in every row — WARN is not ERROR or CRITICAL — so the three product
+invariants in section 13 are untouched.
+
+What the audit did change is the finding's **wording**. Its detail asserted that the refusal was
+"the endpoint's own statement about its readiness rather than a connectivity or credential
+problem", which is false for `-NOAUTH` — a credential condition, and the one a reader would most
+readily test the sentence against. The text now restates the endpoint's condition without
+classifying it.
 
 **On `NOPERM`, svcdoctor does not try another command.** Not `ECHO`, not `ROLE`, not `INFO`. Each
 attempt is another ACL-log entry and another guess, and it converts a clean authorization answer
@@ -355,13 +370,41 @@ largest common value", falsified by a real Redpanda salt. So this record freezes
 > allocation.** The parser never allocates on a *declared* length. It allocates as bytes arrive,
 > decrementing a per-reply budget, and aborts the moment the budget is exhausted.
 
-Depth, element count and per-field length are then bounded implicitly and exactly by the byte
-budget, with no second number that can disagree with the first. This makes the safety property
-independent of guessing well, so the budget can be generous and carry no interoperability risk.
+Per-field length and total heap are then bounded implicitly and exactly by the byte budget. This
+makes the safety property independent of guessing well, so the budget can be generous and carry
+no interoperability risk.
 
-**No numeric constant is authorized before a measurement exists.** Phase 7.5 sets exactly one
-number, measured against the largest legitimate reply the three allowlisted commands can produce,
-records the measurement, and pins it by value — as Phase 7.0b did for SCRAM.
+**No numeric constant is authorized before a measurement exists.** Phase 7.5 sets the numbers,
+measured against the largest legitimate reply the three allowlisted commands can produce, records
+the measurement, and pins each by value — as Phase 7.0b did for SCRAM.
+
+### Amended in Phase 7.6B: the byte budget does not bound the stack
+
+As drafted, this section claimed that depth and element count were bounded "implicitly and
+exactly by the byte budget, with no second number that can disagree with the first", and that
+Phase 7.5 would set "exactly one number". **The first claim is false and the implementation is
+right to contradict it.**
+
+A byte budget bounds the heap. It does not bound recursion: `*1\r\n` costs four bytes per level,
+so 64 KiB of it is sixteen thousand frames of a recursive-descent parser — bounded memory and
+unbounded stack. `TestNestingBombIsBoundedByDepthNotBytes` is that construction, and it is why
+the depth ceiling is a separate control rather than a redundant one.
+
+The implemented model is **one budget and two derived ceilings**, which is the shape the
+argument above actually supports:
+
+| Control | Value | What it bounds | How it was derived |
+|---|---|---|---|
+| `MaxReplySize` | 64 KiB | total bytes read, and therefore heap, per command reply | `PROTO_INLINE_MAX_SIZE` (`redis/src/server.h:192`), the largest of Redis's own single-unit protocol constants. Measured headroom: Redis 8.2.1's `HELLO` reply is 688 bytes, Valkey 8.1.1's is 146 |
+| `maxArrayElements` | `MaxReplySize / 4` | declared element count | Arithmetic, not choice. The smallest legal RESP2 element is four bytes (`:0\r\n`), so a larger count is unsatisfiable inside the budget and refusing it at the header loses no legal reply |
+| `maxDepth` | 4 | nesting, and therefore stack | The deepest legitimate reply the frozen allowlist can produce is `HELLO`'s, at three levels, plus exactly one level of slack |
+
+The invariant the section exists to state is unchanged and remains binding: **nothing is ever
+allocated on a length the peer declared.** Each control is pinned by value and has
+limit−1/limit/limit+1 coverage in `internal/adapter/redis/wire/wire_test.go`. The two ceilings
+are derived from the budget and the allowlist rather than guessed, so neither reintroduces the
+falsified "8× the largest common value" reasoning ADR 0061 discredited — which is what "no
+second number that can disagree with the first" was reaching for, and states correctly.
 
 ## 15. Rejected alternatives
 

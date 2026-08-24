@@ -248,6 +248,18 @@ linters:
               desc: the command boundary consumes a report; producing findings is diagnosis work
             - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter/postgres/wire
               desc: a wire package holds the protocol and the authorized Reveal; the CLI reaches neither
+            # Redis's wire package earned the same denial in Phase 7.6B, and the
+            # reason it was missing is worth recording: this list enumerates
+            # packages, so a service that arrives after the rule is written is
+            # unprotected until somebody remembers it. Phase 7.5 added Redis and
+            # nobody did, so `internal/cli` could import the package holding the
+            # third authorized security.Reveal and lint clean. The enumeration
+            # stays — it is what produces the lint-time message — and
+            # TestTheCommandBoundaryReachesNoWirePackage now states the rule
+            # service-agnostically, so a fourth service is covered on the day it
+            # lands rather than on the day somebody edits this file.
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter/redis/wire
+              desc: a wire package holds the protocol and the authorized Reveal; the CLI reaches neither
             - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter/kafka
               desc: >-
                 the Kafka command builds app.KafkaParams and nothing else; a

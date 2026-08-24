@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"strings"
 	"testing"
 )
@@ -166,5 +167,71 @@ func TestRedisHelpStatesTheProductBoundary(t *testing.T) {
 		if strings.Contains(help, forbidden) {
 			t.Errorf("the help text claims %q", forbidden)
 		}
+	}
+}
+
+// --- the command boundary reaches no wire package ---------------------------
+
+// TestTheCommandBoundaryReachesNoWirePackage states the CLI layering rule the
+// way the rule is actually meant, rather than one service at a time.
+//
+// # Why this exists beside depguard
+//
+// `.golangci.yml`'s `cli-composes-and-does-not-conclude` enumerates packages,
+// and an enumeration only protects what somebody remembered to enumerate. Phase
+// 7.5 added Redis; nobody added the entry; Phase 7.6A measured the consequence
+// and found `internal/cli` could import `internal/adapter/redis/wire` — the
+// package holding the third authorized `security.Reveal` — with zero lint
+// issues, while the identical PostgreSQL import was rejected.
+//
+// The depguard entry is the fix for Redis and it is what produces the message a
+// developer sees. This is the fix for the *class*: it names no service, so a
+// fourth adapter's wire package is denied on the day it is created.
+//
+// The rule: a wire package is the last layer before the socket. It holds the
+// protocol encoding and the one authorized call that turns a masked secret into
+// bytes. The command boundary composes a run and renders its report; it has no
+// business holding either, and `forbidigo` already bans the call itself. This
+// bans the import that would put it in reach.
+func TestTheCommandBoundaryReachesNoWirePackage(t *testing.T) {
+	const modulePath = "github.com/hakanaltindag/svcdoctor/"
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("reading internal/cli: %v", err)
+	}
+
+	checked := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+		checked++
+
+		for _, imported := range file.Imports {
+			path := strings.Trim(imported.Path.Value, `"`)
+			if !strings.HasPrefix(path, modulePath) {
+				continue
+			}
+			// A wire package is any package named `wire` under an adapter, and
+			// the shape is matched rather than the service, deliberately.
+			trimmed := strings.TrimPrefix(path, modulePath)
+			if strings.HasPrefix(trimmed, "internal/adapter/") &&
+				(trimmed == "internal/adapter/wire" || strings.HasSuffix(trimmed, "/wire")) {
+				t.Errorf("%s imports %s.\n\n"+
+					"A wire package holds the protocol and the authorized "+
+					"security.Reveal; the command boundary reaches neither. Compose "+
+					"the run through internal/app instead.", name, path)
+			}
+		}
+	}
+
+	if checked == 0 {
+		t.Fatal("no Go files were parsed; this guard would pass vacuously")
 	}
 }

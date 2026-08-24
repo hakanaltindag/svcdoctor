@@ -123,7 +123,7 @@ from the endpoint's own `HELLO` reply and shown in the report; the verb is not a
 | Platform | Wire | TLS | Auth overlap | Real tested | Level | Known gaps |
 |---|---|---|---|---|---|---|
 | **Redis** 8.2.1 | RESP2 | verified TLS, custom CA, IP SAN, server-name override | **`AUTH` password ✓, `AUTH user password` ✓** | **YES** — committed `test/integration/redis` fixture, 21 scenarios | **3 — SUPPORTED BASIC** | Direct endpoint only. See the four limits below |
-| **Valkey** 8.1.1 | RESP2 | verified TLS, custom CA | **`AUTH` password ✓, `AUTH user password` ✓** | **YES** — committed `test/integration/valkey` fixture, 8 scenarios | **3 — SUPPORTED BASIC** | Same four limits. Same production adapter, with no vendor branch anywhere |
+| **Valkey** 8.1.1 | RESP2 | verified TLS, custom CA | **`AUTH` password ✓, `AUTH user password` ✓** | **YES** — committed `test/integration/valkey` fixture, 9 scenarios | **3 — SUPPORTED BASIC** | Same four limits. Same production adapter, with no vendor branch anywhere |
 | Any other Redis or Valkey version | RESP2 | — | — | **NO** | **0 — NOT EVALUATED** | Tested at the two exact versions above and nowhere else. svcdoctor does no version arithmetic, so it makes no prediction about any other release |
 | **Redis Cluster** (as a cluster) | — | — | — | **NO** | **0 — NOT EVALUATED** | Topology is **not measured**. See below |
 | **Redis Sentinel** | — | — | — | detection only | **0 — NOT EVALUATED** | Detection is validated; Sentinel is **not supported** and not diagnosed |
