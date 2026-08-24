@@ -850,13 +850,65 @@ and therefore called a runner without an IPv6 route a broken trust store. That l
 reintroduced, inside the workflow that validates svcdoctor, precisely the conflation svcdoctor
 exists to refuse.
 
-### Open: two SBOM formats
+## 21b. Supply-chain closure (Phase 7.1-VR)
 
-`--sbom=true` makes BuildKit attach an **SPDX** attestation while the canonical CycloneDX SBOM
-is attached by cosign. Both are bound to the digest, by different mechanisms, and §17 says one
-format only. This is recorded rather than fixed: `--sbom=false` changes the release build
-recipe, and changing it unreviewed during a validation phase is the failure mode the phase
-exists to avoid. It needs a decision here before v0.3.0.
+Phase 7.1-V left two release blockers open. Both are closed here, and neither needed an
+architectural change.
+
+### One canonical SBOM format
+
+**[FACT] The defect, measured on the published index rather than inferred from flags.** Each
+of the two BuildKit attestation manifests carried two in-toto predicates:
+
+| Predicate | Size | Producer |
+|---|---|---|
+| `https://spdx.dev/Document` | 636 461 B | BuildKit `--sbom=true` |
+| `https://slsa.dev/provenance/v1` | 29 629 B | BuildKit `--provenance=mode=max` |
+
+On top of those, cosign attached the CycloneDX SBOM to the index. Three SBOM-bearing objects
+in two formats at two levels: one per platform, one on the index.
+
+**[POLICY] BuildKit SBOM: off. BuildKit provenance: on. Canonical SBOM: CycloneDX JSON,
+generated explicitly and attached with `cosign attest --type cyclonedx` to the index digest.**
+
+The reason is not tidiness, and "more SBOMs are better" is the wrong instinct. Two
+independently produced inventories of the same image can disagree about component names,
+versions and base-package modelling. An operator asking *what is in this image* would have had
+two answers and no rule for choosing, and every consumer of the metadata would have had to
+reconcile them. §17 already chose one format; this makes the artifact match the decision.
+
+**[GUIDANCE] `--sbom` and `--provenance` look like a matched pair and are not.** They shared an
+attestation manifest, so disabling the first could plausibly have taken the second with it.
+Provenance answers a different question — how and from what this was built — and nothing else
+produces it. The pipeline therefore proves both facts in one pass, against the registry: it
+fetches every attestation manifest, reads its layers' predicate types, and fails if any SPDX
+document is present **or** if no SLSA provenance is. Checking the artifact rather than the
+build flags is deliberate: an upstream default change would show up there and in no diff.
+
+### cosign forward compatibility
+
+**[FACT] The pipeline was running cosign v2.5.2.** `sigstore/cosign-installer` was pinned by
+commit SHA, which pins the *action* and not the binary it downloads; v2.5.2 was that action's
+default. A signing pipeline should not learn its own tool version from an upstream default, so
+`cosign-release` is now pinned explicitly alongside the action SHA.
+
+**[FACT] cosign v4 is announced but unreleased.** The current line is **v3.1.3**, which is what
+this pipeline pins. `cosign triangulate` is *deprecated* in v3 and is removed when v4 ships;
+the `cosign-installer` action's own major version (v4.x) is not cosign's. Nothing here claims
+to run v4 — it claims not to depend on what v4 removes.
+
+**[POLICY] Verification is semantic, never a storage-layout assumption.** The removed
+`triangulate` check asked cosign where a signature lived and compared the answer to a string
+this repository built from the same digest — a tautology that could only fail if cosign changed
+its formatting, and one that depended on cosign's backing-tag convention.
+
+What replaces it reads what the *verifier* attested to, after `cosign verify` and
+`cosign verify-attestation` have checked signature, certificate identity and transparency log:
+the signature payload's `docker-manifest-digest`, and the attestation's decoded in-toto subject,
+predicate type (`https://cyclonedx.org/bom`) and `bomFormat`. It also confirms the signed digest
+is the image *index* and not one of its platform manifests. Seeing a `.sig` tag says something
+exists; verification says a signed object is valid for this digest and this identity. Backing
+tags remain useful evidence and are not a gate.
 
 ## 22. Validation
 

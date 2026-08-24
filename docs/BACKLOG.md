@@ -3899,6 +3899,80 @@ image. Each was invisible locally and would have fired on the release run.
       identity derivation and can publish nothing, since the shared machinery is
       not on `main`.
 
+## Phase 7.1-VR — OCI supply-chain closure: IMPLEMENTED, PENDING REMOTE RE-VALIDATION
+
+Phase 7.1-V passed but left two release blockers. Both are closed here. Neither needed an
+architectural change, and no product Go was touched.
+
+### Blocker 1 — two SBOM formats
+
+**Measured on the published index, not inferred from flags.** Each of the two BuildKit
+attestation manifests carried two in-toto predicates:
+
+| Predicate | Size | Producer |
+|---|---|---|
+| `https://spdx.dev/Document` | 636 461 B | BuildKit `--sbom=true` |
+| `https://slsa.dev/provenance/v1` | 29 629 B | BuildKit `--provenance=mode=max` |
+
+On top of those, cosign attached the CycloneDX SBOM to the index — three SBOM-bearing objects
+in two formats at two levels.
+
+`--sbom=false`; `--provenance=mode=max` unchanged. The canonical SBOM stays CycloneDX JSON,
+generated explicitly and attached with `cosign attest --type cyclonedx` to the index digest.
+
+The two flags **look like a matched pair and are not**: they shared an attestation manifest, so
+disabling the first could plausibly have taken the second with it. Provenance answers a
+different question and nothing else produces it. The pipeline now proves both facts in one
+pass **against the registry** — it fetches every attestation manifest, reads its layers'
+predicate types, and fails if any SPDX document is present *or* if no SLSA provenance is.
+Checking the artifact rather than the build flags is the point: an upstream default change
+would show up there and in no diff.
+
+### Blocker 2 — `cosign triangulate`
+
+Two findings, and the first was not in the brief.
+
+**The pipeline was running cosign v2.5.2.** `sigstore/cosign-installer` was pinned by commit
+SHA — which pins the *action*, not the binary it downloads — and v2.5.2 was that action's
+default. A signing pipeline should not learn its own tool version from an upstream default.
+`cosign-release` is now pinned explicitly at **v3.1.3** alongside the action SHA, and the
+workflow prints `cosign version` so the log records what actually ran.
+
+**cosign v4 is announced but unreleased.** The current line is v3.1.3; `cosign triangulate` is
+*deprecated* in v3 and is removed when v4 ships. The `cosign-installer` **action** is at v4.1.2,
+which is the action's version and not cosign's — its default `cosign-release` is v3.0.6. So
+this pipeline does not run v4 and does not claim to; it claims not to depend on what v4
+removes.
+
+The removed check asked `cosign triangulate` where the signature lived and compared the answer
+to a string built from the same digest — **a tautology** that could only fail if cosign changed
+its formatting, over a storage-layout detail. What replaces it reads what the *verifier*
+attested to: the signature payload's `docker-manifest-digest`, and the attestation's decoded
+in-toto subject, predicate type (`https://cyclonedx.org/bom`) and `bomFormat`. It also confirms
+the signed digest is the image *index* and not a platform manifest. Shapes were established by
+running cosign v3.1.3 against the published Phase 7.1-V digest rather than guessed.
+
+### Guards
+
+`TestExactlyOneSBOMFormatIsPublished`, `TestNoDocumentClaimsTwoCanonicalSBOMFormats` and
+`TestCosignIsPinnedAndForwardCompatible`. **All 38 Phase 7.1-VR mutations were caught, and the
+42 Phase 7.1-V mutations still are.**
+
+Six of the 38 escaped on the first pass, all the same failure as in Phase 7.1-V: a guard hunting
+for a string that survives partial deletion. Replacing each condition with `if False:` left
+every error message in place. The guards now assert on the **comparison expressions**
+themselves.
+
+### Still open
+
+- [ ] **Remote re-validation on the new commit.** The corrected supply chain has not yet been
+      published. Until it is, the one-SBOM claim is about the recipe, not the artifact.
+- [ ] **`validate-oci.yml` is registered on `main`** so GitHub lists the `workflow_dispatch`;
+      the run executes the file from the dispatched ref. Operational debt, retained.
+- [ ] **`release-oci.yml` has still never been triggered by a semver tag.** Its authority path
+      is statically verified and the machinery it shares is remotely validated; the semver
+      publication step itself runs first at v0.3.0.
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6

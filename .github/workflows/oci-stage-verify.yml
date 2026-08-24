@@ -264,6 +264,19 @@ jobs:
           echo "exists=true" >> "$GITHUB_OUTPUT"
           echo "existing_digest=${existing}" >> "$GITHUB_OUTPUT"
 
+      # `--sbom=false` is deliberate and `--provenance=mode=max` is deliberate;
+      # they are not a pair. BuildKit would emit an SPDX SBOM, and ADR 0062 §17
+      # names **one** canonical format, CycloneDX JSON, for a reason that is not
+      # tidiness: two independently produced inventories of the same image can
+      # disagree about component names, versions and base-package modelling, and
+      # an operator asking "what is in this image" would have two answers with no
+      # rule for choosing. The canonical SBOM is generated explicitly in `verify`
+      # and attached with cosign.
+      #
+      # Provenance stays on. It answers a different question — how and from what
+      # this was built — and nothing else produces it. Measured on the published
+      # index: both predicates previously shared one attestation manifest per
+      # platform, so this had to be verified rather than assumed.
       - name: Build and push by SHA tag
         id: push
         if: steps.preflight.outputs.exists != 'true'
@@ -276,7 +289,7 @@ jobs:
             --build-arg "VERSION=${{ inputs.version }}" \
             --build-arg "REVISION=${{ inputs.revision }}" \
             --provenance=mode=max \
-            --sbom=true \
+            --sbom=false \
             --output "type=image,name=${IMAGE}:${{ inputs.sha_tag }},push=true,rewrite-timestamp=true" \
             --metadata-file /tmp/meta.json \
             .
@@ -512,7 +525,22 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      # Pinned twice, on purpose. The SHA pins the *action*; `cosign-release`
+      # pins the *binary*, which the action would otherwise choose for us and
+      # change under us on its own schedule. Phase 7.1-VR found this pipeline
+      # silently running cosign v2.5.2 — the pinned action's default — while its
+      # documentation talked about v3 behaviour.
+      #
+      # v3.1.3 is the current cosign line. v4 is announced but unreleased, and
+      # `cosign triangulate` is deprecated in v3 and removed when v4 ships; this
+      # pipeline no longer uses it, so the v4 upgrade is a version bump rather
+      # than a redesign.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.3'
+
+      - name: Record the cosign version in use
+        run: cosign version
 
       # ADR 0062 section 17: keyless, over the digest, never over a tag.
       # No key file, no COSIGN_PASSWORD, no signing secret — the identity is the
@@ -614,35 +642,146 @@ jobs:
             "${IMAGE}@${{ needs.stage.outputs.digest }}" > /tmp/attested.json
           echo "CycloneDX attestation verified against the image digest"
 
-      # The signature must cover the index — the artifact an operator pulls —
-      # and not a platform manifest or a tag. cosign's signature tag is derived
-      # from the digest it signed, so this is a direct check rather than an
-      # inference.
-      - name: Signature targets the index digest, not a tag or a platform
+      # The signature and the SBOM must cover the index — the artifact an
+      # operator pulls — and not a platform manifest, and not a tag.
+      #
+      # This used to ask `cosign triangulate` where the signature lived and
+      # compare the answer to a string this workflow built from the same digest.
+      # That was a tautology dressed as a check: both sides applied the same
+      # transformation to the same input, so it could only fail if cosign changed
+      # its formatting. It also depended on cosign's backing-tag layout, which is
+      # an implementation detail, and on a subcommand deprecated in cosign v3 and
+      # removed in v4.
+      #
+      # What replaces it is semantic and stronger: read what the *verifier*
+      # attested to. `cosign verify` and `cosign verify-attestation` have already
+      # checked the signature, the certificate identity and the transparency log;
+      # their payloads name the subject digest, and that is the fact worth
+      # asserting. Nothing here needs to know how cosign stores anything.
+      - name: Signature and SBOM name the index digest, not a platform
         env:
           DIGEST: ${{ needs.stage.outputs.digest }}
           WANT_AMD64: ${{ needs.reproducibility.outputs.amd64_digest }}
           WANT_ARM64: ${{ needs.reproducibility.outputs.arm64_digest }}
         run: |
           set -eu
-          sig="$(cosign triangulate "${IMAGE}@${DIGEST}")"
-          echo "signature artifact: $sig"
-          expected="${IMAGE}:${DIGEST/:/-}.sig"
-          [ "$sig" = "$expected" ] || {
-            echo "::error::signature is attached to $sig, expected $expected"; exit 1; }
-          case "$sig" in
-            *"${WANT_AMD64/:/-}"*|*"${WANT_ARM64/:/-}"*)
-              echo "::error::signature targets a platform manifest, not the index"; exit 1 ;;
-          esac
           python3 - <<'PY'
-          import json, os, sys
-          v = json.load(open('/tmp/verified.json'))
+          import base64, json, os, sys
+
           want = os.environ['DIGEST']
-          subjects = {e.get('critical', {}).get('image', {}).get('docker-manifest-digest') for e in v}
+          bare = want.split(':', 1)[1]
+          bad = False
+
+          # 1. The verified signature payload names exactly the staged digest.
+          sig = json.load(open('/tmp/verified.json'))
+          subjects = {e.get('critical', {}).get('image', {}).get('docker-manifest-digest')
+                      for e in sig}
           if subjects != {want}:
-              print(f'::error::verified payload names {subjects}, expected {{{want}}}')
-              sys.exit(1)
-          print(f'verified signature payload names exactly {want}')
+              print(f'::error::verified signature names {subjects}, expected {{{want}}}')
+              bad = True
+          else:
+              print(f'signature payload names exactly {want} ({len(sig)} signature(s))')
+
+          # 2. The verified attestation is CycloneDX and names the same digest.
+          #    Its payload is a base64 in-toto statement inside a DSSE envelope.
+          preds, subs, boms = set(), set(), set()
+          for line in open('/tmp/attested.json'):
+              line = line.strip()
+              if not line:
+                  continue
+              stmt = json.loads(base64.b64decode(json.loads(line)['payload']))
+              preds.add(stmt.get('predicateType'))
+              subs.update(x['digest']['sha256'] for x in stmt.get('subject', []))
+              pred = stmt.get('predicate') or {}
+              boms.add((pred.get('bomFormat'), pred.get('specVersion')))
+          if preds != {'https://cyclonedx.org/bom'}:
+              print(f'::error::attestation predicate types are {preds}, expected CycloneDX only')
+              bad = True
+          if subs != {bare}:
+              print(f'::error::attestation names subjects {subs}, expected {{{bare}}}')
+              bad = True
+          for fmt, spec in boms:
+              if fmt != 'CycloneDX':
+                  print(f'::error::attached SBOM declares bomFormat {fmt!r}, not CycloneDX')
+                  bad = True
+              print(f'attestation: CycloneDX {spec} bound to {bare}')
+
+          # 3. That digest is the multi-arch index, not one of its platforms.
+          for plat, d in (('linux/amd64', os.environ['WANT_AMD64']),
+                          ('linux/arm64', os.environ['WANT_ARM64'])):
+              if want == d:
+                  print(f'::error::the signed digest is the {plat} manifest, not the index')
+                  bad = True
+          idx = json.load(open('/tmp/index.json'))
+          if idx.get('mediaType') != 'application/vnd.oci.image.index.v1+json':
+              print(f"::error::signed digest is a {idx.get('mediaType')}, not an image index")
+              bad = True
+
+          sys.exit(1 if bad else 0)
+          PY
+
+      # ADR 0062 §17 closure, and the load-bearing test of Phase 7.1-VR: the
+      # published image carries **one** SBOM format.
+      #
+      # Checked against the registry rather than against the build flags,
+      # because the claim is about the artifact. Each BuildKit attestation
+      # manifest is fetched and its layers' in-toto predicate types read. SPDX
+      # would appear here if `--sbom` were ever switched back on, including by
+      # a default change upstream that no diff in this repository would show.
+      #
+      # Provenance is asserted present in the same pass. The two predicates used
+      # to share one manifest per platform, so "SPDX is gone" and "provenance
+      # survived" are one measurement, not two.
+      - name: Exactly one SBOM format, and provenance survived
+        run: |
+          set -eu
+          python3 - <<'PY' > /tmp/att_manifests.txt
+          import json
+          idx = json.load(open('/tmp/index.json'))
+          for m in idx['manifests']:
+              if (m.get('annotations') or {}).get('vnd.docker.reference.type') == 'attestation-manifest':
+                  print(m['digest'])
+          PY
+          : > /tmp/predicates.txt
+          while read -r d; do
+            [ -n "$d" ] || continue
+            docker buildx imagetools inspect "${IMAGE}@${d}" --raw > /tmp/am.json
+            python3 - <<'PY' >> /tmp/predicates.txt
+          import json
+          m = json.load(open('/tmp/am.json'))
+          for l in m.get('layers', []):
+              ann = l.get('annotations') or {}
+              t = ann.get('in-toto.io/predicate-type')
+              if t:
+                  print(t)
+          PY
+          done < /tmp/att_manifests.txt
+
+          echo "== in-toto predicates attached to platform images =="
+          sort /tmp/predicates.txt | uniq -c
+
+          python3 - <<'PY'
+          import sys
+          preds = [l.strip() for l in open('/tmp/predicates.txt') if l.strip()]
+          bad = False
+          spdx = [p for p in preds if 'spdx' in p.lower()]
+          if spdx:
+              print(f'::error::the image carries {len(spdx)} SPDX SBOM attestation(s): {sorted(set(spdx))}')
+              print('::error::ADR 0062 §17 names one canonical SBOM format, CycloneDX JSON. '
+                    'Two independently produced inventories can disagree, and an operator '
+                    'would have no rule for choosing between them.')
+              bad = True
+          if not any('slsa.dev/provenance' in p for p in preds):
+              print('::error::no SLSA provenance attestation is attached. Disabling the '
+                    'BuildKit SBOM must not disable BuildKit provenance.')
+              bad = True
+          for other in {p for p in preds
+                        if 'slsa.dev/provenance' not in p and 'spdx' not in p.lower()}:
+              print(f'::warning::unexpected predicate type attached: {other}')
+          if not bad:
+              print(f'one SBOM format (CycloneDX, via cosign) and provenance present; '
+                    f'{len(preds)} BuildKit predicate(s), none of them SPDX')
+          sys.exit(1 if bad else 0)
           PY
 
       # Sigstore's public transparency log. Recorded, not hidden: a keyless

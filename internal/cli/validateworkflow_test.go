@@ -374,12 +374,25 @@ func TestSigningIsKeylessOverTheDigestAndNarrowlyVerified(t *testing.T) {
 	}
 
 	// The signature must be proven to cover the index rather than a platform
-	// manifest, and the proof must read the verified payload rather than infer it.
-	if !strings.Contains(shared, "cosign triangulate") {
-		t.Error("the shared machinery does not prove which artifact the signature is attached to")
-	}
-	if !strings.Contains(shared, "docker-manifest-digest") {
-		t.Error("the shared machinery does not check that the verified payload names the staged digest")
+	// manifest, and the proof must read what the *verifier* attested to rather
+	// than infer it from where cosign happens to store things.
+	// The *comparisons*, not strings that happen to sit near them. Mutation
+	// replaced each condition with `if False:` and left every error message in
+	// place, so needle-hunting for the messages proved nothing.
+	binding := stepBlock(t, withoutComments(shared), "Signature and SBOM name the index digest, not a platform")
+	for _, g := range []struct{ needle, what string }{
+		{"subjects != {want}", "the signature subject comparison"},
+		{"docker-manifest-digest", "reading the signed subject digest"},
+		{"preds != {'https://cyclonedx.org/bom'}", "the attestation predicate-type comparison"},
+		{"subs != {bare}", "the attestation subject-digest comparison"},
+		{"application/vnd.oci.image.index.v1+json", "the index media-type comparison"},
+		{"if want == d:", "the signed-digest-is-not-a-platform comparison"},
+		{"sys.exit(1 if bad else 0)", "failing the run on any of them"},
+	} {
+		if !strings.Contains(binding, g.needle) {
+			t.Errorf("the signature/SBOM binding proof no longer performs %s (looked for %q)",
+				g.what, g.needle)
+		}
 	}
 }
 
@@ -575,6 +588,20 @@ func TestTheRemoteSmokeProvesNativeExecutionByDigest(t *testing.T) {
 func TestTheRemoteAuditLooksForSecretsAndSource(t *testing.T) {
 	shared := withoutComments(readRepoFile(t, sharedWorkflow))
 
+	// The executable-shaped checks must iterate *regular files*. Phase 7.1-V
+	// measured why: distroless ships `etc/dpkg` and `var/lib/dpkg` as
+	// directories holding package metadata — which is what lets a scanner
+	// enumerate base packages — and no dpkg binary. Iterating names reported a
+	// package manager that is not in the image.
+	audit := stepBlock(t, shared, "Remote image content audit")
+	if !strings.Contains(audit, "hits = [m.name for m in files if re.search(pat, m.name.rstrip('/'))]") {
+		t.Error("the executable-shaped content checks no longer iterate regular files only.\n\n" +
+			"Matching names alone reports package *metadata directories* as a package manager.")
+	}
+	if !strings.Contains(audit, "files = [m for m in members if m.isfile()]") {
+		t.Error("the content audit no longer distinguishes regular files from directories")
+	}
+
 	for _, g := range []struct{ needle, what string }{
 		{"a package manager", "the package-manager check"},
 		{"'a shell'", "the shell check"},
@@ -765,5 +792,230 @@ func TestNoDocumentClaimsASemverImageExists(t *testing.T) {
 				"No semver image has been published. Phase 7.1-V validated "+
 				"sha-<commit> staging only.", name, strings.TrimSpace(line))
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// One canonical SBOM format
+// ---------------------------------------------------------------------------
+
+// TestExactlyOneSBOMFormatIsPublished pins ADR 0062 §17 and closes the defect
+// Phase 7.1-V measured but deliberately did not fix.
+//
+// The published image used to carry two inventories of itself: an SPDX document
+// that BuildKit attached because `--sbom=true` was set, and the canonical
+// CycloneDX JSON that the pipeline generates and cosign attests. Both were bound
+// to the digest, by different mechanisms, at different levels — SPDX per
+// platform, CycloneDX on the index.
+//
+// That is not a redundancy, it is an ambiguity. Two independently produced
+// inventories of the same image can disagree about component names, versions and
+// base-package modelling, and an operator asking "what is in this image" would
+// have had two answers and no rule for choosing. ADR 0062 §17 chose one.
+//
+// The trap this guards against is that `--sbom` and `--provenance` look like a
+// matched pair and are not. Turning both off would silently drop provenance,
+// which nothing else produces.
+func TestExactlyOneSBOMFormatIsPublished(t *testing.T) {
+	shared := withoutComments(readRepoFile(t, sharedWorkflow))
+
+	// The staged build is the only one that publishes. The reproducibility build
+	// disables both attestations on purpose — it compares platform digests, and
+	// attestations are not reproducible (ADR 0062 §16) — so this is scoped.
+	push := stepBlock(t, shared, "Build and push by SHA tag")
+	if !strings.Contains(push, "--sbom=false") {
+		t.Error("the published build does not disable the BuildKit SBOM.\n\n" +
+			"BuildKit emits SPDX. ADR 0062 §17 names one canonical format, CycloneDX JSON, " +
+			"and a second inventory of the same image can disagree with the first.")
+	}
+	if strings.Contains(push, "--sbom=true") {
+		t.Error("the published build re-enables the BuildKit SBOM")
+	}
+	// The half of the pair that must survive.
+	if !strings.Contains(push, "--provenance=mode=max") {
+		t.Error("the published build no longer produces provenance.\n\n" +
+			"`--sbom` and `--provenance` look like a matched pair and are not: " +
+			"provenance answers how the image was built and nothing else produces it.")
+	}
+
+	// Nothing in the publication path may *produce* SPDX. The proof step below
+	// is excluded by construction, because detecting SPDX means naming it — a
+	// blanket ban would forbid the check that enforces the ban.
+	for _, name := range []string{releaseWorkflow, validateWorkflow, sharedWorkflow} {
+		doc := withoutComments(readRepoFile(t, name))
+		if i := strings.Index(doc, "- name: Exactly one SBOM format"); i >= 0 {
+			rest := doc[i:]
+			end := strings.Index(rest, "\n      - name: ")
+			if end < 0 {
+				end = len(rest)
+			}
+			doc = doc[:i] + rest[end:]
+		}
+		for _, needle := range []string{"spdx", "SPDX", "--sbom=true", "sbom-format", "type=spdx"} {
+			if strings.Contains(doc, needle) {
+				t.Errorf("%s names %q in an executable path; the canonical SBOM is CycloneDX JSON",
+					name, needle)
+			}
+		}
+	}
+
+	// The canonical producer, its attachment and its verification must all exist.
+	for _, g := range []struct{ needle, what string }{
+		{"format: cyclonedx", "CycloneDX generation"},
+		{"output: sbom.cdx.json", "writing the CycloneDX document"},
+		{"cosign attest --yes --type cyclonedx", "attaching it as an OCI referrer"},
+		{"cosign verify-attestation --type cyclonedx", "verifying it is bound to the digest"},
+	} {
+		if !strings.Contains(shared, g.needle) {
+			t.Errorf("the canonical SBOM path no longer performs %s (looked for %q)", g.what, g.needle)
+		}
+	}
+
+	// And the closure test itself: the published artifact is inspected, not the
+	// build flags. A default change upstream would show up here and in no diff.
+	proof := stepBlock(t, shared, "Exactly one SBOM format, and provenance survived")
+	for _, g := range []struct{ needle, what string }{
+		{"in-toto.io/predicate-type", "reading the attached predicate types"},
+		{"'spdx' in p.lower()", "the SPDX detection"},
+		{"if not any('slsa.dev/provenance' in p for p in preds):", "the provenance survival check"},
+		{"sys.exit(1 if bad else 0)", "failing the run on either"},
+	} {
+		if !strings.Contains(proof, g.needle) {
+			t.Errorf("the one-SBOM proof no longer performs %s (looked for %q)", g.what, g.needle)
+		}
+	}
+}
+
+// TestNoDocumentClaimsTwoCanonicalSBOMFormats keeps the documents honest about
+// what a release actually carries.
+//
+// "We publish SPDX and CycloneDX" would be a supportability claim: it tells an
+// operator both are maintained and reconciled, and neither is true.
+func TestNoDocumentClaimsTwoCanonicalSBOMFormats(t *testing.T) {
+	for _, name := range []string{
+		"README.md",
+		"docs/COMPATIBILITY.md",
+		"docs/ARCHITECTURE.md",
+		"docs/decisions/0062-oci-runtime-and-kubernetes-execution-model.md",
+	} {
+		doc, ok := readRepoFileOptional(t, name)
+		if !ok {
+			continue
+		}
+		for _, sentence := range claimSentences(strings.ReplaceAll(doc, "\n", " ")) {
+			lower := strings.ToLower(sentence)
+			if !strings.Contains(lower, "spdx") {
+				continue
+			}
+			// The risk is a *supportability* claim — a document telling an
+			// operator that a release delivers SPDX, or that two formats are
+			// canonical. Recording that BuildKit once attached one, in the past
+			// tense, is the record doing its job, so the trigger is a
+			// present-tense delivery verb rather than the word "SPDX".
+			delivers := false
+			for _, verb := range []string{
+				"publishes", "publish ", "includes", "provides", "ships",
+				"attaches", "carries", "supports", "supported", "canonical",
+				"is attached", "are attached", "available", "both formats",
+			} {
+				if strings.Contains(lower, verb) {
+					delivers = true
+					break
+				}
+			}
+			if !delivers {
+				continue
+			}
+			// A sentence explaining that SPDX is *not* produced is fine.
+			if denies(sentence) || strings.Contains(lower, "not ") || strings.Contains(lower, " no ") ||
+				strings.Contains(lower, "never") || strings.Contains(lower, "disabled") ||
+				strings.Contains(lower, "instead of") || strings.Contains(lower, "rather than") ||
+				strings.Contains(lower, "would") || strings.Contains(lower, "used to") {
+				continue
+			}
+			t.Errorf("%s presents SPDX as something svcdoctor publishes:\n  %s\n\n"+
+				"ADR 0062 §17: the canonical SBOM format is CycloneDX JSON, one format only.",
+				name, strings.TrimSpace(sentence))
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cosign forward compatibility
+// ---------------------------------------------------------------------------
+
+// TestCosignIsPinnedAndForwardCompatible pins two things Phase 7.1-VR found.
+//
+// **The version was not pinned.** `sigstore/cosign-installer` was pinned by
+// commit SHA, which pins the *action* and not the *binary* it downloads. The
+// pipeline was running cosign v2.5.2 — that action's default — while the
+// repository's documentation discussed v3 behaviour. A signing pipeline should
+// not learn its own tool version from an upstream default.
+//
+// **`cosign triangulate` is deprecated and is removed in v4.** It was used to
+// ask where a signature was stored, and the answer was compared against a string
+// this repository built from the same digest — a tautology over cosign's backing
+// tag layout. Verification already proves the stronger fact semantically.
+func TestCosignIsPinnedAndForwardCompatible(t *testing.T) {
+	shared := readRepoFile(t, sharedWorkflow)
+
+	m := regexp.MustCompile(`cosign-release:\s*'(v[0-9]+\.[0-9]+\.[0-9]+)'`).FindStringSubmatch(shared)
+	if m == nil {
+		t.Fatal("the cosign binary version is not pinned.\n\n" +
+			"Pinning the installer action by SHA pins the action, not the binary: " +
+			"the action picks a default cosign release and changes it on its own schedule.")
+	}
+	if !strings.HasPrefix(m[1], "v3.") {
+		t.Errorf("cosign is pinned to %s. v3 is the current line; a downgrade to v2 or an "+
+			"unreviewed jump needs a deliberate decision, not a silent edit.", m[1])
+	}
+
+	// Removed in v4. Permitted in prose that explains why it is gone; never in a
+	// step that runs.
+	for _, name := range []string{releaseWorkflow, validateWorkflow, sharedWorkflow} {
+		doc := withoutComments(readRepoFile(t, name))
+		if strings.Contains(doc, "triangulate") {
+			t.Errorf("%s invokes `cosign triangulate`, which is deprecated in cosign v3 and "+
+				"removed in v4. Verification proves the same fact semantically.", name)
+		}
+	}
+
+	// Every cosign subcommand must address the digest. The reference sits on a
+	// line continuation, so a single-line regex over the command never sees it —
+	// found by mutation, which moved the target to a tag and went unnoticed.
+	for _, step := range []string{
+		"Sign the digest (keyless, GitHub OIDC)",
+		"Attach the CycloneDX SBOM as a signed attestation",
+		"Verify the signature against this exact identity",
+		"Verify the SBOM attestation is bound to this digest",
+	} {
+		block := stepBlock(t, withoutComments(shared), step)
+		if !strings.Contains(block, "${IMAGE}@${{ needs.stage.outputs.digest }}") {
+			t.Errorf("step %q does not address the staged digest", step)
+		}
+		if strings.Contains(block, "${IMAGE}:") {
+			t.Errorf("step %q addresses a tag. A tag can be re-pointed; signing or "+
+				"attesting one proves nothing about what is served later.", step)
+		}
+	}
+
+	// Correctness must rest on the verifier, not on cosign's storage layout.
+	// Seeing a `.sig` tag says something exists; verification says a signed
+	// object is valid for this digest and this identity.
+	for _, required := range []string{
+		"cosign verify \\",
+		"cosign verify-attestation --type cyclonedx",
+		"docker-manifest-digest",
+		"https://cyclonedx.org/bom",
+	} {
+		if !strings.Contains(shared, required) {
+			t.Errorf("the shared machinery no longer proves signature or attestation "+
+				"binding semantically (looked for %q)", required)
+		}
+	}
+	// A backing-tag existence check must not be the gate.
+	if regexp.MustCompile(`(?m)^\s*\[ .*\.sig.* \]`).MatchString(shared) {
+		t.Error("a cosign backing-tag name is used as a correctness gate; " +
+			"use cosign verify, which proves validity rather than existence")
 	}
 }
