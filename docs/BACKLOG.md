@@ -27,7 +27,7 @@ has exactly one runtime dependency, added in Phase 3.1: `github.com/twmb/franz-g
 - `internal/sasl/scram` — the shared SCRAM-SHA-256 core, which never receives plaintext
   (ADR 0055, ADR 0056)
 - `internal/diagnosis/transport`, `internal/diagnosis/postgres`, `internal/diagnosis/kafka` —
-  the concrete rules, 40 finding codes between them
+  the concrete rules; with `internal/diagnosis/redis`, 49 finding codes across the four
 - `internal/render/terminal` and `internal/render/json` — the two v0.1 output forms, derived
   from one report
 - `internal/app` — the PostgreSQL and Kafka composition roots
@@ -60,9 +60,17 @@ stale and should be corrected against this table.
 | 1 | Core Foundations | **Complete** |
 | 2 | Generic Transport Engine | **Complete** — 2.1 DNS, 2.2 TCP, 2.3 TLS, 2.4 chain |
 | 3 | Kafka Vertical Slice | **Validated** — 3.1 adapter boundary and ApiVersions, 3.2a SASL mechanism discovery, 3.2b credential transport safety, 3.2c PLAIN authentication, 3.3 Metadata topology discovery, 3.3b transport sweep identity, 3.4 advertised endpoint reachability, 3.5 advertised endpoint diagnosis policy, 3.6 the advertised endpoint diagnosis rule, 3.6.5 diagnosis output review, 3.7 unusable advertisement diagnosis, 3.7.5 redaction residual-scan correctness complete; **integration validated against a real 3-broker KRaft cluster** |
-| 4 | PostgreSQL Vertical Slice | Not started |
-| 5 | Productization, Platform and Renderers | Not started |
-| 6 | Real-world Validation and Hardening | Not started |
+| 4 | PostgreSQL Vertical Slice | **Complete** — BASIC feature-frozen and released as v0.1.0 |
+| 5 | Productization, Platform and Renderers | **Complete** — CLI, terminal and JSON renderers, both composition roots |
+| 6 | Kafka BASIC closure and hardening | **Complete** — 6.1a mechanism guard through 6.8 compatibility grading |
+| 7 | Runtime, real-world validation and Redis/Valkey | **Complete** — 7.0 SCRAM bounds, 7.1 OCI runtime, 7.3 PostgreSQL real-world, 7.4 Redis contract freeze, 7.5–7.7 Redis implementation and harness |
+| 8 | RabbitMQ | **8.0 and 8.1 complete** — semantics research, adversarial review, wire measurement and contract freeze. **No RabbitMQ code exists.** Implementation is 8.2 |
+
+**Rows 4 to 6 were stale and are corrected here.** They read "Not started" while PostgreSQL BASIC
+was released and Kafka BASIC had closed — the same staleness Phase 6.5's audit found in the
+repository-state section above, in a section it did not reach. The Phase 7 *section* further down
+this file is a separate, still-unstarted item that was renumbered from Phase 6; it is not the
+Phase 7 row above.
 
 Phase 0 is documentation, decisions and tooling. Phase 1 is the pure value model and the
 transformations over it. Phase 2 is the first code that touches a network.
@@ -4448,6 +4456,81 @@ opt-in and generic mTLS — rather than resolved inside a service phase.
 produce real validation signals first: Kafka has Phase 3's three-broker KRaft validation and Phase
 6.8's Redpanda study, and PostgreSQL has Phase 7.3A's real-world and Patroni validation with 7.3B's
 closure. Redis/Valkey is that third service, and RabbitMQ is the one after it.
+
+## Phase 8.0 — RabbitMQ semantics research, review and wire measurement: COMPLETE
+
+**No Go was written and no repository file changed.** Three sub-phases:
+
+- **8.0A** surveyed AMQP 0-9-1 from the RabbitMQ server source, the RabbitMQ-vendored spec and
+  the LavinMQ source, and proposed a contract.
+- **8.0B** re-derived the disputed decisions adversarially and returned **six corrections**, three
+  load-bearing: RabbitMQ prefixes every `reply_text` with its symbolic exception name, so 8.0A's
+  proposed match anchors would have matched nothing; the text is truncated at 255 characters with
+  `...` appended, so a discriminating suffix can vanish; and the repository had **already
+  litigated** the connection-limit failure class question for PostgreSQL `53300`, including the
+  exact bar for overturning it.
+- **8.0C** measured the remainder against RabbitMQ 3.13.7, 4.0.9 and 4.2.0 and LavinMQ 2.3.0 in
+  Docker. It opened no channel, sent no queue or exchange method, called no management API and
+  sent exactly one credential-bearing frame per scenario. All containers were destroyed and the
+  repository was byte-identical at the end.
+
+`docs/validation/RABBITMQ_PHASE80_CONTRACT_STUDY.md` records the measurements. **One Phase 8.0A
+prediction was falsified**: an invalid `Connection.Tune-Ok` produces no `Connection.Close` at all,
+only a silent close after about three seconds.
+
+## Phase 8.1 — RabbitMQ BASIC contract freeze: COMPLETE
+
+**Four ADRs, one new failure class, and no RabbitMQ code.** `internal/adapter/rabbitmq` does not
+exist and this phase did not create it.
+
+- **[0067](decisions/0067-rabbitmq-basic-journey-and-terminal-boundary.md)** — the journey, the
+  three service nodes, `Connection.Open-Ok` as the terminal boundary, the graceful close epilogue,
+  and the exclusions: no `Channel.Open`, no queue or exchange, no management API, no cluster.
+- **[0068](decisions/0068-rabbitmq-authentication-and-credential-authority.md)** — PLAIN only, the
+  mandatory `authentication_failure_close` capability, one credential-bearing frame, endpoint-scoped
+  authority, verified-TLS-only transport with no opt-in, and a byte-pinned PLAIN encoder.
+- **[0069](decisions/0069-rabbitmq-vhost-authorization-and-close-normalization.md)** — the two
+  stages, construct-and-compare normalization with truncation short-circuiting first, the twelve
+  finding codes, and the `RESOURCE_LIMIT_REACHED` authorization.
+- **[0070](decisions/0070-rabbitmq-tune-contract-and-wire-bounds.md)** — `channel_max 1`,
+  `frame_max` clamp, `heartbeat 0`, the silent-close correction, and one frame ceiling in place of
+  eight constants.
+
+**Counts.** `SchemaVersion` **1** unchanged. Failure classes **41 → 42**. Finding codes unchanged
+(the twelve RabbitMQ codes are decided, not implemented). `Reveal` sites **3**, `SecretFor` sites
+and dependency count **unchanged**. Three `Step` values are decided and not yet added.
+
+**The one production change** is `RESOURCE_LIMIT_REACHED`, plus migrating PostgreSQL SQLSTATE
+`53300` onto it. The migration is not optional: two services classifying the identical condition
+differently would be worse than either choice alone. `FailureResourceNotFound`'s documentation was
+narrowly amended in the same change-set, and the amendment raises the evidentiary bar rather than
+lowering it (ADR 0069 §6.3).
+
+**Dropped from the 8.0A proposal.** A `HYPOTHESIS` finding for RabbitMQ's default `guest` loopback
+restriction. svcdoctor observes its own destination address; RabbitMQ evaluates the restriction
+against the broker's view of the client's source address. Those are different ends of the
+connection and they disagree in both directions under a port-forward and under an SSH tunnel, so
+the finding would rest on evidence svcdoctor does not have. What survives is a detail sentence
+gated on the username alone (ADR 0068 §4.1).
+
+### Reopen conditions this phase created
+
+| Condition | Where |
+|---|---|
+| A channel, a resource permission, or any operation after `Open-Ok` is needed | ADR 0067 §11 |
+| An expected-state contract exists, making version, heartbeat or `cluster_name` findable | ADR 0067 §11, ADR 0069 §8 |
+| `EXTERNAL` or client certificates. Two decisions, and the second is generic TLS work | ADR 0068 §10 |
+| `ANONYMOUS` being advertised becomes a hardening finding | ADR 0068 §10 |
+| A frozen text template stops matching a measured broker | ADR 0069 §9 |
+| `541` vhost-down is live-measured, unlocking its detail sentence | ADR 0069 §6.2, §9 |
+| A third service produces a capacity ceiling — Redis `max number of clients` is the candidate | ADR 0069 §9 |
+| A measured `Connection.Start` approaches the 8192 ceiling | ADR 0070 §9 |
+
+### What Phase 8.2 may implement
+
+The contract and nothing else. An implementer should be able to write RabbitMQ BASIC without
+making a semantic decision; if one is required, that is a defect in these four records and is
+fixed there rather than in code.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 

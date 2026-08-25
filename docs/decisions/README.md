@@ -80,6 +80,21 @@ detected and not diagnosed), **0066** (prefix-only error classification, observe
 identity, one adapter and one CLI command). Between them they add three `Step` values and nothing
 else: no finding code, no failure class, no `SchemaVersion` change and no dependency.
 
+**0067 to 0070 joined this list in Phase 8.1**, which froze the RabbitMQ BASIC contract before any
+RabbitMQ code exists: **0067** (AMQP 0-9-1 only, one direct endpoint, the five-method allowlist,
+three service nodes, `Connection.Open-Ok` as the terminal boundary and the graceful close
+epilogue), **0068** (PLAIN only, the mandatory `authentication_failure_close` capability, one
+credential-bearing frame, endpoint-scoped authority and the unchanged verified-TLS-only policy),
+**0069** (authentication and vhost authorization as separate stages, and construct-and-compare
+normalization of a `Connection.Close` with truncation short-circuiting first), **0070** (the Tune
+values, the silent-close correction, and one frame ceiling in place of eight constants). They add
+three `Step` values and twelve RabbitMQ finding codes when implemented, and **one** generic
+`FailureClass` — `RESOURCE_LIMIT_REACHED` — which 0069 §6 authorizes and Phase 8.1 implemented
+immediately, because PostgreSQL SQLSTATE `53300` migrated onto it in the same change-set. No
+`SchemaVersion` change and no dependency. The contract is measured rather than reasoned:
+`docs/validation/RABBITMQ_PHASE80_CONTRACT_STUDY.md` records what was run and against which
+brokers, and 0067 §4.1 and 0070 §3 record a Phase 8.0A prediction the measurements falsified.
+
 **0039 has left this list.** Phase 4.5b implemented it, so it now describes code. Two of its
 sections were settled by that implementation and the settlements are recorded inside it.
 

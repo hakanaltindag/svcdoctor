@@ -173,6 +173,42 @@ Three upstream behaviours the ADRs rest on were re-measured on the real servers 
 - A wrong password, an unknown user and a disabled user produce **byte-identical** `WRONGPASS`
   replies, which is why no svcdoctor finding names a cause.
 
+## 4c. RabbitMQ and LavinMQ — decided, and NOT IMPLEMENTED
+
+**svcdoctor cannot speak AMQP 0-9-1.** There is no `svcdoctor diagnose rabbitmq` command, no
+RabbitMQ adapter and no AMQP wire code. Phase 8.1 froze the contract for one in ADRs 0067 to
+0070; nothing was built. Every row below is Level 0 and stays there until an implementation
+exists and is run.
+
+| Platform | Wire | TLS | Auth overlap | Real tested | Level | Known gaps |
+|---|---|---|---|---|---|---|
+| **RabbitMQ self-hosted** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED`. Contract frozen in ADRs 0067–0070; no adapter exists |
+| **LavinMQ** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED`. Same absent adapter. Its reply texts differ from RabbitMQ's and ADR 0069 §3 records a separate template family for them |
+| **Amazon MQ for RabbitMQ** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED` and `NOT TESTED`. No cloud credential was used at any point |
+| **CloudAMQP** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED` and `NOT TESTED`. Shared plans assign a generated virtual host rather than `/` |
+| **Any other AMQP 0-9-1 broker** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED` |
+
+### What was measured, and why it changes none of the rows above
+
+`docs/validation/RABBITMQ_PHASE80_CONTRACT_STUDY.md` records wire measurements taken against
+RabbitMQ 3.13.7, 4.0.9 and 4.2.0 and LavinMQ 2.3.0 in Docker: the real `Connection.Start` sizes,
+the Tune negotiation window, the exact refusal frames and the truncation boundary.
+
+**Those measurements were taken by a scratch client written for the phase, not by svcdoctor.**
+They establish what the brokers do. They establish nothing about what svcdoctor does, because
+svcdoctor does not speak the protocol — which is exactly why a measured protocol study does not
+move a row. Level 2 requires svcdoctor itself completing the BASIC journey against a real
+instance.
+
+### What the frozen contract will and will not do
+
+When it is built, `svcdoctor diagnose rabbitmq` will connect, negotiate, authenticate with SASL
+PLAIN over verified TLS only, open one virtual host, and stop at `Connection.Open-Ok`. It will
+**not** open a channel, name a queue or an exchange, publish, consume, call the management HTTP
+API, discover cluster members or diagnose a cluster. Reaching the terminal boundary will claim
+that one endpoint answered at one instant from one vantage, and nothing about whether messaging
+works.
+
 ## 5. What none of this required
 
 No provider-specific branch exists anywhere in production code — verified by search; the only

@@ -617,3 +617,42 @@ that cannot occur. See ADR 0043 sections 14 and 15.
 module-wide allow-list of exactly these three, and `internal/diagnosis/transport` asserts the
 same three locally. A new generic code has to be added to both, which is the point: it cannot
 arrive as a local constant, and every `TLS_` code is still rejected outright.
+
+## 8. The twelve RabbitMQ findings — decided, not implemented
+
+Frozen by **ADR 0069 §7** in Phase 8.1, before any RabbitMQ code exists. **No rule produces
+any of them**, `internal/diagnosis/rabbitmq` does not exist, and the repository's finding-code
+count is unchanged by this section. They are recorded here so that the implementation phase
+inherits a vocabulary rather than inventing one.
+
+| Code | Kind | Severity | Owner step |
+|---|---|---|---|
+| `RABBITMQ_CONNECTION_START_NOT_COMPLETED` | CONFIRMED | ERROR | `rabbitmq.connection_start` |
+| `RABBITMQ_AUTH_MECHANISM_NOT_OFFERED` | CONFIRMED | ERROR | `rabbitmq.authentication` |
+| `RABBITMQ_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR` | CONFIRMED | WARN | `rabbitmq.authentication` |
+| `RABBITMQ_CREDENTIALS_REJECTED` | CONFIRMED | ERROR | `rabbitmq.authentication` |
+| `RABBITMQ_AUTHENTICATION_NOT_COMPLETED` | CONFIRMED | ERROR | `rabbitmq.authentication` |
+| `RABBITMQ_CREDENTIAL_NOT_CONFIGURED` | CONFIRMED | WARN | `rabbitmq.authentication` |
+| `RABBITMQ_CREDENTIAL_WITHHELD` | CONFIRMED | WARN | `rabbitmq.authentication` |
+| `RABBITMQ_VHOST_NOT_FOUND` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
+| `RABBITMQ_VHOST_ACCESS_REFUSED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
+| `RABBITMQ_CONNECTION_NOT_PERMITTED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
+| `RABBITMQ_CONNECTION_NOT_ESTABLISHED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
+| `RABBITMQ_PEER_VERIFICATION_FAILED` | CONFIRMED | ERROR | `tls.handshake` |
+
+Three properties of the set are worth stating before it is built.
+
+**Every code reuses an existing generic failure class.** The RabbitMQ-specific knowledge lives
+in the code and the detail, never in the class — which is the division section 1 already
+requires, and it is why twelve codes cost one failure class rather than twelve.
+
+**No `HYPOTHESIS` finding is authorized.** The one candidate — RabbitMQ's default `guest`
+loopback restriction — was dropped because svcdoctor observes its own destination address while
+the broker evaluates the restriction against the client's source address. Different ends of the
+connection. What survives is a detail sentence gated on the username alone (ADR 0068 §4.1).
+
+**Two conditions may classify but may not speak.** A `541` vhost-down refusal and a
+backend-qualified vhost denial are proven from the RabbitMQ source and were **not** reproduced
+live, so each may set a normalized attribute and neither may produce a restating sentence. That
+is the `namedConditions` rule PostgreSQL already lives under — a restatement requires having
+watched a real endpoint produce it — applied before the table exists (ADR 0069 §8).
