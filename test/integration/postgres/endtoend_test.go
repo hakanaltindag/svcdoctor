@@ -12,6 +12,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
+	"github.com/hakanaltindag/svcdoctor/test/harness"
 )
 
 // Phase 4.8a: the vertical slice, end to end, against a real server.
@@ -101,27 +102,51 @@ func TestEndToEndHealthySession(t *testing.T) {
 
 // --- D. wrong password ---------------------------------------------------------
 
+// PG-H1 (harness). The contract below is the whole of what this scenario
+// permits: a rejected credential, no session, and no guess about *why* the
+// endpoint refused.
+//
+// The forbidden list is the load-bearing half. PostgreSQL answers 28P01 for a
+// wrong password, an unknown role and a disabled account alike — it issues a
+// mock salt for a role that does not exist precisely so a client cannot tell
+// them apart — so any of those three words would be svcdoctor inventing one of
+// three possibilities.
 func TestEndToEndWrongPassword(t *testing.T) {
 	s := healthy()
 	s.password = scramPassword + "-wrong"
 	o := run(t, s)
 
+	harness.Assert(t, subject(t, "PG-H1 wrong password", o), harness.Expectation{
+		Summary: harness.Status(domain.SummaryStatusProblemsFound),
+		Nodes: []harness.Node{{
+			Step:         servicepostgres.StepAuthentication,
+			State:        domain.StateFail,
+			FailureClass: domain.FailureAuthCredentialsRejected,
+		}},
+		// Authentication failed, so there was nothing to establish a session
+		// over and no HBA decision was ever reached.
+		AbsentSteps:     []domain.Step{servicepostgres.StepSession},
+		RequireFindings: []domain.FindingCode{diagnosispostgres.CodeCredentialsRejected},
+		ForbidFindings:  []domain.FindingCode{diagnosispostgres.CodeConnectionNotPermitted},
+		// Exactly one, which is what the pre-harness assertion pinned: a second
+		// finding here would mean svcdoctor concluded something further from a
+		// refusal that carries no further information.
+		FindingCount: harness.Count(1),
+		ForbidProse: []string{
+			"password is wrong", "password is incorrect", "invalid credential",
+			"role does not exist", "account is disabled",
+			"server is unhealthy", "not permitted",
+		},
+		ForbidSecrets: []string{scramPassword + "-wrong"},
+	})
+
+	// Service-specific, and deliberately left here: the harness knows nothing
+	// about SQLSTATE and must not learn.
 	auth := o.requireState(t, servicepostgres.StepAuthentication,
 		domain.StateFail, domain.FailureAuthCredentialsRejected)
 	if got := stringAttr(t, auth, servicepostgres.AttrSQLState); got != "28P01" {
 		t.Errorf("sqlstate = %q, want 28P01", got)
 	}
-
-	// The session step must not have run: authentication failed, so there was
-	// nothing to establish a session over.
-	o.requireAbsent(t, servicepostgres.StepSession)
-
-	f := o.requireOneFinding(t, diagnosispostgres.CodeCredentialsRejected)
-	requireProseExcludes(t, f,
-		"password is wrong", "password is incorrect", "invalid credential",
-		"role does not exist", "account is disabled")
-
-	requireProblemsFound(t, o)
 	requireNoCredentialAnywhere(t, o, scramPassword+"-wrong")
 	requireRedactable(t, o.report)
 }
@@ -253,24 +278,38 @@ func TestEndToEndConnectionNotPermitted(t *testing.T) {
 	s.role, s.password = rejectRole, "pw-rejectuser"
 	o := run(t, s)
 
+	harness.Assert(t, subject(t, "PG-H2 hba deny", o), harness.Expectation{
+		Summary: harness.Status(domain.SummaryStatusProblemsFound),
+		Nodes: []harness.Node{{
+			Step:         servicepostgres.StepStartup,
+			State:        domain.StateFail,
+			FailureClass: domain.FailureAuthzNotPermitted,
+		}},
+		// The refusal arrived before authentication was requested, so no
+		// authentication node exists and no credential was evaluated. That
+		// absence is the layer claim: this is not a credential outcome.
+		AbsentSteps: []domain.Step{
+			servicepostgres.StepAuthentication, servicepostgres.StepSession,
+		},
+		RequireFindings: []domain.FindingCode{diagnosispostgres.CodeConnectionNotPermitted},
+		ForbidFindings:  []domain.FindingCode{diagnosispostgres.CodeCredentialsRejected},
+		ForbidProse: []string{
+			"password", "credential is", "globally", "authenticated successfully",
+		},
+		ForbidSecrets: []string{"pw-rejectuser"},
+	})
+
 	startup := o.requireState(t, servicepostgres.StepStartup,
 		domain.StateFail, domain.FailureAuthzNotPermitted)
 	if got := stringAttr(t, startup, servicepostgres.AttrSQLState); got != "28000" {
 		t.Errorf("sqlstate = %q, want 28000", got)
 	}
-
-	// The refusal arrived before authentication was requested, so no
-	// authentication node exists and no credential was evaluated.
-	o.requireAbsent(t, servicepostgres.StepAuthentication)
-	o.requireAbsent(t, servicepostgres.StepSession)
-
+	// Vantage dependence is the "globally" claim in structured form, and it is
+	// a property of the finding rather than of the run.
 	f := o.requireOneFinding(t, diagnosispostgres.CodeConnectionNotPermitted)
 	if !f.VantageDependent() {
 		t.Error("vantageDependent = false; host-based rules match the source address")
 	}
-	requireProseExcludes(t, f,
-		"password", "credential is", "globally", "authenticated successfully")
-
 	requireNoCredentialAnywhere(t, o, "pw-rejectuser")
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
+	"github.com/hakanaltindag/svcdoctor/test/harness"
 )
 
 // Phase 4.8b: the **production composition root** under test against real
@@ -1133,4 +1134,67 @@ func TestAppTrustWithNoCredentialProducesNoFinding(t *testing.T) {
 	if got := len(nodesAt(report, servicepostgres.StepSession)); got != 1 {
 		t.Errorf("got %d session nodes, want 1: trust should reach a session", got)
 	}
+}
+
+// PG-H3 (harness) — a local deadline is svcdoctor's limit, not the target's.
+//
+// # Ground truth
+//
+// 203.0.113.0/24 is TEST-NET-3. It is reserved for documentation and is routed
+// nowhere, so a connection to it neither completes nor is refused: it hangs
+// until svcdoctor's own step budget ends it. That is the only way to produce a
+// local timeout deterministically, and it is the same address the CLI-level
+// scenario in cli_test.go uses.
+//
+// # Why it is asserted here as well as there
+//
+// TestCLITextIncompleteRun asserts the rendered wording. This asserts the
+// canonical Result the renderer is derived from, which is where the semantics
+// actually live: UNKNOWN rather than FAIL, incomplete rather than complete, and
+// no finding blaming a target nobody reached.
+func TestAppLocalTimeoutIsNotATargetFailure(t *testing.T) {
+	params := runParams(t, scramRole, scramPassword, database)
+	params.Host = "203.0.113.1"
+	params.Credential = security.Credential{}
+	params.TLSOptions.ServerName = "203.0.113.1"
+	params.StepTimeout = 2 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := app.DiagnosePostgres(ctx, params)
+	if err != nil {
+		t.Fatalf("DiagnosePostgres: %v", err)
+	}
+
+	harness.Assert(t, harness.Subject{
+		Name:       "PG-H3 local timeout",
+		Report:     result.Report(),
+		Incomplete: result.Incomplete(),
+	}, harness.Expectation{
+		// The run ended on svcdoctor's own budget, so it is incomplete — and
+		// incompleteness is orthogonal to the status. UNKNOWN is not FAIL.
+		Incomplete: harness.Incomplete(),
+		Nodes: []harness.Node{{
+			Step:         vocabulary.StepTCPConnect,
+			State:        domain.StateUnknown,
+			FailureClass: domain.FailureExecLocalTimeout,
+		}},
+		// Nothing past the connection was reached, so nothing past it may be
+		// claimed — in either direction.
+		AbsentSteps: []domain.Step{
+			servicepostgres.StepAuthentication, servicepostgres.StepSession,
+		},
+		ForbidFindings: []domain.FindingCode{
+			diagnosispostgres.CodeSessionEstablishmentFailed,
+			diagnosispostgres.CodeCredentialsRejected,
+		},
+		// A local deadline says nothing about the endpoint. Every phrase here
+		// would attribute svcdoctor's limit to something it never reached.
+		ForbidProse: []string{
+			"server is down", "endpoint failed", "endpoint is down",
+			"endpoint timed out", "the server is slow", "high latency",
+			"is unreachable", "refused the connection",
+		},
+	})
 }

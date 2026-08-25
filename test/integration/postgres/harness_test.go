@@ -16,6 +16,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
+	"github.com/hakanaltindag/svcdoctor/test/harness"
 )
 
 // The Phase 4.8a test composition boundary.
@@ -430,4 +431,16 @@ func (o outcome) requireNoSuccessfulNodeAtOrBelow(t *testing.T, from domain.Step
 			t.Errorf("%s passed below a terminal failure", n.Step())
 		}
 	}
+}
+
+// subject adapts this package's outcome to the generic harness.
+//
+// The adaptation belongs here rather than in the harness: `outcome` is this
+// suite's own carrier, assembled by a pass that sequences the stages itself, and
+// the harness must not learn about it. Incompleteness is not carried — this
+// carrier never had it — so a scenario that needs it drives app.DiagnosePostgres
+// and builds its own Subject.
+func subject(t *testing.T, name string, o outcome) harness.Subject {
+	t.Helper()
+	return harness.Subject{Name: name, Report: o.report}
 }
