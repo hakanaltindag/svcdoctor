@@ -9,6 +9,7 @@ import (
 	diagnosiskafka "github.com/hakanaltindag/svcdoctor/internal/diagnosis/kafka"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
+	"github.com/hakanaltindag/svcdoctor/test/harness"
 )
 
 // The advertised-listener scenarios: a real cluster that answers, and then
@@ -131,6 +132,51 @@ func TestAdvertisedTCPRefused(t *testing.T) {
 	r.writeArtifact(t, "advertised-tcp-refused")
 
 	assertBootstrapHealthy(t, r)
+
+	// K-H1 (harness). The two halves are asserted together because the finding
+	// only means anything as a contrast: the cluster answered on the bootstrap
+	// path, and an endpoint it advertised cannot be reached from here.
+	//
+	// The credential bound is the security half. Bootstrap authentication
+	// authority does not extend to a discovered broker (ADR 0050), so the sweep
+	// over advertised endpoints must contain no credential-bearing step at all.
+	harness.Assert(t, harness.Subject{
+		Name:               "K-H1 bootstrap ok, advertised unreachable",
+		Report:             r.report,
+		CredentialAttempts: advertisedCredentialAttempts(r),
+	}, harness.Expectation{
+		Summary: harness.Status(domain.SummaryStatusProblemsFound),
+		Nodes: []harness.Node{
+			{
+				Step:         servicekafka.StepMetadata,
+				State:        domain.StatePass,
+				FailureClass: domain.FailureNone,
+			},
+			{
+				Step:         servicekafka.StepSASLAuthenticate,
+				State:        domain.StatePass,
+				FailureClass: domain.FailureNone,
+			},
+		},
+		RequireFindings: []domain.FindingCode{
+			diagnosiskafka.CodeAdvertisedEndpointUnreachable,
+		},
+		// The bootstrap path authenticated and answered. Nothing here is a
+		// credential outcome or a protocol outcome.
+		ForbidFindings: []domain.FindingCode{
+			diagnosiskafka.CodeCredentialsRejected,
+			diagnosiskafka.CodeMetadataNotCompleted,
+		},
+		// PASS is existential and FAIL is universal (ADR 0051): one unreachable
+		// advertised endpoint is not a statement about the cluster, and svcdoctor
+		// never authenticated to the endpoint it could not reach.
+		ForbidProse: []string{
+			"cluster is unhealthy", "cluster is down", "cluster unhealthy",
+			"authentication failed", "credential was rejected",
+			"the cluster cannot be used",
+		},
+		MaxCredentialAttempts: harness.Count(0),
+	})
 
 	findings := unreachableFindings(r)
 	if len(findings) != 1 {
@@ -284,4 +330,30 @@ func leaks(t *testing.T, r *run) bool {
 		}
 	}
 	return false
+}
+
+// advertisedCredentialAttempts counts credential-bearing steps beneath every
+// advertised endpoint.
+//
+// # Why the scenario derives it and the harness only bounds it
+//
+// Which steps carry a credential is Kafka knowledge — `kafka.sasl_handshake`
+// negotiates a mechanism and `kafka.sasl_authenticate` presents the secret —
+// and the harness must not hold it. No counter was added to production code:
+// this reads the graph the run already produced.
+func advertisedCredentialAttempts(r *run) *int {
+	credentialBearing := map[domain.Step]bool{
+		servicekafka.StepSASLHandshake:    true,
+		servicekafka.StepSASLAuthenticate: true,
+	}
+	n := 0
+	for _, advertisement := range r.nodes(servicekafka.StepBrokerAdvertised) {
+		for _, id := range descendantsOf(r.graph, advertisement.ID()) {
+			node, ok := r.graph.Node(id)
+			if ok && credentialBearing[node.Step()] {
+				n++
+			}
+		}
+	}
+	return &n
 }
