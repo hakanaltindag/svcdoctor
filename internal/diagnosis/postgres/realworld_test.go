@@ -188,11 +188,20 @@ func TestNoPostgresFindingAssertsAnExpectation(t *testing.T) {
 // a given SQLSTATE. Deliberately not a replica of the Hetzner lab: the lab
 // proved the product's behaviour, and these fixtures pin the semantics it
 // showed.
+// The class mirrors what `sessionSQLStateFailure` actually returns for the code,
+// so that this helper cannot describe a node production can no longer emit.
+// Phase 8.1 moved 53300 to RESOURCE_LIMIT_REACHED (ADR 0069); the finding, the
+// detail and the suppression of the unattributable sentence are unchanged, which
+// is what the tests above assert.
 func sessionSQLState(t *testing.T, code string) domain.Graph {
 	t.Helper()
+	class := domain.FailureProtocolUnexpectedResponse
+	if code == "53300" {
+		class = domain.FailureResourceLimitReached
+	}
 	b := newBuilder(t)
 	b.startupNode(domain.StatePass, domain.FailureNone, "", nil, "sasl")
 	b.authNode(domain.StatePass, domain.FailureNone, "", nil, "")
-	b.sessionNode(domain.StateFail, domain.FailureProtocolUnexpectedResponse, code, boolPtr(true), idAuth)
+	b.sessionNode(domain.StateFail, class, code, boolPtr(true), idAuth)
 	return b.freeze()
 }

@@ -417,15 +417,42 @@ func (o sessionObservation) classify() (domain.State, domain.FailureClass) {
 // required — none of those checks can have run, because svcdoctor issues no
 // statement.
 //
-// # Everything else, 53300 included
+// # 53300
 //
-// Falls through to the honest weak class with the SQLSTATE recorded beside it. A
-// connection-limit refusal is a real operational fact and a different remedy from
-// anything else here, and it still gets no class of its own: one producer and no
-// authorizing record is not enough to grow a service-neutral vocabulary, and
-// postgres.sqlstate carries it for a Phase 4.6 rule to read. The same applies to
-// 08P01, which is pgBouncer's default code and proves nothing about a cause, and
-// to 57P03, which Phase 4.5a measured arriving *before* authentication.
+// too_many_connections: PostgreSQL raises ERRCODE_TOO_MANY_CONNECTIONS in this
+// window from InitializeSessionUserId and InitPostgres, after authentication has
+// completed, when no connection slot is available. Phase 7.3A measured a real
+// endpoint producing it, and `namedConditions` in
+// `internal/diagnosis/postgres/shared.go` already restates it.
+//
+// **It moved to RESOURCE_LIMIT_REACHED in Phase 8.1, and the earlier reasoning
+// here is superseded rather than merely edited.** This comment used to say that
+// a connection-limit refusal "gets no class of its own: one producer and no
+// authorizing record is not enough to grow a service-neutral vocabulary". Both
+// halves of that condition are now satisfied. RabbitMQ enforces three separate
+// ceilings — node, virtual host and user — and Phase 8.0C reproduced all three
+// live, which makes four producers across two services; and ADR 0069 is the
+// authorizing record. So the sentence was a standing reopen condition, and it
+// fired.
+//
+// The class is also more truthful than the one it replaces:
+// PROTOCOL_UNEXPECTED_RESPONSE asserts that the peer answered *not as the
+// protocol expects*, and an ErrorResponse carrying 53300 is precisely what the
+// protocol expects. It carries no cause — see the class documentation.
+//
+// Nothing else about 53300 changed. The finding is still
+// POSTGRES_SESSION_ESTABLISHMENT_FAILED, the detail sentence is still the one
+// Phase 7.3A wrote, and `floorDetail`'s unattributable sentence was already
+// suppressed for it by `namedConditions` and stays suppressed.
+//
+// # Everything else
+//
+// Falls through to the honest weak class with the SQLSTATE recorded beside it.
+// That covers 08P01, which is pgBouncer's default code and proves nothing about a
+// cause, and 57P03, which Phase 4.5a measured arriving *before* authentication.
+// A refusal that merely *might* be a capacity ceiling does not reach
+// RESOURCE_LIMIT_REACHED: that class requires the peer to have named the
+// condition, which is what 53300 does and a generic code does not.
 //
 // No English message is examined, here or anywhere in this package.
 func sessionSQLStateFailure(sqlState string) domain.FailureClass {
@@ -434,6 +461,8 @@ func sessionSQLStateFailure(sqlState string) domain.FailureClass {
 		return domain.FailureResourceNotFound
 	case "42501":
 		return domain.FailureAuthzDenied
+	case "53300":
+		return domain.FailureResourceLimitReached
 	}
 	// A refusal svcdoctor cannot normalize. The code itself is recorded as an
 	// attribute, so nothing is lost by declining to name a cause.

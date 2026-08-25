@@ -76,7 +76,8 @@ func shapes(t *testing.T) map[domain.FindingCode]domain.Finding {
 	add(func(b *builder) {
 		b.startupNode(domain.StatePass, domain.FailureNone, "", nil, "sasl")
 		b.authNode(domain.StatePass, domain.FailureNone, "", nil, "")
-		b.sessionNode(domain.StateFail, domain.FailureProtocolUnexpectedResponse, "53300", boolPtr(true), idAuth)
+		// 53300 reaches RESOURCE_LIMIT_REACHED from Phase 8.1 (ADR 0069).
+		b.sessionNode(domain.StateFail, domain.FailureResourceLimitReached, "53300", boolPtr(true), idAuth)
 	})
 
 	return built

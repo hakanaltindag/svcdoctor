@@ -305,7 +305,9 @@ func TestAcceptanceMatrix(t *testing.T) {
 			graph: func(b *builder) {
 				b.startupNode(domain.StatePass, domain.FailureNone, "", nil, "sasl")
 				b.authNode(domain.StatePass, domain.FailureNone, "", nil, "")
-				b.sessionNode(domain.StateFail, domain.FailureProtocolUnexpectedResponse, "53300", boolPtr(true), idAuth)
+				// 53300 reaches RESOURCE_LIMIT_REACHED from Phase 8.1 (ADR 0069). The
+				// finding, severity and vantage below are deliberately unchanged.
+				b.sessionNode(domain.StateFail, domain.FailureResourceLimitReached, "53300", boolPtr(true), idAuth)
 			},
 			want: CodeSessionEstablishmentFailed, severity: domain.SeverityError, vantage: true,
 		},

@@ -395,7 +395,10 @@ func TestSessionSQLStateClassification(t *testing.T) {
 	}{
 		{"unknown database", "3D000", domain.FailureResourceNotFound},
 		{"CONNECT denied", "42501", domain.FailureAuthzDenied},
-		{"connection slots exhausted", "53300", domain.FailureProtocolUnexpectedResponse},
+		// Phase 8.1 (ADR 0069): the peer names this ceiling itself, so it is no
+		// longer the weak class. Nothing else about 53300 moved — the finding,
+		// the severity and the Phase 7.3A detail sentence are unchanged.
+		{"connection slots exhausted", "53300", domain.FailureResourceLimitReached},
 		{"a pooler's default code", "08P01", domain.FailureProtocolUnexpectedResponse},
 		{"cannot connect now", "57P03", domain.FailureProtocolUnexpectedResponse},
 		{"an authentication code arriving here", "28P01", domain.FailureProtocolUnexpectedResponse},
