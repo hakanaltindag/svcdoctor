@@ -216,12 +216,22 @@ const (
 	// not available as an existing resource, according to the peer.
 	//
 	// That is the whole of the claim, and every word of it is load-bearing.
-	// **According to the peer**: the peer asserted the absence with a code whose
-	// own meaning is absence, and a producer never infers this class from a
-	// generic error plus a plausible position. **The named resource an operation
-	// targeted**: the name came from the run's own input, so the class says
-	// something about what was asked for, not about the peer's inventory in
-	// general.
+	// **According to the peer**: the peer asserted the absence either with a code
+	// whose own meaning is absence, or with a normalized peer statement of absence
+	// that a producer reconstructed from the run's own input and matched exactly —
+	// and a producer never infers this class from a generic error plus a plausible
+	// position. **The named resource an operation targeted**: the name came from
+	// the run's own input, so the class says something about what was asked for,
+	// not about the peer's inventory in general.
+	//
+	// The second admissible form was added in Phase 8.1 (ADR 0069 section 6.3) and
+	// **raises** the bar rather than lowering it. RabbitMQ reports a missing
+	// virtual host with 530 NOT_ALLOWED, a code it also uses for five other
+	// conditions, and distinguishes them only in the reply text. Reconstructing
+	// that exact sentence from the vhost and username the run itself supplied, and
+	// requiring byte equality, is stronger evidence than a numeric code emitted for
+	// six conditions. What it does not admit is a substring search, a prefix scan
+	// or any reading of peer bytes svcdoctor did not already predict.
 	//
 	// It is deliberately silent about cause. It does **not** state that the
 	// resource never existed, that it was deliberately removed, that it was
@@ -235,6 +245,48 @@ const (
 	// be denied on. It is not a protocol failure: the exchange was well formed
 	// and the peer answered it.
 	FailureResourceNotFound
+
+	// FailureResourceLimitReached means the peer refused the operation because a
+	// capacity bound it enforces was reached, and said so itself.
+	//
+	// That is the whole of the claim. **A capacity bound it enforces**: a
+	// configured ceiling on how many of something may exist at once, not a
+	// judgement about the identity asking. **Said so itself**: the peer named the
+	// condition, and a producer never infers this class from a generic refusal
+	// plus a plausible position — a refusal that merely *might* be a limit is
+	// FailureProtocolUnexpectedResponse, and stays there.
+	//
+	// It is deliberately silent about cause. It does **not** state that the limit
+	// is configured too low, that demand is abnormal, that a client is leaking
+	// connections, that a pool is misconfigured, that the condition will still
+	// hold a second later, or who consumed the capacity. The remedy differs for
+	// every one of those and the evidence separates none of them. A second run a
+	// moment later may succeed.
+	//
+	// **It is none of the three classes nearest it**, and the distinctions are
+	// what a reader acts on:
+	//
+	//   - FailureAuthzDenied says an identity authenticated and was denied an
+	//     operation. Here nothing about the identity was evaluated — the same
+	//     ceiling refuses every principal, and the very same run would have been
+	//     refused with any credential.
+	//   - FailureAuthzNotPermitted says the peer refused on who is connecting and
+	//     from where. A node-wide ceiling is about neither.
+	//   - FailureProtocolUnexpectedResponse says the peer answered, but not as
+	//     the protocol expects. Here the answer is a defined error path and is
+	//     exactly what the protocol expects; the peer is working.
+	//
+	// "you have hit a ceiling" sends a reader to a capacity or configuration
+	// decision; "you lack permission" sends them to a permissions table; "the
+	// peer misbehaved" sends them to the peer's own health. Collapsing any two
+	// would send them to the wrong place.
+	//
+	// It is service-neutral, and it has more than one producer by construction:
+	// PostgreSQL reports it as SQLSTATE 53300 too_many_connections while
+	// establishing a session (measured in Phase 7.3A), and RabbitMQ reports three
+	// separate ceilings — node, virtual host and user — at Connection.Open
+	// (measured in Phase 8.0C). See ADR 0069.
+	FailureResourceLimitReached
 
 	// Execution and policy.
 
@@ -328,7 +380,8 @@ var failureClassNames = [...]string{
 	FailureAuthzScopeInsufficient: "AUTHZ_SCOPE_INSUFFICIENT",
 	FailureAuthzNotPermitted:      "AUTHZ_NOT_PERMITTED",
 
-	FailureResourceNotFound: "RESOURCE_NOT_FOUND",
+	FailureResourceNotFound:     "RESOURCE_NOT_FOUND",
+	FailureResourceLimitReached: "RESOURCE_LIMIT_REACHED",
 
 	FailureExecLocalTimeout:              "EXEC_LOCAL_TIMEOUT",
 	FailureExecCancelled:                 "EXEC_CANCELLED",

@@ -162,6 +162,43 @@ func TestAuthAndAuthzStayDistinct(t *testing.T) {
 // svcdoctor is classified separately from anything the target did. These
 // classes exist so that a gap in the tool can never be reported as a defect in
 // the service.
+// TestResourceClassesStayDistinctFromAuthorization guards the boundary Phase 8.1
+// added a class across.
+//
+// A capacity ceiling and a permission decision are the two things a server most
+// often refuses a connection for, they are easiest to confuse when both arrive as
+// one numeric code — RabbitMQ sends 530 for both — and they send a reader to
+// opposite places. Merging them, in either direction, is the defect this exists
+// to catch.
+func TestResourceClassesStayDistinctFromAuthorization(t *testing.T) {
+	resources := []FailureClass{FailureResourceNotFound, FailureResourceLimitReached}
+	for _, c := range resources {
+		if !strings.HasPrefix(c.String(), "RESOURCE_") {
+			t.Errorf("%s should carry the RESOURCE_ prefix", c)
+		}
+	}
+
+	// Absence, capacity and denial are three facts, not one.
+	if FailureResourceLimitReached == FailureResourceNotFound {
+		t.Error("a capacity ceiling must be distinct from a missing resource")
+	}
+	for _, authz := range []FailureClass{
+		FailureAuthzDenied, FailureAuthzScopeInsufficient, FailureAuthzNotPermitted,
+	} {
+		if FailureResourceLimitReached == authz {
+			t.Errorf("a capacity ceiling must be distinct from %s: the same ceiling "+
+				"refuses every principal, so nothing about the identity was evaluated", authz)
+		}
+	}
+
+	// And it is not the weak protocol class it was carved out of. That class
+	// asserts the peer answered *not as the protocol expects*, which is false of a
+	// defined error path.
+	if FailureResourceLimitReached == FailureProtocolUnexpectedResponse {
+		t.Error("a named capacity ceiling must be distinct from an unexpected response")
+	}
+}
+
 func TestToolGapsAreNotTargetFailures(t *testing.T) {
 	toolGaps := []FailureClass{
 		FailureExecLocalTimeout,
@@ -206,7 +243,15 @@ func TestFailureClassNamesCoverAllClasses(t *testing.T) {
 	// that reaches a step without an input that step needs had no way to say so:
 	// the alternative was a graph indistinguishable from one cancelled at the
 	// same point (ADR 0046).
-	const wantCount = 41
+	//
+	// Phase 8.1 added FailureResourceLimitReached, the 42nd and the first class
+	// added for a condition **two** services produce: PostgreSQL SQLSTATE 53300
+	// and RabbitMQ's three Connection.Open ceilings. It exists because
+	// `internal/adapter/postgres/establish.go` had written down the exact
+	// condition under which it should — "one producer and no authorizing record
+	// is not enough to grow a service-neutral vocabulary" — and Phase 8.0C's
+	// measurements plus ADR 0069 satisfied both halves of it (ADR 0069 section 6).
+	const wantCount = 42
 
 	if len(failureClassNames) != wantCount {
 		t.Fatalf("failureClassNames has %d entries, want %d", len(failureClassNames), wantCount)
