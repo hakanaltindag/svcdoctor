@@ -76,6 +76,24 @@ services:
       - "no"
       - --requirepass
       - tls-pw
+      # R-07: a least-privilege user that authenticates and may not run PING.
+      #
+      # It is declared here rather than on redis-acl because svcdoctor refuses to
+      # put a credential on a plaintext channel, so the ACL server — which has no
+      # TLS — can never be authenticated against. Before this user existed, R-07
+      # could establish the NOPERM ground truth with redis-cli and could not
+      # measure svcdoctor against it at all.
+      #
+      # `--user` is additive: `default` stays governed by requirepass above, so
+      # every other scenario on this server is untouched.
+      - --user
+      - noperm
+      - "on"
+      - ">noperm-pw"
+      - "~app:*"
+      - "&*"
+      - +@read
+      - -ping
 
   # R-20: the Redis default, `tls-auth-clients yes`. svcdoctor presents no client
   # certificate, so the handshake must fail — truthfully, and without claiming

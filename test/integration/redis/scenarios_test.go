@@ -15,6 +15,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/transport"
 	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
+	"github.com/hakanaltindag/svcdoctor/test/harness"
 )
 
 // R-00 — the baseline. Plaintext, no authentication, nothing configured.
@@ -121,33 +122,55 @@ func TestR02R04R05MergedAuthenticationFailures(t *testing.T) {
 		{"R-05 disabled user", "disabled", "disabled-pw"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// The reset is the last thing before svcdoctor runs, so the count
+			// read afterwards is svcdoctor's own plus the reading connection.
+			resetAuthStats(t)
+
 			result := run(t, runOptions{
 				host: "127.0.0.1", port: portTLS,
 				username: tc.username, password: tc.password, tls: trustFixtureCA(t),
 			})
 
-			node := oneNodeAt(t, result, stepAuth)
-			if node.State() != domain.StateFail ||
-				node.FailureClass() != domain.FailureAuthCredentialsRejected {
-				t.Fatalf("state/class = %s/%s, want FAIL/AUTH_CREDENTIALS_REJECTED",
-					node.State(), node.FailureClass())
-			}
-			if !hasCode(result, diagnosisredis.CodeCredentialsRejected) {
-				t.Fatalf("findings %v, want REDIS_CREDENTIALS_REJECTED", codes(result))
-			}
-			if got := oneNodeAt(t, result, stepPing).State(); got != domain.StateSkipped {
-				t.Errorf("ping state = %s, want SKIPPED", got)
-			}
-
-			text := strings.ToLower(findingText(result))
-			for _, forbidden := range []string{"wrong password", "incorrect password"} {
-				if strings.Contains(text, forbidden) && !strings.Contains(text, "cannot tell which") {
-					t.Errorf("the report asserts %q; Redis merges three causes", forbidden)
-				}
-			}
-			if strings.Contains(text, tc.password) {
-				t.Error("the credential appeared in the report")
-			}
+			// R-H1 (harness). All three inputs above produce a byte-identical
+			// WRONGPASS, which the ground-truth comparison at the top of this
+			// test just proved. So the contract is: say the endpoint rejected
+			// what was presented, and name none of the three causes.
+			harness.Assert(t, harness.Subject{
+				Name:               "R-H1 " + tc.name,
+				Report:             result.Report(),
+				Incomplete:         result.Incomplete(),
+				CredentialAttempts: authAttempts(t),
+			}, harness.Expectation{
+				Summary: harness.Status(domain.SummaryStatusProblemsFound),
+				Nodes: []harness.Node{
+					{
+						Step:         stepAuth,
+						State:        domain.StateFail,
+						FailureClass: domain.FailureAuthCredentialsRejected,
+					},
+					{
+						Step:         stepPing,
+						State:        domain.StateSkipped,
+						FailureClass: domain.FailureExecSkippedPrerequisiteFailed,
+					},
+				},
+				RequireFindings: []domain.FindingCode{diagnosisredis.CodeCredentialsRejected},
+				ForbidFindings:  []domain.FindingCode{diagnosisredis.CodeCommandNotPermitted},
+				// The detail deliberately *enumerates* the three causes in
+				// order to say svcdoctor cannot tell them apart, so the
+				// enumeration is the honest refusal and must not be banned.
+				// What is banned is the assertive form of each — naming one of
+				// the three as what happened.
+				RequireProse: []string{"cannot tell which of the three occurred"},
+				ForbidProse: []string{
+					"the password is wrong", "the password is incorrect",
+					"the user does not exist", "no such user",
+					"the user is disabled", "the account is disabled",
+					"redis is unhealthy",
+				},
+				ForbidSecrets:         []string{tc.password},
+				MaxCredentialAttempts: harness.Count(1),
+			})
 		})
 	}
 }
@@ -198,15 +221,80 @@ func TestR07PingNotPermitted(t *testing.T) {
 		t.Fatalf("ground truth: noperm's PING answered %q, want NOPERM", truth)
 	}
 
+	// The same least-privilege user, now over TLS where the credential-transport
+	// policy permits svcdoctor to authenticate at all. Before the `noperm` user
+	// was declared on the TLS server this run authenticated as `default` and the
+	// NOPERM path was never measured end to end.
+	truthTLS := groundTruth(t, "svcd-redis-tls", "--tls",
+		"--cacert", "/etc/redis-certs/server.crt", "--no-auth-warning",
+		"--user", "noperm", "--pass", "noperm-pw", "PING")
+	if !strings.HasPrefix(truthTLS, "NOPERM") {
+		t.Fatalf("ground truth: noperm's PING over TLS answered %q, want NOPERM", truthTLS)
+	}
+
+	resetAuthStats(t)
+
 	result := run(t, runOptions{
 		host: "127.0.0.1", port: portTLS,
 		username: "noperm", password: "noperm-pw", tls: trustFixtureCA(t),
 	})
-	// The TLS server has no ACL file, so this run authenticates as default and
-	// the NOPERM path is exercised on the ACL server through the wire tests. What
-	// the integration suite pins here is the ground truth above: NOPERM is a real,
-	// reachable reply from a correctly configured least-privilege user.
-	_ = result
+
+	// R-H2 (harness). Authentication succeeded and the probe was refused for
+	// this identity. That is an authorization answer about one command, not a
+	// service failure and not a credential failure — so the status stays OK and
+	// the run stays complete.
+	harness.Assert(t, harness.Subject{
+		Name:               "R-H2 noperm",
+		Report:             result.Report(),
+		Incomplete:         result.Incomplete(),
+		CredentialAttempts: authAttempts(t),
+	}, harness.Expectation{
+		Summary:    harness.Status(domain.SummaryStatusOK),
+		Incomplete: harness.Complete(),
+		Nodes: []harness.Node{
+			{
+				Step:         stepAuth,
+				State:        domain.StatePass,
+				FailureClass: domain.FailureNone,
+			},
+			{
+				Step:         stepPing,
+				State:        domain.StateUnknown,
+				FailureClass: domain.FailureAuthzDenied,
+			},
+		},
+		RequireFindings: []domain.FindingCode{diagnosisredis.CodeCommandNotPermitted},
+		ForbidFindings: []domain.FindingCode{
+			diagnosisredis.CodeCredentialsRejected,
+			diagnosisredis.CodePingNotCompleted,
+			diagnosisredis.CodeEndpointNotServing,
+		},
+		ForbidProse: []string{
+			"redis is unhealthy", "the service failed", "wrong password",
+			"credential was rejected", "the endpoint is down",
+		},
+		ForbidSecrets:         []string{"noperm-pw"},
+		MaxCredentialAttempts: harness.Count(1),
+	})
+}
+
+// authAttempts reads the endpoint's own AUTH counter and returns what svcdoctor
+// contributed.
+//
+// # The measurement excludes the instrument
+//
+// Reading `INFO commandstats` requires authenticating, so the reading itself
+// increments the counter it is reading — the defect R-13 already recorded. The
+// reset happens before svcdoctor runs and the reading happens after, so the
+// total is svcdoctor's attempts plus exactly one for this call.
+func authAttempts(t *testing.T) *int {
+	t.Helper()
+	stats := tlsGroundTruth(t, "INFO", "commandstats")
+	n := authCalls(stats) - 1
+	if n < 0 {
+		n = 0
+	}
+	return &n
 }
 
 // R-08 — TLS with a verified identity.
@@ -644,4 +732,18 @@ func authCalls(stats string) int {
 		}
 	}
 	return 0
+}
+
+// tlsGroundTruth runs one redis-cli command against the TLS server as default.
+func tlsGroundTruth(t *testing.T, args ...string) string {
+	t.Helper()
+	full := append([]string{"--tls", "--cacert", "/etc/redis-certs/server.crt",
+		"--no-auth-warning", "-a", "tls-pw"}, args...)
+	return groundTruth(t, "svcd-redis-tls", full...)
+}
+
+// resetAuthStats zeroes the TLS server's command counters.
+func resetAuthStats(t *testing.T) {
+	t.Helper()
+	tlsGroundTruth(t, "CONFIG", "RESETSTAT")
 }
