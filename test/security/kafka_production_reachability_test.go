@@ -609,10 +609,28 @@ func TestRevealHasOneProductionCallSitePerService(t *testing.T) {
 	root := repositoryRoot(t)
 
 	// Where each call is allowed, and nowhere else.
+	//
+	// # Widening this map is the only way a service is admitted
+	//
+	// The invariant is **one authorized reveal per service, inside that
+	// service's wire package, and nowhere else**. The total below is derived
+	// from this map's length rather than written down, which is what makes a
+	// blind count bump impossible: admitting a service means naming the exact
+	// file that may open a secret, and a fifth service whose wire package is not
+	// listed still fails on the unauthorized-path branch.
+	//
+	// Phase 8.2 added the RabbitMQ entry. It qualifies for the same reason the
+	// other three do and for no weaker one: RabbitMQ BASIC transmits a password
+	// in a SASL PLAIN response (ADR 0068), so it needs exactly one site, in its
+	// own wire package, immediately before the bytes go on the socket. It does
+	// not widen the contract — `internal/adapter/rabbitmq/wire` has its own
+	// package-local guard asserting the same count of one, so the file is pinned
+	// from both sides.
 	authorized := map[string]bool{
-		"internal/adapter/postgres/wire/scram.go":     true,
-		"internal/adapter/kafka/wire/authenticate.go": true,
-		"internal/adapter/redis/wire/auth.go":         true,
+		"internal/adapter/postgres/wire/scram.go":      true,
+		"internal/adapter/kafka/wire/authenticate.go":  true,
+		"internal/adapter/redis/wire/auth.go":          true,
+		"internal/adapter/rabbitmq/wire/connection.go": true,
 	}
 
 	found := map[string]int{}
