@@ -11,6 +11,12 @@
 #
 # The image tag is exact. `latest` would make a passing suite mean nothing a
 # week later, and docs/COMPATIBILITY.md records the version this file pins.
+# An explicit project name. Without one Compose derives it from the parent
+# directory, which is `env` for every fixture in this repository — so two
+# environments would share a project and `down --remove-orphans` in one
+# would delete the other's containers.
+name: svcdoctor-valkey
+
 services:
   # R-00, R-11, R-18, R-19 baseline: plaintext, no authentication at all.
   valkey:

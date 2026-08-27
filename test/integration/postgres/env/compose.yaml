@@ -1,3 +1,9 @@
+# An explicit project name. Without one Compose derives it from the parent
+# directory, which is `env` for every fixture in this repository — so two
+# environments would share a project and `down --remove-orphans` in one
+# would delete the other's containers.
+name: svcdoctor-postgres
+
 services:
   postgres:
     image: postgres:18

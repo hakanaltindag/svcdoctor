@@ -255,7 +255,9 @@ func TestTheCredentialSurfaceIsExactlyTwoFlags(t *testing.T) {
 
 		// No environment source, no prompt, and no reach around the injected
 		// input. os.Stdin belongs to cmd/svcdoctor, which passes it in.
-		for _, forbidden := range []string{"os.Getenv", "os.Stdin", "Reveal", "SecretFor"} {
+		for _, forbidden := range []string{
+			"os.Getenv", "os.LookupEnv", "os.Environ", "os.Stdin", "Reveal", "SecretFor",
+		} {
 			if strings.Contains(code, forbidden) {
 				t.Errorf("%s references %q; the credential arrives only through the two "+
 					"declared flags, and the CLI never opens a Secret", path, forbidden)
