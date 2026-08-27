@@ -369,3 +369,122 @@ redpanda-test: ## Run the Redpanda integration suite against a running broker
 	$(GO) test -tags integration -count=1 -timeout 15m ./test/integration/redpanda/...
 
 integration-redpanda: redpanda-up redpanda-test redpanda-down ## Full Redpanda validation gate
+
+# --- RabbitMQ and LavinMQ -----------------------------------------------------
+
+RMQ_ENV := test/integration/rabbitmq/env
+RMQ_COMPOSE := docker compose -f $(RMQ_ENV)/compose.yaml
+LMQ_ENV := test/integration/lavinmq/env
+LMQ_COMPOSE := docker compose -f $(LMQ_ENV)/compose.yaml
+
+.PHONY: rabbitmq-up rabbitmq-users rabbitmq-down rabbitmq-test integration-rabbitmq
+.PHONY: lavinmq-up lavinmq-users lavinmq-down lavinmq-test integration-lavinmq
+
+# Readiness is asked of the broker, not of the container. A running RabbitMQ that
+# has not finished booting its Erlang node accepts a TCP connection and then
+# closes it, which is indistinguishable from RAB-16 — so the first scenario would
+# measure a race instead of a broker.
+#
+# **Every exec here runs as `rabbitmq`, and that is load-bearing rather than
+# tidiness.** `docker exec` defaults to root; `/var/lib/rabbitmq` is mode 1777;
+# and an Erlang command that runs before the server has written its cookie
+# creates `.erlang.cookie` owned by root with mode 0400. The server runs as uid
+# 999, cannot read it, and exits — so a root-owned readiness probe *causes* the
+# very failure it is checking for. Measured, not theorised: probing as root
+# killed the broker in 12 out of 12 attempts.
+rabbitmq-up: ## Start the RabbitMQ validation brokers
+	@$(RMQ_ENV)/gen-certs.sh
+	@# A stale anonymous volume from an earlier run carries a .erlang.cookie the
+	@# new container cannot read, and the broker exits before it binds a port.
+	@# Starting from a deleted state is what makes this target reproducible from
+	@# a fresh checkout and repeatable on a machine that has run it before.
+	@$(RMQ_COMPOSE) down -v --remove-orphans >/dev/null 2>&1 || true
+	@$(RMQ_COMPOSE) up -d
+	@printf 'waiting for rabbitmq'
+	@for i in $$(seq 1 90); do \
+		if docker exec -u rabbitmq svcd-rabbit rabbitmq-diagnostics -q ping >/dev/null 2>&1 \
+			&& docker exec -u rabbitmq svcd-rabbit-313 rabbitmq-diagnostics -q ping >/dev/null 2>&1 \
+			&& docker exec -u rabbitmq svcd-rabbit-409 rabbitmq-diagnostics -q ping >/dev/null 2>&1 \
+			&& docker exec -u rabbitmq svcd-rabbit-stop rabbitmq-diagnostics -q ping >/dev/null 2>&1; then \
+			printf ' ready\n'; $(MAKE) --no-print-directory rabbitmq-users; exit 0; fi; \
+		printf '.'; sleep 2; \
+	done; \
+	printf '\nbrokers did not become ready\n'; \
+	printf '\n--- container state ---\n'; \
+	$(RMQ_COMPOSE) ps || true; \
+	for svc in rabbit rabbit-313 rabbit-409 rabbit-stop; do \
+		printf '\n--- %s (last 40 lines) ---\n' "$$svc"; \
+		$(RMQ_COMPOSE) logs --tail=40 --no-color "$$svc" 2>&1 || true; \
+	done; \
+	exit 1
+
+# The principals every authentication and authorization scenario needs.
+#
+# Applied to all three versioned brokers, because a scenario that only exists on
+# 4.2.0 cannot show that 3.13.7 and 4.0.9 answer it the same way.
+#
+#   app      full permissions on / and on limited
+#   noperm   a real user with no permission on / at all (RAB-07)
+#   limited  a vhost whose max-connections is 0, so every open is refused for
+#            capacity rather than for permission (RAB-21)
+#
+# `guest` is left exactly as RabbitMQ ships it: restricted to loopback, which is
+# what RAB-05 measures.
+rabbitmq-users: ## Create the validation principals, vhosts and limits
+	@# RAB-18 targets a real management listener. Enabling the plugin here keeps
+	@# the broker image byte-identical to the one Phase 8.0C measured.
+	@docker exec -u rabbitmq svcd-rabbit rabbitmq-plugins -q enable rabbitmq_management >/dev/null 2>&1 || true
+	@for c in svcd-rabbit svcd-rabbit-313 svcd-rabbit-409; do \
+		docker exec -u rabbitmq $$c rabbitmqctl -q add_user app app-pw >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q set_permissions -p / app '.*' '.*' '.*' >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q add_user noperm noperm-pw >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q add_vhost limited >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q set_permissions -p limited app '.*' '.*' '.*' >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q set_vhost_limits -p limited '{"max-connections":0}' >/dev/null 2>&1 || true; \
+	done; \
+	printf 'principals ready\n'
+
+rabbitmq-down: ## Stop the RabbitMQ validation brokers and delete their volumes
+	@$(RMQ_COMPOSE) down -v --remove-orphans
+
+rabbitmq-test: ## Run the RabbitMQ integration suite against running brokers
+	$(GO) test -tags integration -count=1 -timeout 20m ./test/integration/rabbitmq/...
+
+integration-rabbitmq: rabbitmq-up rabbitmq-test rabbitmq-down ## Full RabbitMQ validation gate
+
+# LavinMQ reuses the RabbitMQ fixture's certificates rather than minting its own.
+# The material is throwaway either way, and sharing it means a TLS scenario that
+# passes against RabbitMQ and fails against LavinMQ has a vendor difference as
+# its only remaining explanation.
+lavinmq-up: ## Start the LavinMQ validation broker
+	@$(RMQ_ENV)/gen-certs.sh
+	@$(LMQ_COMPOSE) down -v --remove-orphans >/dev/null 2>&1 || true
+	@$(LMQ_COMPOSE) up -d
+	@printf 'waiting for lavinmq'
+	@for i in $$(seq 1 60); do \
+		if curl -fsS -u guest:guest http://127.0.0.1:56682/api/overview >/dev/null 2>&1; then \
+			printf ' ready\n'; $(MAKE) --no-print-directory lavinmq-users; exit 0; fi; \
+		printf '.'; sleep 1; \
+	done; \
+	printf '\nbroker did not become ready\n'; \
+	$(LMQ_COMPOSE) logs --tail=40 --no-color lavinmq 2>&1 || true; \
+	exit 1
+
+# LavinMQ has no rabbitmqctl. Its management API is RabbitMQ-compatible, so the
+# principals are created over HTTP — which is also the only place in either
+# fixture that touches a management API. svcdoctor never does; see the guard in
+# test/integration/rabbitmq that pins management calls at zero.
+#
+#   noperm   a real user with no permission on / at all (LMQ-05)
+#   limited  a vhost whose max-connections is 0 (LMQ-06). Phase 8.0C could only
+#            derive this template from LavinMQ's source; the fixture measures it.
+lavinmq-users: ## Create the LavinMQ validation principals, vhosts and limits
+	@base=http://127.0.0.1:56682/api; 	curl -fsS -u guest:guest -X PUT "$$base/users/noperm" 		-H 'content-type: application/json' 		-d '{"password":"noperm-pw","tags":""}' >/dev/null 2>&1 || true; 	curl -fsS -u guest:guest -X PUT "$$base/vhosts/limited" >/dev/null 2>&1 || true; 	curl -fsS -u guest:guest -X PUT "$$base/permissions/limited/guest" 		-H 'content-type: application/json' 		-d '{"configure":".*","write":".*","read":".*"}' >/dev/null 2>&1 || true; 	curl -fsS -u guest:guest -X PUT "$$base/vhost-limits/limited/max-connections" 		-H 'content-type: application/json' -d '{"value":0}' >/dev/null 2>&1 || true; 	printf 'principals ready\n'
+
+lavinmq-down: ## Stop the LavinMQ validation broker and delete its volume
+	@$(LMQ_COMPOSE) down -v --remove-orphans
+
+lavinmq-test: ## Run the LavinMQ integration suite against a running broker
+	$(GO) test -tags integration -count=1 -timeout 15m ./test/integration/lavinmq/...
+
+integration-lavinmq: lavinmq-up lavinmq-test lavinmq-down ## Full LavinMQ validation gate

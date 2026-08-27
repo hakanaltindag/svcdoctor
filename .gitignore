@@ -58,3 +58,7 @@ test-results/
 # Throwaway TLS material for the Redis and Valkey validation environments.
 test/integration/redis/env/certs/
 test/integration/valkey/env/certs/
+
+# Throwaway TLS material for the RabbitMQ validation brokers. The LavinMQ
+# fixture mounts this same directory rather than minting its own.
+test/integration/rabbitmq/env/certs/

@@ -1,0 +1,103 @@
+# The RabbitMQ BASIC validation environment.
+#
+# Four brokers, each existing because a scenario cannot be measured without it.
+#
+#   rabbit      4.2.0, the scenario broker. Plaintext, TLS and the management
+#               HTTP port are all exposed, because RAB-12, RAB-01 and RAB-18
+#               each need a different one of the three on the same broker.
+#   rabbit-313  3.13.7, and rabbit-409 4.0.9. They exist so the frozen wire
+#   rabbit-409  facts are asserted against every version the matrix claims,
+#               rather than against one and assumed for the rest. Phase 8.0C
+#               measured all three offering different mechanism *orders*, which
+#               is exactly the difference ADR 0068 §2 says must not matter.
+#   rabbit-stop 4.2.0, started and then stopped by RAB-16. It is separate so
+#               stopping it cannot perturb a scenario running against another
+#               broker.
+#
+# Image tags are exact and match the digests Phase 8.0C recorded. `latest`
+# anywhere would make a passing suite mean nothing a week later.
+#
+# RAB-18 needs a real management listener, and the scenario broker gets one by
+# enabling `rabbitmq_management` at runtime rather than by using the
+# `-management` image variant. That keeps the digest identical to the one the
+# contract study measured.
+#
+# Ports are in a private 566xx range so a developer's own broker on 5672 is never
+# what a scenario measures.
+# An explicit project name. Without one Compose derives it from the parent
+# directory, which is `env` for every fixture in this repository — so two
+# environments would share a project and `down --remove-orphans` in one
+# would delete the other's containers.
+name: svcdoctor-rabbitmq
+
+services:
+  rabbit:
+    image: rabbitmq:4.2.0
+    container_name: svcd-rabbit
+    hostname: svcd-rabbit
+    ports:
+      - "127.0.0.1:56672:5672"
+      - "127.0.0.1:56671:5671"
+      - "127.0.0.1:56673:15672"
+      # RAB-25 needs an IPv6 literal target. Published separately rather than on
+      # a wildcard bind, so the fixture stays loopback-only.
+      - "[::1]:56679:5672"
+    volumes:
+      - ./30-svcdoctor.conf:/etc/rabbitmq/conf.d/30-svcdoctor.conf:ro
+      - ./certs:/etc/rabbitmq/certs:ro
+    # RabbitMQ sizes its memory watermark from the host. Four brokers on a
+    # laptop need a stated ceiling, and a bounded fixture is a requirement of
+    # this phase rather than a courtesy.
+    mem_limit: 768m
+    # The data directory is a tmpfs so the fixture leaves **no persistent
+    # residue**, which this phase requires. Nothing here needs to survive a run:
+    # every principal is recreated by `make rabbitmq-users`.
+    tmpfs:
+      - /var/lib/rabbitmq:uid=999,gid=999,size=256m
+
+  rabbit-313:
+    image: rabbitmq:3.13.7
+    container_name: svcd-rabbit-313
+    hostname: svcd-rabbit-313
+    ports:
+      - "127.0.0.1:56674:5672"
+      - "127.0.0.1:56675:5671"
+    volumes:
+      - ./30-svcdoctor.conf:/etc/rabbitmq/conf.d/30-svcdoctor.conf:ro
+      - ./certs:/etc/rabbitmq/certs:ro
+    mem_limit: 768m
+    # The data directory is a tmpfs so the fixture leaves **no persistent
+    # residue**, which this phase requires. Nothing here needs to survive a run:
+    # every principal is recreated by `make rabbitmq-users`.
+    tmpfs:
+      - /var/lib/rabbitmq:uid=999,gid=999,size=256m
+
+  rabbit-409:
+    image: rabbitmq:4.0.9
+    container_name: svcd-rabbit-409
+    hostname: svcd-rabbit-409
+    ports:
+      - "127.0.0.1:56676:5672"
+      - "127.0.0.1:56677:5671"
+    volumes:
+      - ./30-svcdoctor.conf:/etc/rabbitmq/conf.d/30-svcdoctor.conf:ro
+      - ./certs:/etc/rabbitmq/certs:ro
+    mem_limit: 768m
+    # The data directory is a tmpfs so the fixture leaves **no persistent
+    # residue**, which this phase requires. Nothing here needs to survive a run:
+    # every principal is recreated by `make rabbitmq-users`.
+    tmpfs:
+      - /var/lib/rabbitmq:uid=999,gid=999,size=256m
+
+  rabbit-stop:
+    image: rabbitmq:4.2.0
+    container_name: svcd-rabbit-stop
+    hostname: svcd-rabbit-stop
+    ports:
+      - "127.0.0.1:56678:5672"
+    mem_limit: 512m
+    # The data directory is a tmpfs so the fixture leaves **no persistent
+    # residue**, which this phase requires. Nothing here needs to survive a run:
+    # every principal is recreated by `make rabbitmq-users`.
+    tmpfs:
+      - /var/lib/rabbitmq:uid=999,gid=999,size=256m

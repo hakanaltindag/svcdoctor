@@ -1,0 +1,49 @@
+# The LavinMQ BASIC validation environment.
+#
+# One broker, and it is a separate compose file rather than a fifth service in
+# the RabbitMQ one for a reason this phase has to keep visible: LavinMQ is a
+# **different implementation of the same protocol**, not another RabbitMQ
+# version. Its scenarios prove svcdoctor's journey is vendor-neutral, so they
+# must be startable and runnable without a RabbitMQ broker existing at all. A
+# shared file would let a LavinMQ assertion quietly depend on one.
+#
+# Phase 8.0C measured this exact release answering authentication refusals with
+# class/method 10/11 where RabbitMQ sends 0/0, and naming no vhost in its
+# vhost-not-found text where RabbitMQ interpolates one. Both differences are the
+# point: neither may change svcdoctor's attribution.
+#
+# --bind 0.0.0.0 is required. LavinMQ defaults every listener to 127.0.0.1,
+# which inside a container means the port is published and refuses every
+# connection — a fixture that failed this way would look exactly like RAB-14.
+# An explicit project name. Without one Compose derives it from the parent
+# directory, which is `env` for every fixture in this repository — so two
+# environments would share a project and `down --remove-orphans` in one
+# would delete the other's containers.
+name: svcdoctor-lavinmq
+
+services:
+  lavinmq:
+    image: cloudamqp/lavinmq:2.3.0
+    container_name: svcd-lavinmq
+    hostname: svcd-lavinmq
+    ports:
+      - "127.0.0.1:56680:5672"
+      - "127.0.0.1:56681:5671"
+      - "127.0.0.1:56682:15672"
+    volumes:
+      - ../../rabbitmq/env/certs:/etc/lavinmq/certs:ro
+    command:
+      - lavinmq
+      - --bind=0.0.0.0
+      - --amqp-port=5672
+      - --amqps-port=5671
+      - --http-port=15672
+      - --cert=/etc/lavinmq/certs/server.crt
+      - --key=/etc/lavinmq/certs/server.key
+      - --data-dir=/var/lib/lavinmq
+      # The default user is reachable from the host, which arrives through the
+      # Docker bridge as a remote address. LMQ-02 authenticates as it, so the
+      # loopback restriction is off here — unlike the RabbitMQ fixture, where
+      # RAB-05 exists precisely to measure that restriction.
+      - --default-user-only-loopback=false
+    mem_limit: 512m
