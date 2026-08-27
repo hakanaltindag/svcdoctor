@@ -89,6 +89,13 @@ func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 		// two wire packages are -- it holds this service's only Reveal.
 		"github.com/hakanaltindag/svcdoctor/internal/adapter/redis":   true,
 		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/redis": true,
+		// Phase 8.2. A fourth service adds the same two layers and nothing else.
+		// internal/service/rabbitmq is absent for the reason Redis's is: the
+		// composition reads the adapter's own answers rather than the graph. And
+		// internal/adapter/rabbitmq/wire stays denied for the reason all four
+		// wire packages are -- it holds this service's only Reveal.
+		"github.com/hakanaltindag/svcdoctor/internal/adapter/rabbitmq":   true,
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/rabbitmq": true,
 	}
 
 	for _, name := range productionFiles(t) {
@@ -454,6 +461,12 @@ func TestTheRunOwnsNoExitCode(t *testing.T) {
 //	AuthRequired  Redis. The endpoint names no method — it either refuses the
 //	              credential-free capability command with NOAUTH or it does not —
 //	              so the adapter's normalized answer already is the boolean.
+//	              RabbitMQ reuses the name in Phase 8.2 and answers it from the
+//	              protocol rather than from an observation: AMQP 0-9-1 has no
+//	              credential-free capability exchange, so every endpoint demands
+//	              authentication. The answer is constant and still belongs to the
+//	              adapter, because a composition root deciding it would be
+//	              inventing the partition ADR 0041 §8.1 requires evidence for.
 //
 // A name earns a place here when a service's adapter genuinely answers the
 // question. Adding one is the review a fourth service is forced through, and
