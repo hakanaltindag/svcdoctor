@@ -1277,7 +1277,9 @@ func TestTheCLINeverRevealsASecret(t *testing.T) {
 			continue
 		}
 		code := sourceWithoutComments(t, name)
-		for _, forbidden := range []string{"Reveal", "SecretFor", "os.Getenv", "os.Stdin"} {
+		for _, forbidden := range []string{
+			"Reveal", "SecretFor", "os.Getenv", "os.LookupEnv", "os.Environ", "os.Stdin",
+		} {
 			if strings.Contains(code, forbidden) {
 				t.Errorf("%s references %q; the CLI constructs a Secret and never opens it, "+
 					"reads no environment, and takes its input through App.In", name, forbidden)

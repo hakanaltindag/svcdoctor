@@ -4,6 +4,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
+	servicerabbitmq "github.com/hakanaltindag/svcdoctor/internal/service/rabbitmq"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
 
@@ -35,6 +36,27 @@ var labels = map[domain.Step]string{
 	servicepostgres.StepStartup:        "Startup",
 	servicepostgres.StepAuthentication: "Authentication",
 	servicepostgres.StepSession:        "Session",
+
+	// RabbitMQ, per ADR 0067 §4. Each names the frame that had to arrive, and
+	// claims nothing beyond it.
+	//
+	// "Connection.Start" rather than "capabilities": receipt of that frame is
+	// what proves the peer speaks AMQP 0-9-1, and it arrives before any
+	// credential — so it says something about the protocol and nothing about who
+	// svcdoctor is.
+	//
+	// "Authentication" is the same word the other three services use, and it
+	// carries the same meaning: a credential was presented and the endpoint took
+	// a position. Its PASS is the arrival of Connection.Tune, because RabbitMQ
+	// never acknowledges authentication any other way.
+	//
+	// "Connection.Open" rather than "Virtual host" or "Session": the frame is
+	// what was sent, and naming the step after the vhost would invite a reader to
+	// treat a PASS as a statement about the virtual host's health rather than
+	// about one connection being allowed to open in it.
+	servicerabbitmq.StepConnectionStart: "Connection.Start",
+	servicerabbitmq.StepAuthentication:  "Authentication",
+	servicerabbitmq.StepConnectionOpen:  "Connection.Open",
 
 	// Kafka, per ADR 0052 section 5. Each names the exchange that happened and
 	// claims nothing beyond it.

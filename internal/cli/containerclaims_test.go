@@ -102,8 +102,13 @@ func TestTheImageRunsAsANumericNonRootUser(t *testing.T) {
 //
 // The rule is not "do not hardcode a password" — nobody does that on purpose.
 // It is that no environment variable may become a *credential source*, because
-// production code contains zero os.Getenv call sites and that is what makes
+// internal/cli contains zero environment-read call sites and that is what makes
 // SVCDOCTOR_PASSWORD structurally impossible rather than merely absent.
+//
+// Phase 8.2 briefly breached this with a RabbitMQ-only `--password-env`, and the
+// guard in cli_test.go missed it because it forbade `os.Getenv` by literal name
+// while the code called `os.LookupEnv`. Both guards now name every environment
+// accessor, and the flag was removed at 8.2-R3 closure.
 func TestTheFinalStageCarriesNoSecretEnvironment(t *testing.T) {
 	forbidden := []string{"PASSWORD", "PASSWD", "SECRET", "TOKEN", "CREDENTIAL", "APIKEY", "API_KEY"}
 	for _, directive := range dockerfileDirectives(t) {
@@ -114,7 +119,8 @@ func TestTheFinalStageCarriesNoSecretEnvironment(t *testing.T) {
 		for _, word := range forbidden {
 			if strings.Contains(upper, word) {
 				t.Errorf("the Dockerfile declares a credential-shaped build variable:\n  %s\n\n"+
-					"svcdoctor reads credentials from --password-file or --password-stdin only. "+
+					"svcdoctor reads credentials from --password-file or --password-stdin only "+
+					"(ADR 0049 §5). "+
 					"A build ARG is also visible in `docker history`.", directive)
 			}
 		}

@@ -71,6 +71,7 @@ type App struct {
 	diagnosePostgres func(context.Context, app.PostgresParams) (app.Result, error)
 	diagnoseKafka    func(context.Context, app.KafkaParams) (app.Result, error)
 	diagnoseRedis    func(context.Context, app.RedisParams) (app.Result, error)
+	diagnoseRabbitMQ func(context.Context, app.RabbitMQParams) (app.Result, error)
 }
 
 // New builds the production command environment.
@@ -83,6 +84,7 @@ func New(stdin io.Reader, stdout, stderr io.Writer, version string) *App {
 		diagnosePostgres: app.DiagnosePostgres,
 		diagnoseKafka:    app.DiagnoseKafka,
 		diagnoseRedis:    app.DiagnoseRedis,
+		diagnoseRabbitMQ: app.DiagnoseRabbitMQ,
 	}
 }
 
@@ -158,6 +160,9 @@ func (a *App) diagnose(ctx context.Context, args []string) int {
 
 	case "redis":
 		return a.diagnoseRedisCommand(ctx, args[1:])
+
+	case "rabbitmq":
+		return a.diagnoseRabbitMQCommand(ctx, args[1:])
 
 	default:
 		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: unknown service %q\n\n", args[0])

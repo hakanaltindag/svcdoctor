@@ -399,10 +399,28 @@ func observationLines(graph domain.Graph, view serviceView) []renderedObservatio
 			continue
 		}
 		text := ""
-		if observation.render != nil {
+		switch {
+		case observation.render != nil:
 			text = observation.render(value)
-		} else if str, ok := value.Str(); ok {
-			text = str
+		default:
+			// **Str first, then the value's own rendering.**
+			//
+			// AttrValue.Str reports only for the plain string kind, and until
+			// Phase 8.2 every observation happened to be one. RabbitMQ has two
+			// kinds that are not: the negotiated Tune values are integers, and
+			// the virtual host and cluster name are identity-classed so that
+			// redaction can pseudonymize them. Falling through to String() shows
+			// both.
+			//
+			// It is safe for an identity because redaction runs over the domain
+			// values *before* this renderer sees them: a shareable report reaches
+			// here already carrying pseudonyms, so rendering what the value holds
+			// cannot leak what it held.
+			if str, ok := value.Str(); ok {
+				text = str
+			} else {
+				text = value.String()
+			}
 		}
 		if text == "" {
 			continue

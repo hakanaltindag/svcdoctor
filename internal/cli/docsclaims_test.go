@@ -438,6 +438,18 @@ var realTestedPlatforms = map[string]bool{
 	// promote a cluster row.
 	"Redis":  true,
 	"Valkey": true,
+	// Phase 8.2-R3. Both are committed fixtures — test/integration/rabbitmq and
+	// test/integration/lavinmq — driven through app.DiagnoseRabbitMQ, with
+	// ground truth established by rabbitmqctl and by a scratch AMQP client that
+	// shares no code with the implementation, before svcdoctor is asked.
+	//
+	// Neither entry covers a RabbitMQ **cluster**: svcdoctor opens one
+	// connection to one endpoint and discovers nothing, so a single node
+	// answering cannot promote a cluster row. That row exists separately, at
+	// Level 0. No managed provider was contacted and no cloud credential was
+	// used at any point.
+	"RabbitMQ": true,
+	"LavinMQ":  true,
 }
 
 // TestOnlyRealTestedPlatformsClaimLevelTwoOrThree is the central guard.

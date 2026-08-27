@@ -6,6 +6,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
+	servicerabbitmq "github.com/hakanaltindag/svcdoctor/internal/service/rabbitmq"
 	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
 )
@@ -264,6 +265,133 @@ var services = map[domain.ServiceID]serviceView{
 					"credential was presented. The Sentinel itself was not diagnosed.",
 				},
 				replacesOutcome: true,
+			},
+		},
+	},
+
+	// Phase 8.2. A fourth service arrives as one more row, exactly as ADR 0052
+	// §5 fixed: no rendering function in this package learned the word
+	// "rabbitmq", and a structural guard fails the build if one does.
+	"rabbitmq": {
+		journey: []domain.Step{
+			vocabulary.StepDNSLookup,
+			vocabulary.StepTCPConnect,
+			vocabulary.StepTLSHandshake,
+			servicerabbitmq.StepConnectionStart,
+			servicerabbitmq.StepAuthentication,
+			servicerabbitmq.StepConnectionOpen,
+		},
+		narrowingSteps: []domain.Step{
+			servicerabbitmq.StepAuthentication,
+			servicerabbitmq.StepConnectionOpen,
+		},
+		outcomeStep: servicerabbitmq.StepConnectionOpen,
+		// ADR 0067 §5.1, deliberately endpoint-scoped and deliberately naming
+		// the frame rather than a state of the world.
+		//
+		// **Not** "RabbitMQ is healthy", "the broker is usable" or "the virtual
+		// host is healthy". Open-Ok proves a real broker process authenticated
+		// this identity and let it open a connection in this virtual host at
+		// this instant — and behind a load balancer svcdoctor cannot even say
+		// which node answered, because every node in a cluster reports the same
+		// cluster_name.
+		outcomeReached: "this endpoint answered Connection.Open-Ok for the requested " +
+			"virtual host on this connection",
+		outcomeNotReached: "this endpoint did NOT answer Connection.Open-Ok for the " +
+			"requested virtual host on this connection",
+
+		observations: []observationLine{
+			{
+				step:  servicerabbitmq.StepConnectionStart,
+				key:   servicerabbitmq.AttrProduct,
+				label: "implementation",
+			},
+			{
+				step:  servicerabbitmq.StepConnectionStart,
+				key:   servicerabbitmq.AttrVersion,
+				label: "version",
+			},
+			{
+				step:  servicerabbitmq.StepConnectionStart,
+				key:   servicerabbitmq.AttrPlatform,
+				label: "platform",
+			},
+			{
+				step:  servicerabbitmq.StepConnectionStart,
+				key:   servicerabbitmq.AttrClusterName,
+				label: "cluster name",
+			},
+			{
+				step:  servicerabbitmq.StepConnectionStart,
+				key:   servicerabbitmq.AttrAMQPVersion,
+				label: "protocol",
+				// Rendered, never interpreted. Nothing branches on it and
+				// svcdoctor never compares it.
+				render: func(v domain.AttrValue) string {
+					if s := v.String(); s != "" {
+						return "AMQP " + s
+					}
+					return ""
+				},
+			},
+			{
+				step:  servicerabbitmq.StepConnectionStart,
+				key:   servicerabbitmq.AttrMechanismsOffered,
+				label: "mechanisms offered",
+			},
+			{
+				step:  servicerabbitmq.StepAuthentication,
+				key:   servicerabbitmq.AttrMechanismSelected,
+				label: "mechanism used",
+			},
+			{
+				step:  servicerabbitmq.StepConnectionOpen,
+				key:   servicerabbitmq.AttrVHost,
+				label: "virtual host",
+			},
+			{
+				step:  servicerabbitmq.StepAuthentication,
+				key:   servicerabbitmq.AttrChannelMaxOffered,
+				label: "channel_max offered",
+			},
+			{
+				step:  servicerabbitmq.StepAuthentication,
+				key:   servicerabbitmq.AttrChannelMaxSelected,
+				label: "channel_max selected",
+			},
+			{
+				step:  servicerabbitmq.StepAuthentication,
+				key:   servicerabbitmq.AttrFrameMaxOffered,
+				label: "frame_max offered",
+			},
+			{
+				step:  servicerabbitmq.StepAuthentication,
+				key:   servicerabbitmq.AttrFrameMaxSelected,
+				label: "frame_max selected",
+			},
+			{
+				step:  servicerabbitmq.StepAuthentication,
+				key:   servicerabbitmq.AttrHeartbeatOffered,
+				label: "heartbeat offered",
+			},
+			{
+				step:  servicerabbitmq.StepAuthentication,
+				key:   servicerabbitmq.AttrHeartbeatSelected,
+				label: "heartbeat selected",
+			},
+		},
+
+		notes: []conditionalNote{
+			{
+				step:  servicerabbitmq.StepConnectionStart,
+				key:   servicerabbitmq.AttrAnonymousOffered,
+				value: "true",
+				lines: []string{
+					"This endpoint advertises SASL ANONYMOUS.",
+					"svcdoctor never selects it. A remote client could attempt a login",
+					"with no credential configured anywhere; whether that is intended is",
+					"a configuration question svcdoctor does not answer.",
+				},
 			},
 		},
 	},
