@@ -755,18 +755,18 @@ These are deliberate boundaries, not defects:
 - no DSN or `sslmode` input
 - no retries and no protocol fallbacks
 
-Deferred until PostgreSQL and Kafka are both validated as products: Redis/Valkey, RabbitMQ,
-MySQL/MariaDB, Elasticsearch/OpenSearch.
+Built since: Redis/Valkey (`diagnose redis`) and RabbitMQ/LavinMQ (`diagnose rabbitmq`).
+Still deferred: MySQL/MariaDB, Elasticsearch/OpenSearch.
 
 Out of scope for v0.1 entirely: host mode, eBPF, MCP server, PDF generation, tuning advisor,
 long-term monitoring, LLM-based core diagnosis, and generic rule scripting DSLs.
 
 ## Compatibility
 
-**svcdoctor is validated against Apache Kafka and PostgreSQL.** Those are the two it has been
-run against, repeatedly, from committed fixtures.
+**svcdoctor is validated against Apache Kafka, PostgreSQL, Redis, Valkey, RabbitMQ and
+LavinMQ.** Those are the ones it has been run against, repeatedly, from committed fixtures.
 
-Other Kafka-protocol and PostgreSQL-protocol implementations are a separate question with a
+Other implementations of the same protocols are a separate question with a
 separate answer, and [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) is where it is kept. That
 document grades every platform by what was actually done to it — whether svcdoctor ran against
 a real instance, or whether only the vendor's documentation was read — because those are not

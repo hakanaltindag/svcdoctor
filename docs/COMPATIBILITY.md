@@ -173,41 +173,59 @@ Three upstream behaviours the ADRs rest on were re-measured on the real servers 
 - A wrong password, an unknown user and a disabled user produce **byte-identical** `WRONGPASS`
   replies, which is why no svcdoctor finding names a cause.
 
-## 4c. RabbitMQ and LavinMQ — decided, and NOT IMPLEMENTED
+## 4c. RabbitMQ and LavinMQ
 
-**svcdoctor cannot speak AMQP 0-9-1.** There is no `svcdoctor diagnose rabbitmq` command, no
-RabbitMQ adapter and no AMQP wire code. Phase 8.1 froze the contract for one in ADRs 0067 to
-0070; nothing was built. Every row below is Level 0 and stays there until an implementation
-exists and is run.
+One command, `svcdoctor diagnose rabbitmq`, diagnoses both. Which implementation answered is
+read from the endpoint's own `Connection.Start` `server-properties` and shown in the report;
+the verb is not a claim, and nothing in the journey branches on it.
+
+The terminal boundary is `Connection.Open-Ok` and nothing weaker. It says **this endpoint
+answered for the requested virtual host on this connection** — not that a cluster is healthy,
+not that any other node is reachable, and not that the endpoint will answer again.
 
 | Platform | Wire | TLS | Auth overlap | Real tested | Level | Known gaps |
 |---|---|---|---|---|---|---|
-| **RabbitMQ self-hosted** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED`. Contract frozen in ADRs 0067–0070; no adapter exists |
-| **LavinMQ** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED`. Same absent adapter. Its reply texts differ from RabbitMQ's and ADR 0069 §3 records a separate template family for them |
-| **Amazon MQ for RabbitMQ** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED` and `NOT TESTED`. No cloud credential was used at any point |
-| **CloudAMQP** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED` and `NOT TESTED`. Shared plans assign a generated virtual host rather than `/` |
-| **Any other AMQP 0-9-1 broker** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT IMPLEMENTED` |
+| **RabbitMQ** 4.2.0 | AMQP 0-9-1 | verified TLS, custom CA, IP SAN, server-name override | **SASL `PLAIN` ✓** | **YES** — committed `test/integration/rabbitmq` fixture, 20 BASIC scenarios | **3 — SUPPORTED BASIC** | Direct endpoint only. See the limits below |
+| **RabbitMQ** 4.0.9 | AMQP 0-9-1 | verified TLS, custom CA | **SASL `PLAIN` ✓** | **YES** — same fixture, frozen wire facts asserted per version | **3 — SUPPORTED BASIC** | Same limits |
+| **RabbitMQ** 3.13.7 | AMQP 0-9-1 | verified TLS, custom CA | **SASL `PLAIN` ✓** | **YES** — same fixture, frozen wire facts asserted per version | **3 — SUPPORTED BASIC** | Same limits |
+| **LavinMQ** 2.3.0 | AMQP 0-9-1 | verified TLS, custom CA | **SASL `PLAIN` ✓** | **YES** — committed `test/integration/lavinmq` fixture, 9 scenarios | **3 — SUPPORTED BASIC** | Same limits. Same production adapter, with no vendor branch anywhere in the journey |
+| Any other RabbitMQ or LavinMQ version | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | Tested at the four exact versions above and nowhere else. svcdoctor does no version arithmetic, so it makes no prediction about any other release |
+| **RabbitMQ clusters** (as a cluster) | — | — | — | **NO** | **0 — NOT EVALUATED** | Topology is **not measured**. svcdoctor opens one connection to one endpoint and discovers nothing |
+| **Amazon MQ for RabbitMQ** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. No cloud credential was used at any point |
+| **CloudAMQP** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. Shared plans assign a generated virtual host rather than `/` |
+| **Azure / GCP managed AMQP** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED` |
+| **Any other AMQP 0-9-1 broker** | AMQP 0-9-1 | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. Compatibility is not inferred from protocol similarity |
 
-### What was measured, and why it changes none of the rows above
+### What was actually measured
 
-`docs/validation/RABBITMQ_PHASE80_CONTRACT_STUDY.md` records wire measurements taken against
-RabbitMQ 3.13.7, 4.0.9 and 4.2.0 and LavinMQ 2.3.0 in Docker: the real `Connection.Start` sizes,
-the Tune negotiation window, the exact refusal frames and the truncation boundary.
+Every scenario establishes ground truth **before** svcdoctor is asked, through `rabbitmqctl` or
+through a scratch AMQP client written for the phase that shares no code with the
+implementation under test. The frozen wire facts were asserted against each version rather than
+against one and assumed for the rest:
 
-**Those measurements were taken by a scratch client written for the phase, not by svcdoctor.**
-They establish what the brokers do. They establish nothing about what svcdoctor does, because
-svcdoctor does not speak the protocol — which is exactly why a measured protocol study does not
-move a row. Level 2 requires svcdoctor itself completing the BASIC journey against a real
-instance.
+- `channel_max 1`, `frame_max 8192`, `heartbeat 0` — accepted by all four brokers.
+- `authentication_failure_close` — advertised, and asserted by consequence: without it every
+  one of these brokers sends **no frame at all** on a failed login and simply closes.
+- Graceful `Connection.Close` / `Close-Ok` after a successful open.
+- **Zero** `Channel.Open`, queue, exchange, publish, consume or management-API calls, proven
+  both structurally and against the running brokers.
+- **At most one** credential-bearing frame per run, counted from the broker's own log.
+- Mechanism **order** differs across all three RabbitMQ releases; selection is by name.
 
-### What the frozen contract will and will not do
+### Known limits, all deliberate
 
-When it is built, `svcdoctor diagnose rabbitmq` will connect, negotiate, authenticate with SASL
-PLAIN over verified TLS only, open one virtual host, and stop at `Connection.Open-Ok`. It will
-**not** open a channel, name a queue or an exchange, publish, consume, call the management HTTP
-API, discover cluster members or diagnose a cluster. Reaching the terminal boundary will claim
-that one endpoint answered at one instant from one vantage, and nothing about whether messaging
-works.
+- **`PLAIN` only.** `AMQPLAIN`, `EXTERNAL` and `ANONYMOUS` are observed and never selected.
+  `ANONYMOUS` is recorded as an observation because a broker advertising it will admit a remote
+  client with no credential at all — that is a hardening judgement, and BASIC diagnoses
+  reachability rather than posture.
+- **A password crosses only a verified-TLS channel**, with no opt-in. Plaintext and
+  `--tls-insecure` both withhold the credential and say so.
+- **No client certificates.** `EXTERNAL` and mTLS are not implemented and are not claimed.
+- **One connection, one endpoint.** No reconnect, no retry, no fallback, no discovery.
+- **`541 INTERNAL_ERROR` vhost-down is source-proven and still not live-measured.** No
+  normalized outcome is authorized for it; it degrades to the weakest true conclusion.
+- **A backend-qualified vhost denial** (`" by backend …"`) remains **SOURCE-ONLY**. No
+  authorization-backend plugin was installed, and the template is not claimed as measured.
 
 ## 5. What none of this required
 

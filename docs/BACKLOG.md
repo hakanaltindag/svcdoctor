@@ -4497,7 +4497,7 @@ exist and this phase did not create it.
   eight constants.
 
 **Counts.** `SchemaVersion` **1** unchanged. Failure classes **41 → 42**. Finding codes unchanged
-(the twelve RabbitMQ codes are decided, not implemented). `Reveal` sites **3**, `SecretFor` sites
+(the RabbitMQ codes are decided, not implemented). `Reveal` sites **3**, `SecretFor` sites
 and dependency count **unchanged**. Three `Step` values are decided and not yet added.
 
 **The one production change** is `RESOURCE_LIMIT_REACHED`, plus migrating PostgreSQL SQLSTATE

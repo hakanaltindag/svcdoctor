@@ -88,7 +88,7 @@ credential-bearing frame, endpoint-scoped authority and the unchanged verified-T
 **0069** (authentication and vhost authorization as separate stages, and construct-and-compare
 normalization of a `Connection.Close` with truncation short-circuiting first), **0070** (the Tune
 values, the silent-close correction, and one frame ceiling in place of eight constants). They add
-three `Step` values and twelve RabbitMQ finding codes when implemented, and **one** generic
+three `Step` values and eleven RabbitMQ finding codes when implemented, and **one** generic
 `FailureClass` — `RESOURCE_LIMIT_REACHED` — which 0069 §6 authorizes and Phase 8.1 implemented
 immediately, because PostgreSQL SQLSTATE `53300` migrated onto it in the same change-set. No
 `SchemaVersion` change and no dependency. The contract is measured rather than reasoned:

@@ -63,7 +63,10 @@ The run stops with `UNKNOWN`, failure class `AUTH_MECHANISM_NOT_OFFERED`, and **
 credential bytes sent**. It is not a FAIL: the broker is behaving correctly and
 svcdoctor is the limited party.
 
-Claimable: *this endpoint offers `<list>`; svcdoctor implements PLAIN only.*
+Claimable: *this endpoint offers, among the mechanisms svcdoctor recognizes,
+`<set>`; svcdoctor implements PLAIN only.* The set is normalized and closed —
+ADR 0067 §4.2 — because the peer's own mechanism string is unbounded text and
+does not cross the wire boundary.
 Not claimable: anything about whether the credential is valid.
 
 ## 3. `authentication_failure_close` is a precondition, not a courtesy
@@ -196,7 +199,7 @@ Plaintext AMQP on a private network is genuinely the common RabbitMQ deployment,
 cost is real and is accepted with one mitigation that is part of this decision:
 **a refused run must still be useful.** Because mechanism discovery is credential-free,
 a policy refusal still delivers DNS, TCP, the TLS state, the peer's product and version,
-the full advertised mechanism list and the Tune parameters. The report says: *this
+the recognized advertised mechanisms and the Tune parameters. The report says: *this
 endpoint speaks AMQP 0-9-1, is `<product> <version>`, offers `<mechanisms>`, and
 svcdoctor refused to put a password on an unverified channel.* That is an answer, not a
 dead end.

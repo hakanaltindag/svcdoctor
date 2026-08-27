@@ -114,7 +114,7 @@ target.requested
 
 | Step | PASS means | Carries |
 |---|---|---|
-| `rabbitmq.connection_start` | a well-formed `Connection.Start` arrived | AMQP version, the peer's `product`, `version`, `cluster_name`, `platform`, the offered mechanism list, the locales |
+| `rabbitmq.connection_start` | a well-formed `Connection.Start` arrived | AMQP version, the peer's `product`, `version`, `cluster_name`, `platform`, the **normalized set of recognized** advertised mechanisms (§4.2), the locales |
 | `rabbitmq.authentication` | `Connection.Tune` arrived | selected mechanism, authenticated identity (or "no credential presented"), **and the Tune values** — offered and selected `channel_max`, `frame_max`, `heartbeat` |
 | `rabbitmq.connection_open` | `Connection.Open-Ok` arrived | the requested vhost, and on failure the normalized close outcome of ADR 0069 |
 
@@ -139,7 +139,40 @@ simplification: there is no ambiguous position in the state machine, and no
 disambiguation rule is needed. A negotiation refusal is observed as a peer close while
 awaiting `Open-Ok`, and ADR 0070 §7 owns its outcome.
 
-### 4.2 A vhost node was rejected
+### 4.2 The mechanism list is recorded as a normalized set, not as peer bytes
+
+**Amended in Phase 8.2, narrowly.** The table above said "the offered mechanism
+list", which read as the peer's own string. It is not.
+
+`Connection.Start.mechanisms` is a peer-controlled `longstr` bounded only by the
+frame ceiling, so copying it into evidence would admit up to eight kibibytes of
+peer-chosen text into a report — for a field whose only diagnostic content is
+*which mechanisms svcdoctor could have used*. That is the payload ADR 0066
+already refuses for a different field, and there is no reason the answer differs
+here.
+
+So the frozen claim is:
+
+> svcdoctor records the normalized set of recognized authentication mechanisms
+> advertised by the peer; raw peer-controlled mechanism-list text does not cross
+> the wire boundary.
+
+The recognized set is closed: `PLAIN`, `AMQPLAIN`, `ANONYMOUS`, `EXTERNAL` and
+`RABBIT-CR-DEMO`. Membership is decided by **token equality**, never substring
+containment — a peer offering `PLAINTEXT-ONLY` does not offer `PLAIN`, and
+`strings.Contains` would say it does. Ordering carries no authority (ADR 0068
+§2), and the recorded set is sorted so that two runs against the same endpoint
+render identically.
+
+A mechanism outside the set is simply not reported, which is truthful: svcdoctor
+did not recognize it. ADR 0068 §2.1's claimable sentence survives in the narrower
+and still-actionable form *this endpoint offers, among the mechanisms svcdoctor
+recognizes, `<set>`*.
+
+This is security hardening rather than a semantic redesign: it removes an
+unbounded peer-text channel and changes no decision the journey makes.
+
+### 4.3 A vhost node was rejected
 
 There is no vhost measurement separate from opening a connection in it. A
 `rabbitmq.vhost` node would re-project `rabbitmq.connection_open`'s outcome, and

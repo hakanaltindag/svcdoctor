@@ -618,12 +618,16 @@ module-wide allow-list of exactly these three, and `internal/diagnosis/transport
 same three locally. A new generic code has to be added to both, which is the point: it cannot
 arrive as a local constant, and every `TLS_` code is still rejected outright.
 
-## 8. The twelve RabbitMQ findings — decided, not implemented
+## 8. The eleven RabbitMQ findings
 
-Frozen by **ADR 0069 §7** in Phase 8.1, before any RabbitMQ code exists. **No rule produces
-any of them**, `internal/diagnosis/rabbitmq` does not exist, and the repository's finding-code
-count is unchanged by this section. They are recorded here so that the implementation phase
-inherits a vocabulary rather than inventing one.
+Frozen by **ADR 0069 §7** in Phase 8.1 and implemented in Phase 8.2 by
+`internal/diagnosis/rabbitmq`, whose three rules produce exactly these and nothing else.
+
+**A twelfth was struck in Phase 8.2-R1.** `RABBITMQ_PEER_VERIFICATION_FAILED` was frozen
+before implementation and proved unproducible: SASL PLAIN is not a mutual mechanism, so the
+peer returns no proof and `AUTH_PEER_VERIFICATION_FAILED` has no RabbitMQ producer. TLS trust
+and identity failures stay with the generic `TLS_*` codes of section 7.1, exactly as they do
+for Redis. ADR 0069 §7.1 records the correction.
 
 | Code | Kind | Severity | Owner step |
 |---|---|---|---|
@@ -638,13 +642,12 @@ inherits a vocabulary rather than inventing one.
 | `RABBITMQ_VHOST_ACCESS_REFUSED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
 | `RABBITMQ_CONNECTION_NOT_PERMITTED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
 | `RABBITMQ_CONNECTION_NOT_ESTABLISHED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
-| `RABBITMQ_PEER_VERIFICATION_FAILED` | CONFIRMED | ERROR | `tls.handshake` |
 
 Three properties of the set are worth stating before it is built.
 
 **Every code reuses an existing generic failure class.** The RabbitMQ-specific knowledge lives
 in the code and the detail, never in the class — which is the division section 1 already
-requires, and it is why twelve codes cost one failure class rather than twelve.
+requires, and it is why eleven codes cost one failure class rather than eleven.
 
 **No `HYPOTHESIS` finding is authorized.** The one candidate — RabbitMQ's default `guest`
 loopback restriction — was dropped because svcdoctor observes its own destination address while

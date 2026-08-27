@@ -235,7 +235,7 @@ virtual host was not found"* — never as *"this virtual host does not exist"*. 
 
 ## 7. Finding vocabulary
 
-Twelve codes. Every one reuses an existing generic `FailureClass`; the RabbitMQ-specific
+Eleven codes. Every one reuses an existing generic `FailureClass`; the RabbitMQ-specific
 knowledge lives in the code and the detail.
 
 | Code | Kind | Severity | Owner step |
@@ -251,7 +251,6 @@ knowledge lives in the code and the detail.
 | `RABBITMQ_VHOST_ACCESS_REFUSED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
 | `RABBITMQ_CONNECTION_NOT_PERMITTED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
 | `RABBITMQ_CONNECTION_NOT_ESTABLISHED` | CONFIRMED | ERROR | `rabbitmq.connection_open` |
-| `RABBITMQ_PEER_VERIFICATION_FAILED` | CONFIRMED | ERROR | `tls.handshake` |
 
 Generic transport findings — `DNS_*`, `TCP_CONNECTION_NOT_ESTABLISHED`, `TLS_*` — are
 unchanged and are not duplicated here.
@@ -262,6 +261,37 @@ renderer must show all three facts separately.
 
 **No `HYPOTHESIS` finding is authorized.** ADR 0068 §4.1 records why the one candidate was
 dropped.
+
+### 7.1 There is no RabbitMQ peer-verification finding, and there cannot be
+
+**Corrected in Phase 8.2-R1.** This table listed a twelfth code,
+`RABBITMQ_PEER_VERIFICATION_FAILED`, owned by `tls.handshake`. It was struck,
+because implementation proved it unproducible and because the row conflated two
+layers.
+
+`AUTH_PEER_VERIFICATION_FAILED` means the *peer* failed to prove its own
+knowledge of the authentication material, in a mechanism where **both parties
+authenticate**. Its only two producers in this repository are inside SCRAM paths
+— `internal/adapter/postgres/authenticate.go` and
+`internal/adapter/kafka/saslauthenticate.go` — and `internal/diagnosis/postgres`
+records why: it is reachable only after the endpoint has *accepted* svcdoctor's
+material, because a peer that rejects the proof never sends a signature at all.
+
+**SASL PLAIN is not mutual.** It authenticates the client to the broker and the
+broker returns no reciprocal proof, so there is nothing to verify and nothing
+that can fail. ADR 0068 §2 freezes PLAIN as the only mechanism, so no RabbitMQ
+BASIC execution can reach that class.
+
+The owner step was wrong in the same row. TLS trust and identity failures are
+owned by `internal/diagnosis/transport` and the five `TLS_*` codes ADR 0053
+froze, at the `tls.handshake` node, for every service. Redis is the precedent and
+it agrees: it authenticates with a non-mutual `AUTH`, has no
+`REDIS_PEER_VERIFICATION_FAILED`, and its composition wires the generic TLS rule.
+**RabbitMQ does the same and adds no service-specific TLS finding.**
+
+A regression guard in `internal/diagnosis/rabbitmq` fails the build if a
+RabbitMQ-specific peer-verification code is declared, or if any RabbitMQ producer
+maps a PLAIN authentication outcome to `AUTH_PEER_VERIFICATION_FAILED`.
 
 ## 8. What may not be said
 
