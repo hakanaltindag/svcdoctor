@@ -38,11 +38,14 @@ import (
 var fleetPackages = []string{
 	"internal/fleet/config",
 	"internal/fleet/secret",
+	"internal/fleet/run",
+	"internal/fleet/services",
 	"internal/fleet/services/postgres",
 	"internal/fleet/services/kafka",
 	"internal/fleet/services/redis",
 	"internal/fleet/services/rabbitmq",
 	"internal/security/secretinput",
+	"internal/security/trustsource",
 }
 
 // fleetCorePackages are the packages that must stay free of every protocol.
@@ -53,6 +56,10 @@ var fleetPackages = []string{
 var fleetCorePackages = []string{
 	"internal/fleet/config",
 	"internal/fleet/secret",
+	// Phase 9.1B. The scheduler schedules existing diagnoses and performs none:
+	// it holds a Runner interface and a config.Target and knows nothing about any
+	// protocol. Its guard is the same one, because the rule is the same.
+	"internal/fleet/run",
 }
 
 // TestTheConfigPackageCannotConstructASecret is ADR 0072 section 6.
@@ -290,7 +297,13 @@ func TestTheFleetLayerHasNoSecretCache(t *testing.T) {
 	}
 
 	found := false
-	for _, pkg := range []string{"internal/fleet/secret", "internal/fleet/config"} {
+	// internal/fleet/run joined this list in Phase 9.1B, because mutation B06
+	// planted a package-level sync.Map there and survived: the guard scanned the
+	// two packages that existed when it was written, and the scheduler — which is
+	// the layer that actually holds several credentials at once — was outside it.
+	for _, pkg := range []string{
+		"internal/fleet/secret", "internal/fleet/config", "internal/fleet/run",
+	} {
 		for _, path := range productionFilesIn(t, pkg) {
 			source, err := os.ReadFile(path)
 			if err != nil {
@@ -481,6 +494,163 @@ func TestAValidatedConfigRetainsNoRawBytes(t *testing.T) {
 		}
 	}
 	walk(reflect.TypeOf(config.Config{}), "Config")
+}
+
+// TestTheSchedulerPerformsNoCredentialOperation is ADR 0073 section 13 and §42.
+//
+// The scheduler coordinates resolution through an injected interface and passes
+// the result through. It may hold a security.Credential — it has to, to hand one
+// to a runner — and it must not be able to open one, cache one, or obtain one
+// from anywhere but the resolver it was given.
+//
+// security.Credential has no plain secret accessor, so "cannot open one" is
+// already a property of the type. What this adds is that the scheduler does not
+// call the two functions that could, and does not read a source directly.
+func TestTheSchedulerPerformsNoCredentialOperation(t *testing.T) {
+	forbidden := []struct{ text, why string }{
+		{"security.Reveal(", "revealing is the adapter wire packages' single privilege (ADR 0027)"},
+		{".SecretFor(", "authority is checked at the service composition boundary, not here"},
+		{"os.Getenv(", "reading a credential source is internal/fleet/secret's work"},
+		{"os.LookupEnv(", "reading a credential source is internal/fleet/secret's work"},
+		{"os.ReadFile(", "reading a credential source is internal/fleet/secret's work"},
+		{"os.Open(", "reading a credential source is internal/fleet/secret's work"},
+	}
+
+	files := productionFilesIn(t, "internal/fleet/run")
+	if len(files) == 0 {
+		t.Fatal("no scheduler source was found; this guard would pass vacuously")
+	}
+	for _, path := range files {
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, bad := range forbidden {
+			if strings.Contains(string(source), bad.text) {
+				t.Errorf("%s contains %q: %s", relative(t, path), bad.text, bad.why)
+			}
+		}
+	}
+}
+
+// TestTheSchedulerParsesNoConfiguration keeps the two halves apart.
+//
+// The scheduler receives a validated typed configuration. It must not hold the
+// bytes it came from, and it must not be able to read any: ADR 0074 §8.3 keeps
+// the raw configuration out of the report, and the cheapest way to guarantee
+// that is for the layer that builds the report never to have it.
+func TestTheSchedulerParsesNoConfiguration(t *testing.T) {
+	imports := importsOfPackage(t, "internal/fleet/run")
+	if len(imports) == 0 {
+		t.Fatal("no scheduler imports were found; this guard would pass vacuously")
+	}
+	for _, path := range imports {
+		if strings.HasPrefix(path, "go.yaml.in/yaml") {
+			t.Errorf("internal/fleet/run imports %s; it receives a validated "+
+				"config.Config and never the document behind it", path)
+		}
+	}
+}
+
+// TestNoRunSurfaceComparesTwoTargetReports is ADR 0074 section 7.1.
+//
+// # The claim being prevented
+//
+//	"Kafka is failing because PostgreSQL is down."
+//
+// svcdoctor measured two endpoints independently and has no evidence of any
+// relationship between them. Multi-target v1 is orchestration, not distributed
+// causal inference.
+//
+// The guard is an import ban rather than a search for a comparison, because a
+// comparison can be written a hundred ways and the *capability* has exactly one
+// prerequisite: reaching the diagnosis packages that know what a finding means.
+// The aggregate holds finished reports and the scheduler holds none.
+func TestNoRunSurfaceComparesTwoTargetReports(t *testing.T) {
+	surfaces := []string{
+		"internal/fleet/run",
+		"internal/render/terminal",
+		"internal/render/json",
+	}
+	found := false
+	for _, pkg := range surfaces {
+		imports := importsOfPackage(t, pkg)
+		if len(imports) > 0 {
+			found = true
+		}
+		for _, path := range imports {
+			if strings.HasPrefix(path, "github.com/hakanaltindag/svcdoctor/internal/diagnosis") {
+				t.Errorf("%s imports %s.\n\n"+
+					"Nothing outside the application may reach a diagnosis rule. A renderer "+
+					"holds a presentation and no evidence, and the scheduler holds finished "+
+					"reports — neither may derive a finding, and cross-target inference is "+
+					"the finding they would derive.", pkg, path)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no surface was scanned; this guard would pass vacuously")
+	}
+}
+
+// TestTheRendererDoesNotDecideTheExitCode is ADR 0074 section 6.3.
+//
+// The runner returns a structured outcome, the CLI maps it, and a renderer never
+// does. A renderer that recomputed it could disagree with the status the same
+// run reported, which is the second-opinion failure ADR 0015 exists to prevent.
+func TestTheRendererDoesNotDecideTheExitCode(t *testing.T) {
+	exitNames := []string{"ExitOK", "ExitProblemsFound", "ExitUsage", "ExitInternal",
+		"ExitIncomplete", "RunExitCode", "ExitCode("}
+
+	found := false
+	for _, pkg := range []string{"internal/render/terminal", "internal/render/json"} {
+		for _, path := range productionFilesIn(t, pkg) {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			found = true
+			for _, name := range exitNames {
+				if strings.Contains(string(source), name) {
+					t.Errorf("%s mentions %q; exit status is the command's decision "+
+						"(ADR 0048 §3)", relative(t, path), name)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no renderer source was scanned; this guard would pass vacuously")
+	}
+}
+
+// TestTheSchedulerNamesNoService extends the generic-core rule to execution.
+//
+// A target's kind selects a registered Runner. Adding a fifth service must
+// require no edit to the scheduler at all, which it cannot if the scheduler can
+// say the words.
+func TestTheSchedulerNamesNoService(t *testing.T) {
+	services := []string{
+		"postgres", "kafka", "redis", "rabbitmq", "lavinmq", "redpanda", "valkey", "mysql",
+	}
+
+	found := false
+	for _, path := range productionFilesIn(t, "internal/fleet/run") {
+		file := parseFile(t, path)
+		found = true
+		for _, literal := range stringLiterals(file) {
+			for _, service := range services {
+				if strings.EqualFold(literal, service) {
+					t.Errorf("%s contains the string literal %q.\n\n"+
+						"The scheduler dispatches through a registry of runners. A service "+
+						"name written into it is the first line of the central branching "+
+						"docs/ARCHITECTURE.md forbids.", relative(t, path), literal)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no scheduler source was scanned; this guard would pass vacuously")
+	}
 }
 
 // importsOfPackage returns every import path in one package's production files.

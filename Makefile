@@ -488,3 +488,30 @@ lavinmq-test: ## Run the LavinMQ integration suite against a running broker
 	$(GO) test -tags integration -count=1 -timeout 15m ./test/integration/lavinmq/...
 
 integration-lavinmq: lavinmq-up lavinmq-test lavinmq-down ## Full LavinMQ validation gate
+
+# --- Multi-target integration validation (Phase 9.1B gate) ------------------
+#
+# It composes the four service fixtures rather than adding a fifth. Every claim
+# about a protocol is owned by that service's own suite; this one proves that
+# `svcdoctor run --config` reaches four composition roots, wraps four canonical
+# reports in declared order, and lets a refusal in one target leave the other
+# three alone.
+#
+# The four fixtures publish disjoint ports, so they coexist. `up` and `down`
+# chain the existing targets rather than duplicating their readiness logic —
+# a second definition of "PostgreSQL is ready" is a second thing to keep true.
+
+.PHONY: multitarget-up multitarget-down multitarget-test integration-multitarget
+
+multitarget-up: postgres-up kafka-up redis-up rabbitmq-up ## Start every fixture the multi-target suite needs
+
+multitarget-down: ## Stop every fixture the multi-target suite uses
+	@$(MAKE) --no-print-directory rabbitmq-down || true
+	@$(MAKE) --no-print-directory redis-down || true
+	@$(MAKE) --no-print-directory kafka-down || true
+	@$(MAKE) --no-print-directory postgres-down || true
+
+multitarget-test: ## Run the multi-target suite against running fixtures
+	$(GO) test -tags integration -count=1 -timeout 15m ./test/integration/multitarget/...
+
+integration-multitarget: multitarget-up multitarget-test multitarget-down ## Full multi-target validation gate
