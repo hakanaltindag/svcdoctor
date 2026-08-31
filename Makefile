@@ -431,18 +431,49 @@ rabbitmq-up: ## Start the RabbitMQ validation brokers
 # `guest` is left exactly as RabbitMQ ships it: restricted to loopback, which is
 # what RAB-05 measures.
 rabbitmq-users: ## Create the validation principals, vhosts and limits
-	@# RAB-18 targets a real management listener. Enabling the plugin here keeps
-	@# the broker image byte-identical to the one Phase 8.0C measured.
-	@docker exec -u rabbitmq svcd-rabbit rabbitmq-plugins -q enable rabbitmq_management >/dev/null 2>&1 || true
+	@# `rabbitmq-diagnostics ping` answers before the broker will accept
+	@# `rabbitmqctl add_user`, so provisioning is retried until it takes and then
+	@# **verified**. Phase 9.1C found this the expensive way: every command here
+	@# ended in `|| true`, the app principal silently failed to be created, and
+	@# three multi-target scenarios failed with RABBITMQ_CREDENTIALS_REJECTED
+	@# against a broker that simply had no such user. A fixture that fails to
+	@# provision must stop the gate, not hand it a wrong answer.
 	@for c in svcd-rabbit svcd-rabbit-313 svcd-rabbit-409; do \
-		docker exec -u rabbitmq $$c rabbitmqctl -q add_user app app-pw >/dev/null 2>&1 || true; \
+		for i in $$(seq 1 45); do \
+			docker exec -u rabbitmq $$c rabbitmqctl -q add_user app app-pw >/dev/null 2>&1; \
+			if docker exec -u rabbitmq $$c rabbitmqctl -q list_users 2>/dev/null | grep -q '^app'; then \
+				break; \
+			fi; \
+			sleep 2; \
+		done; \
 		docker exec -u rabbitmq $$c rabbitmqctl -q set_permissions -p / app '.*' '.*' '.*' >/dev/null 2>&1 || true; \
 		docker exec -u rabbitmq $$c rabbitmqctl -q add_user noperm noperm-pw >/dev/null 2>&1 || true; \
 		docker exec -u rabbitmq $$c rabbitmqctl -q add_vhost limited >/dev/null 2>&1 || true; \
 		docker exec -u rabbitmq $$c rabbitmqctl -q set_permissions -p limited app '.*' '.*' '.*' >/dev/null 2>&1 || true; \
 		docker exec -u rabbitmq $$c rabbitmqctl -q set_vhost_limits -p limited '{"max-connections":0}' >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q list_users 2>/dev/null | grep -q '^app' || { \
+			printf '\nthe app principal could not be created on %s\n' "$$c"; exit 1; }; \
 	done; \
 	printf 'principals ready\n'
+	@# RAB-18 targets a real management listener. Enabling the plugin here keeps
+	@# the broker image byte-identical to the one Phase 8.0C measured.
+	@#
+	@# It runs *after* the principals, and that ordering is the fix rather than a
+	@# preference. `rabbitmq-plugins enable` issued before the broker is up writes
+	@# the enabled-plugins file without activating anything: the plugin then reads
+	@# `[E ]` — enabled, not running — no listener binds 15672, and RAB-18 fails
+	@# against a broker that looks correctly configured. The user loop above only
+	@# returns once the broker is genuinely accepting commands, so by here it is.
+	@for i in $$(seq 1 45); do \
+		docker exec -u rabbitmq svcd-rabbit rabbitmq-plugins -q enable rabbitmq_management >/dev/null 2>&1; \
+		if docker exec -u rabbitmq svcd-rabbit rabbitmq-plugins -q list -m -e rabbitmq_management 2>/dev/null \
+			| grep -q rabbitmq_management \
+			&& docker exec -u rabbitmq svcd-rabbit rabbitmq-diagnostics -q check_port_listener 15672 >/dev/null 2>&1; then \
+			printf 'management listener ready\n'; exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	printf '\nthe management listener never bound 15672\n'; exit 1
 
 rabbitmq-down: ## Stop the RabbitMQ validation brokers and delete their volumes
 	@$(RMQ_COMPOSE) down -v --remove-orphans
