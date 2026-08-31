@@ -71,8 +71,10 @@ svcdoctor diagnose kafka --help
 
 ## Flags
 
-Two leaf commands: `svcdoctor diagnose postgres` and `svcdoctor diagnose kafka`. Each owns its
-own flag set, help text and validation.
+Four leaf commands — `svcdoctor diagnose postgres`, `diagnose kafka`, `diagnose redis` and
+`diagnose rabbitmq` — each owning its own flag set, help text and validation. A fifth
+command, `svcdoctor run`, measures every target in a configuration file; see
+[Running many targets](#running-many-targets).
 
 ### `diagnose postgres`
 
@@ -559,7 +561,10 @@ own disclosure requirements.
 | 3    | svcdoctor itself failed and produced no usable report                                        |
 | 4    | a report was produced, but svcdoctor's own execution did not finish                          |
 
-Precedence is `3 > 2 > 4 > 1 > 0`.
+Precedence is `3 > 2 > 4 > 1 > 0`, and it is the same for `svcdoctor run`: a run exits 4 if
+any target never started, was cancelled, could not be executed, or produced an incomplete
+report; 1 if it completed with a target-side problem; 0 otherwise. A configuration error
+exits 2 with **no target dialled at all**.
 
 - **Exit 1 means svcdoctor worked** and found a target-side problem. It is not a svcdoctor
   failure.
@@ -571,6 +576,68 @@ Precedence is `3 > 2 > 4 > 1 > 0`.
   connection succeeded" — the no-credential run above is the counterexample. The exit mapping
   is service-independent: it reads the report's summary status and whether execution finished,
   and nothing else.
+
+## Running many targets
+
+```bash
+svcdoctor run --config services.yaml
+```
+
+One file describes several independent targets and one bounded execution measures them all.
+
+```yaml
+version: 1
+
+run:
+  concurrency: 4          # targets in flight at once; 1-16, default 4
+
+targets:
+  - id: orders-db
+    type: postgres
+    host: orders-db.internal.example.com
+    port: 5432
+    tls:
+      mode: require
+      ca_file: /etc/ssl/internal-ca.pem
+    credentials:
+      username: svcdoctor
+      password:
+        env: ORDERS_DB_PASSWORD      # a reference; never the value
+    config:
+      database: orders
+
+  - id: task-queue
+    type: rabbitmq
+    host: rabbit.internal.example.com
+    port: 5671
+    credentials:
+      username: svcdoctor
+      password:
+        file: /run/secrets/rabbitmq
+    config:
+      vhost: /production
+```
+
+**A password is never written into the file.** `password:` names an environment variable or
+a file and nothing else; a plaintext value is refused before anything is dialled. Two
+targets naming the same variable resolve it independently — a shared reference is not a
+shared authority, and no credential is ever cached.
+
+**Targets are independent.** One target's failure never stops another, there is no
+dependency ordering, and svcdoctor draws no conclusion across targets: it will not tell you
+Kafka is failing because PostgreSQL is down, because it measured two endpoints and has no
+evidence of any relationship between them.
+
+**Results appear in the order the file declares them**, whatever order they finished in.
+
+Flags are run-global only — `--config`, `--timeout`, `--concurrency`, `--output` and
+`--shareable`. There is deliberately no `--host`, `--target` or `--password-file`: target
+data lives in the configuration, and one ambient command-line secret shared by N targets is
+the thing the credential model exists to prevent.
+
+`--concurrency` bounds **targets**, not sockets. One target can open a connection per
+resolved address, and a Kafka target additionally sweeps the brokers its cluster
+advertises.
 
 ## Build and install
 
@@ -813,8 +880,7 @@ no transitive dependencies of its own:
 - `github.com/twmb/franz-go/pkg/kmsg` (BSD-3-Clause) — Kafka protocol encoding, used only by
   the Kafka adapter's wire package.
 - `go.yaml.in/yaml/v3` (MIT and Apache-2.0) — multi-target configuration decoding, used only
-  by `internal/fleet/config`. The configuration format it parses is implemented; multi-target
-  **execution is not**, and no command exposes it.
+  by `internal/fleet/config`.
 
 Full detail is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the product boundary is in
 [`docs/SCOPE.md`](docs/SCOPE.md); design records are in

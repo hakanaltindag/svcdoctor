@@ -69,7 +69,7 @@ stale and should be corrected against this table.
 | 6 | Kafka BASIC closure and hardening | **Complete** — 6.1a mechanism guard through 6.8 compatibility grading |
 | 7 | Runtime, real-world validation and Redis/Valkey | **Complete** — 7.0 SCRAM bounds, 7.1 OCI runtime, 7.3 PostgreSQL real-world, 7.4 Redis contract freeze, 7.5–7.7 Redis implementation and harness |
 | 8 | RabbitMQ | **Complete** — 8.0 semantics research and wire measurement, 8.1 contract freeze, 8.2 implementation, CLI exposure, integration suites and the 8.2-R3 closure gate. *(This row said "no RabbitMQ code exists" until Phase 9.0's start-state gate read it against the tree.)* |
-| 9 | Multi-target configuration and execution | **9.0 and 9.1A complete** — contract in ADRs 0071-0074; `internal/fleet/config`, `internal/fleet/secret`, four service config packages and `internal/security/secretinput` implemented. **No multi-target execution exists**: no runner, no worker pool, no aggregate report, no `svcdoctor run`. Execution is 9.1B |
+| 9 | Multi-target configuration and execution | **9.0, 9.1A and 9.1B complete** — contract in ADRs 0071-0074, configuration foundation in 9.1A, and execution, the aggregate report and `svcdoctor run --config` in 9.1B. Validated against all four services through the real command. **No cross-target diagnosis, no dependency DAG, no retry, no filtering and no secret cache** |
 
 **Rows 4 to 6 were stale and are corrected here.** They read "Not started" while PostgreSQL BASIC
 was released and Kafka BASIC had closed — the same staleness Phase 6.5's audit found in the
@@ -4675,6 +4675,89 @@ The runner, worker pool, budgets, cancellation, aggregate report, execution stat
 mapping, `svcdoctor run --config`, and the run-level redaction entry point. Three tests are
 expected to be **inverted rather than deleted**: `TestTheRunCommandIsNotRoutedYet`,
 `TestTheRootUsageNamesNoUnimplementedCommand`, and the `fleetCorePackages` list.
+
+## Phase 9.1B — Multi-target execution, aggregate report and CLI: COMPLETE
+
+Execution orchestration, the service runner registry, bounded concurrency, budget
+composition, cancellation, the aggregate canonical report, aggregate rendering,
+`svcdoctor run --config` and the exit-code mapping.
+
+`docs/validation/MULTI_TARGET_PHASE91B_VALIDATION.md` records the reachability matrix, the
+test results, the mutation closure and the integration run.
+
+### Counts
+
+Every frozen count is unchanged: `SchemaVersion` **1**, **60** finding codes, **11**
+RabbitMQ, **42** failure classes, **4** `Reveal` and **4** `SecretFor` production call
+sites, **2** external modules.
+
+The aggregate has its **own** version, `domain.RunSchemaVersion = 1`. The single-target
+report gained no field — not even a `kind` discriminator — so an existing consumer parses
+`targets[i].report` with no change, which a test proves by comparing an embedded report
+byte-for-byte against the same single-target invocation.
+
+### What was built
+
+- `internal/fleet/run` — the scheduler. Two executors: `ExecuteSequential` is the reference
+  and `Execute` is bounded-concurrent, both calling one implementation that differs only in
+  worker count, so their agreement is a property rather than a coincidence.
+- `internal/domain/runreport.go` and `executionstate.go` — `RunReport`, `TargetResult`,
+  `RunSummary`, and the four execution states with constructor-enforced presence rules.
+- `internal/security/redaction/run.go` — `RedactRun`, one pseudonym table per run.
+- `internal/render/{terminal,json}/run.go` — aggregate rendering that composes the existing
+  per-target renderers.
+- `internal/cli/run.go` — `svcdoctor run --config`, and `RunExitCode`.
+- `internal/security/trustsource` — **extracted**, so a fleet run and a leaf command load
+  trust material through one implementation rather than two.
+
+### One defect found and fixed
+
+**The resolver's error named the credential reference, and the scheduler put it in the
+report.** `Error()` naming the reference is correct for stderr (ADR 0049 §3); serializing it
+is exactly what ADR 0074 §4.2 forbids. The fix is a typed error with two messages and a
+scheduler that asks for the safe one and **fails closed** — an error offering no safe form
+gets a fixed sentence rather than its own text, so a future error type cannot leak by
+omission.
+
+### The mutation closure found four real guard gaps
+
+31 planted, 31 caught, 0 survivors — **after** a first run with seven survivors, which is
+the more useful result. Four were genuine gaps and two were ineffective plants:
+
+| Gap | What it revealed |
+|---|---|
+| B06 | the secret-cache guard scanned the two packages that existed when it was written; the scheduler — the layer that actually holds several credentials at once — was outside it |
+| B21 / B23 | the scheduler's test proved which method it *calls*, using a fake. Nothing proved the real `ResolutionError`'s safe form is safe |
+| B08 | the ordering test declared five targets that all COMPLETE, so a stable sort by execution state was a no-op on it |
+| B29 | the wording test rendered a run that reached `PROBLEMS_FOUND`, so the OK branch — where "N targets healthy" was planted — was never executed |
+
+### The integration suite found that the test was wrong and the product was right
+
+The first version of the multi-target suite pointed credential-bearing targets at
+**plaintext** listeners and got `*_CREDENTIAL_WITHHELD`. That is ADR 0029 and ADR 0030
+working: a password crosses only a verified-TLS channel, and the fleet path inherits that
+from the composition roots without restating it. Every credential-bearing scenario now uses
+its fixture's TLS listener and CA, and asserts that no `*_CREDENTIAL_WITHHELD` finding
+appears — because a withheld credential means the scenario proved nothing about
+authentication.
+
+### Integration results
+
+All eight suites sequential, with teardown, zero unexpected skips, zero `svcd-*` containers
+surviving any of them: PostgreSQL 28 s, Kafka 269 s, Redpanda 6 s, Redis 7 s, Valkey 3 s,
+RabbitMQ 91 s, LavinMQ 5 s, **multi-target 49 s**.
+
+**No compatibility level changed.** Fleet execution working does not make any protocol
+claim stronger.
+
+### Open items
+
+| Item | Condition |
+|---|---|
+| **No global probe semaphore.** Target concurrency bounds targets, not sockets: a target opens a connection per resolved address and Kafka adds its advertised sweep. The 16 ceiling rests on a *pessimistic estimate* of per-target fan-out | ADR 0073 §10.1. Reopens on a measured descriptor overrun or a wider-fanning service |
+| **Second-signal hard abort is not implemented.** ADR 0073 §7.2 froze exit 3 on a second interrupt; 9.1B implements the first-signal contract only | Phase 9.1C |
+| **No filtering.** `--target` and `--type` are out of v1 and no flag name is reserved | ADR 0074 §10.4 |
+| **No output-to-file.** stdout only | ADR 0074 §11 |
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
