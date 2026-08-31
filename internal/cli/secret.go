@@ -3,32 +3,18 @@ package cli
 import (
 	"errors"
 	"io"
-	"os"
-	"strings"
 
 	"github.com/hakanaltindag/svcdoctor/internal/security"
+	"github.com/hakanaltindag/svcdoctor/internal/security/secretinput"
 )
 
 // maxCredentialInput bounds the credential material this command will read.
 //
-// ADR 0049 section 3 fixes it at 4 KiB: far above any password a SCRAM exchange
-// can carry — svcdoctor already restricts passwords to printable ASCII — and far
-// below a size that indicates the operator pointed at the wrong file. Something
-// larger is much more likely to be a certificate, a key or a config.
-//
-// # The bound is on the input, not on the resulting secret
-//
-// ADR 0049 bounds what is *read*: "Read the file whole, subject to a bounded
-// maximum", and "Reject **input** above the bound". So a 4096-byte password
-// followed by a newline is 4097 bytes of input and is refused, even though the
-// secret it would yield is exactly at the bound. That is the reading both of the
-// ADR's sentences support, and the alternative — bounding the trimmed secret —
-// appears nowhere in it.
-//
-// The distinction only becomes visible within one byte of a limit no real
-// password approaches, and refusing is the safe direction: a rejected
-// invocation is fixable, a truncated secret authenticates as a wrong one.
-const maxCredentialInput = 4096
+// The value and its whole justification live in internal/security/secretinput,
+// which Phase 9.1A extracted so that the fleet credential resolver could reuse
+// the rules rather than restate them (ADR 0072 section 12). This alias exists so
+// that the flag-facing code still reads in the vocabulary of the flags.
+const maxCredentialInput = secretinput.MaxInput
 
 // credentialSources names what the invocation selected.
 type credentialSources struct {
@@ -86,80 +72,40 @@ func (a *App) readSecret(sources credentialSources) (security.Secret, error) {
 // nameable or the operator cannot fix it. The **contents** appear nowhere, and
 // neither does their length: a size is a fact derived from the secret and it
 // buys the reader nothing (ADR 0049 §3).
+//
+// The reading rules are internal/security/secretinput's; the wording is this
+// package's, because an operator has to be told which flag to fix. A directory
+// is still named as a directory rather than left to surface as "unreadable",
+// which is the distinction that survives the extraction because the shared
+// package reports it as its own sentinel.
 func (a *App) readSecretFile(path string) (security.Secret, error) {
-	file, err := os.Open(path) //nolint:gosec // G304: the path is the operator's own flag.
-	if err != nil {
+	plaintext, err := secretinput.ReadFile(path)
+	switch {
+	case err == nil:
+		return security.NewSecret(plaintext), nil
+	case errors.Is(err, secretinput.ErrIsDirectory):
+		return security.Secret{}, usagef("--password-file %s is a directory", path)
+	case errors.Is(err, secretinput.ErrTooLarge), errors.Is(err, secretinput.ErrNoReader):
+		return security.Secret{}, usagef("--password-file %s: %s", path, err)
+	case errors.Is(err, secretinput.ErrUnreadable):
+		return security.Secret{}, usagef("--password-file %s cannot be read: unreadable", path)
+	default:
 		return security.Secret{}, usagef(
 			"--password-file %s cannot be read: %s", path, openReason(err))
 	}
-	// Closed on every path, including the oversize refusal below.
-	defer func() { _ = file.Close() }()
-
-	// A directory opens successfully and fails on read with a platform-specific
-	// error, so it is named here rather than left to surface as "unreadable".
-	info, err := file.Stat()
-	if err != nil {
-		return security.Secret{}, usagef("--password-file %s cannot be read: unreadable", path)
-	}
-	if info.IsDir() {
-		return security.Secret{}, usagef("--password-file %s is a directory", path)
-	}
-
-	plaintext, err := readBoundedSecret(file)
-	if err != nil {
-		return security.Secret{}, usagef("--password-file %s: %s", path, err)
-	}
-	return security.NewSecret(plaintext), nil
 }
-
-// errCredentialTooLarge is the oversize refusal, phrased without the size.
-var errCredentialTooLarge = errors.New("credential input exceeds the 4 KiB limit")
 
 // readBoundedSecret reads at most one byte past the limit and refuses the rest.
 //
-// # Why one byte past
-//
-// It is the smallest read that can tell "exactly at the bound" from "over it".
-// Reading exactly the limit cannot distinguish a 4096-byte secret from the first
-// 4096 bytes of a certificate, and truncating either would hand the endpoint a
-// credential the operator never chose.
-//
-// # Exactly one trailing line ending, and nothing else
-//
-// strings.TrimSpace is forbidden here. A leading or trailing space is legal
-// PostgreSQL password material, and removing it silently would turn a correct
-// credential into POSTGRES_CREDENTIALS_REJECTED — the single most misleading
-// outcome this tool can produce, because it accuses the operator's secret store
-// of being wrong. One trailing newline goes because every editor and `echo` adds
-// one; a second one is the operator's data (ADR 0049 §3).
+// The rule and its justification are in internal/security/secretinput. This stays
+// as the name the flag-facing code and its tests already use.
 func readBoundedSecret(r io.Reader) (string, error) {
-	if r == nil {
-		return "", errors.New("no input to read from")
-	}
-
-	raw, err := io.ReadAll(io.LimitReader(r, maxCredentialInput+1))
-	if err != nil {
-		// The error comes from the reader and describes the read, never the
-		// bytes: io.ReadAll does not put what it read into what it returns.
-		return "", errors.New("unreadable")
-	}
-	if len(raw) > maxCredentialInput {
-		return "", errCredentialTooLarge
-	}
-
-	return trimOneLineEnding(string(raw)), nil
+	return secretinput.Read(r)
 }
 
 // trimOneLineEnding removes a single trailing "\r\n" or "\n", and nothing else.
 func trimOneLineEnding(s string) string {
-	switch {
-	case strings.HasSuffix(s, "\r\n"):
-		return s[:len(s)-2]
-	case strings.HasSuffix(s, "\n"):
-		return s[:len(s)-1]
-	default:
-		return s
-	}
+	return secretinput.TrimOneLineEnding(s)
 }
 
 // credentialFor binds a secret to the endpoint that authorizes it.
@@ -196,12 +142,5 @@ func credentialFor(host string, port uint16, role string, secret security.Secret
 
 // openReason reduces a filesystem error to its cause, naming nothing else.
 func openReason(err error) string {
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return "no such file"
-	case errors.Is(err, os.ErrPermission):
-		return "permission denied"
-	default:
-		return "unreadable"
-	}
+	return secretinput.OpenReason(err)
 }

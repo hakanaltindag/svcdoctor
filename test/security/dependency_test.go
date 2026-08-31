@@ -37,6 +37,24 @@ var allowedModules = map[string]string{
 	// BSD-3-Clause, and it has no transitive dependencies of its own, which is
 	// most of why it was acceptable.
 	"github.com/twmb/franz-go/pkg/kmsg": "Kafka protocol encoding (ADR 0008)",
+
+	// ADR 0071 §3.3, authorized in Phase 9.0 and added in Phase 9.1A. Multi-target
+	// configuration decoding only, and importable by exactly one package —
+	// internal/fleet/config — which TestOnlyTheConfigPackageImportsTheYAMLLibrary
+	// enforces.
+	//
+	// MIT and Apache-2.0, and its own go.mod requires **nothing**: it is the
+	// maintained continuation of gopkg.in/yaml.v3, which is frozen at v3.0.1 and
+	// whose go.mod names gopkg.in/check.v1. That difference is why this is the
+	// module and that one is not.
+	//
+	// It was chosen on measurement rather than convention. `encoding/json` needs
+	// no dependency at all and lost on two properties recorded in
+	// docs/validation/MULTI_TARGET_PHASE90_CONTRACT_STUDY.md §2.1: it cannot carry
+	// comments, and it accepts a duplicated key by silently taking the last — which
+	// in a file whose purpose is to say which credential authorizes which endpoint
+	// is the config-file form of a truncated secret.
+	"go.yaml.in/yaml/v3": "multi-target configuration decoding (ADR 0071)",
 }
 
 // TestTheModuleGraphIsExactlyWhatWasDecided pins go.mod's requirements.
@@ -72,18 +90,44 @@ func TestTheModuleGraphIsExactlyWhatWasDecided(t *testing.T) {
 	}
 }
 
-// TestTheDependencyCountIsOne states the headline number on its own.
+// wantDependencyCount is the headline number.
+//
+// It was **1** from Phase 3.1 to Phase 9.0 and became **2** in Phase 9.1A, when
+// ADR 0071 §3.3's authorized YAML decoder landed. Both changes are the only two
+// times this number has moved, and each is recorded in the ADR that moved it.
+const wantDependencyCount = 2
+
+// TestTheDependencyCountIsExact states the headline number on its own.
 //
 // The test above would still pass if the allowlist were edited in the same
 // change as go.mod, which is exactly how a dependency arrives without anyone
 // noticing the count moved. This one fails on the number, so the number has to
 // be changed deliberately and appears in the diff as a number.
-func TestTheDependencyCountIsOne(t *testing.T) {
-	if got := len(requiredModules(t)); got != 1 {
-		t.Errorf("go.mod requires %d external modules, want 1.\n\n"+
-			"If this is intentional, change the number here and record the decision. "+
+func TestTheDependencyCountIsExact(t *testing.T) {
+	if got := len(requiredModules(t)); got != wantDependencyCount {
+		t.Errorf("go.mod requires %d external modules, want %d.\n\n"+
+			"If this is intentional, change wantDependencyCount and record the decision. "+
 			"docs/ARCHITECTURE.md, the README and CLAUDE.md all state the count, and "+
-			"they are wrong the moment this changes.", got)
+			"they are wrong the moment this changes.", got, wantDependencyCount)
+	}
+}
+
+// TestAThirdModuleStillFails proves the allowlist is an allowlist.
+//
+// Raising a count and widening a map are the two edits that make a dependency
+// guard stop guarding, and Phase 9.1A did both. This asserts what remains true
+// afterwards: a module nobody decided on is still refused, and the count is
+// still a ceiling rather than a note.
+func TestAThirdModuleStillFails(t *testing.T) {
+	const unapproved = "example.com/some/module"
+	if _, ok := allowedModules[unapproved]; ok {
+		t.Fatalf("%s is unexpectedly allowed", unapproved)
+	}
+	// The allowlist is exactly what was decided, and nothing else is in it.
+	if len(allowedModules) != wantDependencyCount {
+		t.Errorf("allowedModules holds %d entries and the count is %d; the two must agree, "+
+			"or one module could be swapped for another without either test noticing",
+			len(allowedModules), wantDependencyCount)
 	}
 }
 

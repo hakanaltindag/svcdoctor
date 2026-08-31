@@ -42,6 +42,11 @@ func redisProductionFiles(t *testing.T) []string {
 	singles := []string{
 		"internal/app/redis.go",
 		"internal/cli/redis.go",
+		// Phase 9.1A. It holds no protocol — it decodes the Redis shape of a
+		// multi-target configuration — but it is Redis production code, and the
+		// point of this list is that every such file is inside the reach of the
+		// keyspace and credential guards rather than beside them.
+		"internal/fleet/services/redis/redis.go",
 	}
 
 	var out []string
