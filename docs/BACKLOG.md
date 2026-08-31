@@ -69,7 +69,7 @@ stale and should be corrected against this table.
 | 6 | Kafka BASIC closure and hardening | **Complete** — 6.1a mechanism guard through 6.8 compatibility grading |
 | 7 | Runtime, real-world validation and Redis/Valkey | **Complete** — 7.0 SCRAM bounds, 7.1 OCI runtime, 7.3 PostgreSQL real-world, 7.4 Redis contract freeze, 7.5–7.7 Redis implementation and harness |
 | 8 | RabbitMQ | **Complete** — 8.0 semantics research and wire measurement, 8.1 contract freeze, 8.2 implementation, CLI exposure, integration suites and the 8.2-R3 closure gate. *(This row said "no RabbitMQ code exists" until Phase 9.0's start-state gate read it against the tree.)* |
-| 9 | Multi-target configuration and execution | **9.0, 9.1A and 9.1B complete** — contract in ADRs 0071-0074, configuration foundation in 9.1A, and execution, the aggregate report and `svcdoctor run --config` in 9.1B. Validated against all four services through the real command. **No cross-target diagnosis, no dependency DAG, no retry, no filtering and no secret cache** |
+| 9 | Multi-target configuration and execution | **Complete and FROZEN** — contract in ADRs 0071-0074, configuration foundation in 9.1A, execution, the aggregate report and `svcdoctor run --config` in 9.1B, and adversarial closure plus 108-requirement traceability in 9.1C. Validated against all four services through the real command. **No cross-target diagnosis, no dependency DAG, no retry, no filtering and no secret cache** |
 
 **Rows 4 to 6 were stale and are corrected here.** They read "Not started" while PostgreSQL BASIC
 was released and Kafka BASIC had closed — the same staleness Phase 6.5's audit found in the
@@ -4755,9 +4755,67 @@ claim stronger.
 | Item | Condition |
 |---|---|
 | **No global probe semaphore.** Target concurrency bounds targets, not sockets: a target opens a connection per resolved address and Kafka adds its advertised sweep. The 16 ceiling rests on a *pessimistic estimate* of per-target fan-out | ADR 0073 §10.1. Reopens on a measured descriptor overrun or a wider-fanning service |
-| **Second-signal hard abort is not implemented.** ADR 0073 §7.2 froze exit 3 on a second interrupt; 9.1B implements the first-signal contract only | Phase 9.1C |
+| ~~**Second-signal hard abort is not implemented.**~~ **Closed in Phase 9.1C.** ADR 0073 §7.2 is implemented in `internal/cli/interrupt.go` | — |
 | **No filtering.** `--target` and `--type` are out of v1 and no flag name is reserved | ADR 0074 §10.4 |
 | **No output-to-file.** stdout only | ADR 0074 §11 |
+
+## Phase 9.1C — Multi-target adversarial closure: COMPLETE
+
+A validation and hardening phase. No new product feature, service, configuration capability,
+credential source, finding code, failure class or report semantics. See
+`docs/validation/MULTI_TARGET_PHASE91C_VALIDATION.md` and
+`docs/validation/MULTI_TARGET_PHASE91_TRACEABILITY.md`.
+
+### Contract reconciliation
+
+All **108** frozen Phase 9.0 requirements — `MT-C01`-`C31`, `MT-E01`-`E22`, `MT-S01`-`S20`,
+`MT-D01`-`D08`, `MT-R01`-`R18`, `MT-G01`-`G09` — are mapped to named executable tests.
+**Missing: 0.**
+
+Phases 9.1A and 9.1B had each embedded MT identifiers in test names and each renumbered as
+they went, so by the end of 9.1B a test called `TestMTC05...` proved frozen `MT-C18` and
+frozen `MT-E07` had no test while its number was in use elsewhere. Twenty-eight test
+functions were renumbered to the frozen identifiers; no assertion changed.
+
+### The four defects
+
+| # | Defect | Why the old surface missed it |
+|---|---|---|
+| 1 | **The second interrupt was swallowed entirely.** `signal.NotifyContext` keeps its handler installed, so the second signal cancelled an already-cancelled context and Go's default handler never ran. An operator could not force-quit | No run test owned a signal; signal handling lived only in `cmd/svcdoctor` |
+| 2 | **A preflight credential failure exited 3, not 2.** A missing environment variable was reported as *svcdoctor itself failed* rather than as the configuration error ADR 0072 §5 makes it | The assertion read `!= ExitInternal && != ExitUsage`, and a test that accepts two codes cannot detect the wrong one |
+| 3 | **The credential success path had no leakage test.** Every case in the secret-leakage test failed because the material was *absent*, so there was nothing to leak | Mutation C09 survived the whole test |
+| 4 | **The RabbitMQ fixture silently provisioned nothing.** Every provisioning command ended in `\|\| true`, and `rabbitmq-diagnostics ping` answers before `rabbitmqctl` will work — so the `app` principal and the management listener were absent while the gate looked configured | A fixture that fails to provision must stop the gate; it handed it a wrong answer instead |
+
+### What was added
+
+Hostile YAML corpus (38 documents plus three resource-shaped cases); four config fuzz targets
+run at 120 s each; a 25-value adversarial secret corpus searched in three representations
+across four invocations; same-reference and same-endpoint isolation against the **real**
+resolver; a TOCTOU and file-semantics matrix; concurrency stress at pools 1-16 over 64 targets
+with a barrier proving the pool reaches its width; the 511/512/513 boundary; 100-repetition
+determinism and 40 seeded completion-order permutations; a cancellation lifecycle matrix and
+deadline race stress; a black-box exit matrix; renderer, JSON, pseudonym and shareable
+adversarial suites; six aggregate golden fixtures; new structural guards including the first
+**count of finding codes**; and `internal/domain/runreport_test.go`, which the aggregate never
+had.
+
+**Mutation closure: 45 planted, 45 caught, 0 survivors** (`scripts/phase91c-mutations.sh`).
+The first run had 12 survivors — three real guard gaps, four ineffective plants, five script
+defects — and each is recorded.
+
+### Invariants, unchanged
+
+`SchemaVersion` **1**, `RunSchemaVersion` **1**, **60** finding codes (11 RabbitMQ), **42**
+failure classes, **4** `Reveal`, **4** `SecretFor`, **2** external modules.
+
+### Open items
+
+| Item | Condition |
+|---|---|
+| **No global probe semaphore.** Unchanged from 9.1B, and nothing measured here justifies revisiting it | ADR 0073 §10.1 |
+| **A secret equal to a value the report must carry is indistinguishable.** If a password is also the username or the target identifier, the characters appear because the *identity* appears. Pinned honestly rather than claimed away | Not reopenable: the two values are the same value |
+| **The post-cancellation race window is guarded structurally, not behaviourally.** Mutations C21 and C22 survived every behavioural test; the window cannot be forced from outside | Reopens if the window becomes reachable deterministically |
+| **No filtering, no output-to-file** | ADR 0074 §10.4, §11 |
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
