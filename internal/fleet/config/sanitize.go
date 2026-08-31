@@ -56,6 +56,15 @@ var yamlScalarInError = regexp.MustCompile("`[^`]*`")
 // which ADR 0049 section 3 already refuses to report for the same reason.
 const redactedScalar = "`<value redacted>`"
 
+// internalTypeInError matches the Go type name the decoder names in an
+// unknown-field error.
+//
+// `field bogus not found in type config.targetBlock` tells an operator about an
+// implementation detail they cannot act on, and names an unexported type they
+// cannot look up. The field name — which is theirs — is already in the message,
+// and it is the part that matters.
+var internalTypeInError = regexp.MustCompile(` not found in type \S+`)
+
 // sanitizeYAML makes a decoder error safe to show and safe to store.
 //
 // It removes every backtick-quoted span, collapses the decoder's multi-line
@@ -71,6 +80,7 @@ func sanitizeYAML(err error) string {
 		return ""
 	}
 	text := yamlScalarInError.ReplaceAllString(err.Error(), redactedScalar)
+	text = internalTypeInError.ReplaceAllString(text, " is not a field this schema defines")
 
 	lines := strings.Split(text, "\n")
 	cleaned := make([]string, 0, len(lines))

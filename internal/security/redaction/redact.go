@@ -42,7 +42,17 @@ func Redact(report domain.Report) (domain.Report, error) {
 	}
 
 	t := newTable(collect(report))
+	return redactWith(t, report)
+}
 
+// redactWith transforms one report against an already-built pseudonym table.
+//
+// It is separate from Redact so that RedactRun can share **one** table across
+// every report in an aggregate: ADR 0074 section 8.1 requires a host appearing in
+// two targets to receive one pseudonym, and a table built per report would give
+// it two — or worse, give two different hosts the same one, which is a
+// correlation the redactor invented.
+func redactWith(t *table, report domain.Report) (domain.Report, error) {
 	target, err := redactTarget(t, report.Target())
 	if err != nil {
 		return domain.Report{}, err

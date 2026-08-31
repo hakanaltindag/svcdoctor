@@ -327,7 +327,7 @@ func classifyDecodeError(err error) error {
 
 	var category Category
 	switch {
-	case strings.Contains(detail, "not found in type"):
+	case strings.Contains(detail, "is not a field this schema defines"):
 		category = CategoryUnknownField
 	case strings.Contains(detail, "already defined at line"):
 		category = CategorySyntax

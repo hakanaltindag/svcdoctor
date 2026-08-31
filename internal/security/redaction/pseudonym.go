@@ -121,6 +121,21 @@ func newTable(hosts, ips, identities []string, ids []domain.EvidenceID) *table {
 	return t
 }
 
+// resetUsage clears what was replaced, keeping every assignment.
+//
+// A shared table accumulates usage across reports, so without this the second
+// report in an aggregate would claim the first one's counts as well. The
+// *assignments* are what must be shared — they are how a host gets one pseudonym
+// across the whole run — and the *counters* are what must not, because each
+// report's security metadata describes its own transformation.
+func (t *table) resetUsage() {
+	t.usedHosts = make(map[string]struct{})
+	t.usedIPs = make(map[string]struct{})
+	t.usedIDs = make(map[domain.EvidenceID]struct{})
+	t.usedIdentities = make(map[string]struct{})
+	t.proseFields = 0
+}
+
 // host returns the pseudonym for a DNS name, recording that it was replaced.
 func (t *table) host(name string) string {
 	p, ok := t.hosts[name]

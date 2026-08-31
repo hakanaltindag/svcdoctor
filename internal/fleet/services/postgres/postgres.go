@@ -14,7 +14,16 @@
 package postgres
 
 import (
+	"context"
+	"fmt"
+
+	adapterpostgres "github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
+	"github.com/hakanaltindag/svcdoctor/internal/app"
 	"github.com/hakanaltindag/svcdoctor/internal/fleet/config"
+	"github.com/hakanaltindag/svcdoctor/internal/fleet/run"
+	"github.com/hakanaltindag/svcdoctor/internal/fleet/services"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
+	"github.com/hakanaltindag/svcdoctor/internal/security/trustsource"
 )
 
 // Kind is the value of a target's `type` field.
@@ -43,8 +52,17 @@ type Config struct {
 // Kind reports the service this configuration belongs to.
 func (c Config) Kind() string { return Kind }
 
-// Factory registers PostgreSQL with the generic configuration core.
-type Factory struct{}
+// Factory registers PostgreSQL with the generic configuration core and with the
+// runner registry.
+//
+// One type implementing both interfaces, so a service is registered once. The
+// zero Factory is usable for configuration alone — Decode reads no field — which
+// is what lets configuration be validated on a machine with no network.
+type Factory struct {
+	// Env carries the probe seams, the vantage and the version. Required for
+	// Run; unused by Decode.
+	Env services.Environment
+}
 
 // Kind returns the registration key.
 func (Factory) Kind() string { return Kind }
@@ -75,4 +93,65 @@ func (Factory) Decode(node *config.ServiceNode, common config.Common) (config.Se
 	}
 
 	return cfg, nil
+}
+
+// Factory is also this service's runner. Run turns a validated target into
+// app.PostgresParams and calls the existing composition root.
+//
+// # It calls DiagnosePostgres and reaches nothing past it
+//
+// No adapter, no wire package, no probe beyond the injected seams, no diagnosis
+// rule. Credential authority, connection ownership, the one-path-past-the-
+// credential-boundary rule and every claim discipline stay exactly where they
+// already are — this is a parameter mapping, and it is deliberately boring.
+//
+// The credential arrives already bound to this target's own endpoint.
+// PostgresParams.validate checks that binding a second time and refuses a
+// credential bound anywhere else, so the fleet layer cannot rebind one even by
+// mistake.
+func (f Factory) Run(
+	ctx context.Context, target config.Target, credential security.Credential,
+) (run.Outcome, error) {
+	cfg, ok := target.Config.(Config)
+	if !ok {
+		return run.Outcome{}, fmt.Errorf(
+			"postgres runner received %T, which is not a PostgreSQL configuration", target.Config)
+	}
+
+	roots, err := trustsource.Load(target.TLS.CAFile)
+	if err != nil {
+		return run.Outcome{}, fmt.Errorf("loading the trust source: %w", err)
+	}
+
+	plan := adapterpostgres.TLSRequired
+	if !target.TLS.Enabled() {
+		plan = adapterpostgres.TLSDisabled
+	}
+
+	result, err := app.DiagnosePostgres(ctx, app.PostgresParams{
+		Host:     target.Host,
+		Port:     target.Port,
+		Role:     target.Credentials.Username,
+		Database: cfg.Database,
+
+		Credential: credential,
+
+		Resolver: f.Env.Resolver,
+		Dialer:   f.Env.Dialer,
+
+		TLS: plan,
+		TLSOptions: adapterpostgres.TLSOptions{
+			ServerName:         target.TLS.ServerName,
+			RootCAs:            roots,
+			InsecureSkipVerify: target.TLS.Insecure,
+		},
+
+		StepTimeout: target.StepTimeout,
+		Vantage:     f.Env.Vantage,
+		Version:     f.Env.Version,
+	})
+	if err != nil {
+		return run.Outcome{}, err
+	}
+	return run.Outcome{Report: result.Report(), Incomplete: result.Incomplete()}, nil
 }

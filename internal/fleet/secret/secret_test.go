@@ -598,3 +598,93 @@ func findString(v reflect.Value, want string, seen map[uintptr]bool) string {
 	}
 	return ""
 }
+
+// TestTheSafeMessageNamesNoReference is ADR 0074 section 4.2, on the real type.
+//
+// # Why this exists separately from the scheduler's test
+//
+// internal/fleet/run proves that the scheduler *asks for* the safe form, using a
+// fake error. Nothing proved that the real ResolutionError's safe form is
+// actually safe — so mutations B21 and B23, which made SafeMessage return the
+// full text and the file path, both survived the whole Phase 9.1B matrix.
+//
+// The two halves are genuinely separate: one is about which method the scheduler
+// calls, the other about what that method returns. A single test cannot cover
+// both without the fake becoming the real thing.
+func TestTheSafeMessageNamesNoReference(t *testing.T) {
+	const envName = "VERY_DISTINCTIVE_VARIABLE_NAME"
+	filePath := writeSecret(t, "")
+
+	tests := []struct {
+		name      string
+		password  string
+		reference string
+	}{
+		{"env", "env: " + envName, envName},
+		{"file", "file: " + filePath, filePath},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Unsetenv(envName)
+			cfg := loadOne(t, tt.password)
+
+			err := secret.NewResolver().PreflightAll(cfg)
+			if err == nil {
+				t.Fatal("want a refusal")
+			}
+
+			var resolution *secret.ResolutionError
+			if !errors.As(err, &resolution) {
+				t.Fatalf("err = %T, want a *secret.ResolutionError", err)
+			}
+
+			// Error names the reference: that message is for stderr, and an
+			// operator cannot fix what svcdoctor will not name.
+			if !strings.Contains(resolution.Error(), tt.reference) {
+				t.Errorf("Error() = %q, want it to name %q so the operator can fix it",
+					resolution.Error(), tt.reference)
+			}
+
+			// SafeMessage does not: that message is for the canonical report,
+			// which is attached to tickets and pasted into chats.
+			safe := resolution.SafeMessage()
+			if strings.Contains(safe, tt.reference) {
+				t.Errorf("SafeMessage() = %q, which names the credential reference. "+
+					"ADR 0074 §4.2 keeps a reference name, a file path and an environment "+
+					"variable name out of the report entirely.", safe)
+			}
+			if safe == "" {
+				t.Error("SafeMessage() is empty; a reader still needs to know what happened")
+			}
+			// The source kind survives, because it is a property of the
+			// configuration's shape rather than of any deployment, and it tells a
+			// reader which half of the file to look at.
+			if !strings.Contains(safe, tt.name) {
+				t.Errorf("SafeMessage() = %q, want it to name the source kind %q",
+					safe, tt.name)
+			}
+		})
+	}
+}
+
+// TestTheSafeMessageIsAlsoSafeUnderEveryFormattingVerb closes the other route.
+func TestTheSafeMessageIsAlsoSafeUnderEveryFormattingVerb(t *testing.T) {
+	const envName = "ANOTHER_DISTINCTIVE_NAME"
+	os.Unsetenv(envName)
+
+	err := secret.NewResolver().PreflightAll(loadOne(t, "env: "+envName))
+	if err == nil {
+		t.Fatal("want a refusal")
+	}
+	var resolution *secret.ResolutionError
+	if !errors.As(err, &resolution) {
+		t.Fatalf("err = %T, want a *secret.ResolutionError", err)
+	}
+
+	// %#v must not print the struct field by field, which would reveal the name
+	// a GoString exists to withhold.
+	if strings.Contains(fmt.Sprintf("%#v", resolution), envName) {
+		t.Errorf("%%#v = %q, which names the reference", fmt.Sprintf("%#v", resolution))
+	}
+}

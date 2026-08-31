@@ -227,20 +227,54 @@ func (r *Resolver) CredentialFor(
 	return credential, nil
 }
 
+// ResolutionError is a credential that could not be obtained.
+//
+// # It carries two messages, and the split is ADR 0072 section 10's
+//
+// Error names the reference, because an environment variable or a file
+// svcdoctor cannot read has to be nameable *to the person fixing it* — ADR 0049
+// section 3's rule for `--password-file`'s path, applied to both sources. That
+// message is for stderr: ephemeral, local, read by the operator who owns the
+// file.
+//
+// SafeMessage names nothing but the reason. That message is for the canonical
+// report, which is attached to a ticket, pasted into a chat and kept. ADR 0074
+// section 4.2 keeps a reference name out of it entirely, so the two surfaces get
+// two strings rather than one string and a hope.
+//
+// Neither ever carries a value, or its length.
+type ResolutionError struct {
+	kind   config.SourceKind
+	name   string
+	reason string
+}
+
+// Error names the reference and the reason. For stderr.
+func (e *ResolutionError) Error() string {
+	return fmt.Sprintf("%s: credential %s %s: %s", ErrResolution, e.kind, e.name, e.reason)
+}
+
+// SafeMessage names only the reason. For the canonical report.
+//
+// The source *kind* survives — "env" or "file" — because it is a property of the
+// configuration's shape rather than of any particular deployment, and it is what
+// tells a reader which half of the file to look at. The name does not.
+func (e *ResolutionError) SafeMessage() string {
+	return fmt.Sprintf("the credential named by a %s reference could not be resolved: %s",
+		e.kind, e.reason)
+}
+
+// Is reports that every ResolutionError matches ErrResolution.
+func (e *ResolutionError) Is(target error) bool { return target == ErrResolution }
+
+// GoString keeps %#v from printing the struct field by field.
+func (e *ResolutionError) GoString() string {
+	return fmt.Sprintf("secret.ResolutionError{kind: %s, reason: %q}", e.kind, e.reason)
+}
+
 // refErrorf builds a resolution error that names the reference and never its value.
-//
-// The **name** appears: an environment variable svcdoctor cannot read has to be
-// nameable or the operator cannot fix it, which is ADR 0049 section 3's rule for
-// `--password-file`'s path applied to both sources. The **value** never appears,
-// and neither does its length — a size is a fact derived from the secret and it
-// buys the reader nothing.
-//
-// ADR 0072 section 10 splits the two surfaces: a reference name may reach stderr
-// and must never reach a canonical report. This produces the former; nothing in
-// the fleet layer puts it in the latter.
 func refErrorf(ref config.Reference, reason string) error {
-	return fmt.Errorf("%w: credential %s %s: %s",
-		ErrResolution, ref.Kind(), ref.Name(), reason)
+	return &ResolutionError{kind: ref.Kind(), name: ref.Name(), reason: reason}
 }
 
 // preflightFile proves a credential file is usable without reading it.

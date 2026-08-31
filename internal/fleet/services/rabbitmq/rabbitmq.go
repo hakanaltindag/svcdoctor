@@ -8,11 +8,15 @@
 package rabbitmq
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/app"
 	"github.com/hakanaltindag/svcdoctor/internal/fleet/config"
+	"github.com/hakanaltindag/svcdoctor/internal/fleet/run"
+	"github.com/hakanaltindag/svcdoctor/internal/fleet/services"
+	"github.com/hakanaltindag/svcdoctor/internal/security"
 )
 
 // Kind is the value of a target's `type` field.
@@ -62,8 +66,16 @@ func (c Config) VHostOrDefault() string {
 	return c.VHost
 }
 
-// Factory registers RabbitMQ with the generic configuration core.
-type Factory struct{}
+// Factory registers RabbitMQ with the generic configuration core and with the
+// runner registry.
+//
+// One type implementing both interfaces, so a service is registered once. The
+// zero Factory is usable for configuration alone — Decode reads no field.
+type Factory struct {
+	// Env carries the probe seams, the vantage and the version. Required for
+	// Run; unused by Decode.
+	Env services.Environment
+}
 
 // Kind returns the registration key.
 func (Factory) Kind() string { return Kind }
@@ -122,4 +134,44 @@ func checkStepTimeout(stepTimeout time.Duration) error {
 				"local timeout instead of the refusal it is", stepTimeout, minStepTimeout))
 	}
 	return nil
+}
+
+// Run turns a validated target into app.RabbitMQParams and calls the existing
+// composition root.
+//
+// The virtual host is a service configuration field and never an authority
+// component: Connection.Start-Ok carries the credential and Connection.Open
+// names the vhost, in that order, so a vhost-scoped authority would gate a
+// transmission that already happened (ADR 0068 §6).
+func (f Factory) Run(
+	ctx context.Context, target config.Target, credential security.Credential,
+) (run.Outcome, error) {
+	cfg, ok := target.Config.(Config)
+	if !ok {
+		return run.Outcome{}, fmt.Errorf(
+			"rabbitmq runner received %T, which is not a RabbitMQ configuration", target.Config)
+	}
+
+	options, err := services.TLSOptions(target.TLS)
+	if err != nil {
+		return run.Outcome{}, err
+	}
+
+	result, err := app.DiagnoseRabbitMQ(ctx, app.RabbitMQParams{
+		Host:        target.Host,
+		Port:        target.Port,
+		VHost:       cfg.VHost,
+		Username:    target.Credentials.Username,
+		Credential:  credential,
+		Resolver:    f.Env.Resolver,
+		Dialer:      f.Env.Dialer,
+		TLS:         options,
+		StepTimeout: target.StepTimeout,
+		Vantage:     f.Env.Vantage,
+		Version:     f.Env.Version,
+	})
+	if err != nil {
+		return run.Outcome{}, err
+	}
+	return run.Outcome{Report: result.Report(), Incomplete: result.Incomplete()}, nil
 }
