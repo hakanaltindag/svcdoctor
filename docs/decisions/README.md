@@ -116,6 +116,30 @@ report-size measurements every resource bound is derived from, and the two hazar
 found that the design would otherwise have missed — a merge key is not refused by refusing aliases,
 and a plaintext password is refused by the type system rather than by a check.
 
+**0075 to 0077 are the newest occupants of this list.** Phase 9.2A audited svcdoctor as an
+external Senior SRE meets it — README, `--help`, real invocations, real output, real errors — and
+froze the release and user-experience contract before Phase 9.2B changes anything: **0075** (the
+command surface frozen as it stands, one canonical mental model for `diagnose` versus `run`, seven
+elements in every help surface, six public documents each with one owner, one canonical example
+configuration plus two focused ones, and three mechanisms that prevent documentation drift),
+**0076** (version identification unchanged because `run.svcdoctorVersion` already exists in both
+schemas, five binary artifact platforms with checksums, the macOS pure-Go resolver limitation
+documented rather than engineered away, a required root `SECURITY.md`, the two supply-chain gaps
+closed, and `v0.4.0` as the next release), **0077** (the five exit codes frozen with `docs/CI.md` as
+their authority, three documented CI policies built only from existing codes, the artifact rule that
+survives `| tee` and `|| true`, the single-target completeness asymmetry documented rather than
+fixed, configuration errors returned to exit 2 where ADR 0074 §9 already put them, a shareable
+aggregate that fails closed, and the exact wording the shareable guarantee may and may not use).
+
+They add **nothing** to the frozen counts: `SchemaVersion` stays 1, `RunSchemaVersion` stays 1,
+finding codes stay 60, failure classes stay 42, `Reveal` and `SecretFor` stay at 4 each, and the
+module count stays 2. They authorize **no** new dependency, **no** new command, **no** new flag and
+**no** schema field. Three of the four release blockers they respond to are defects against
+contracts this project already holds — the ADR 0018 redaction policy, ADR 0074 §9's
+validate-before-dial requirement, and the honest-documentation rule — so closing them restores those
+contracts rather than reopening Phase 9. What was measured, and the commands that measured it, is in
+`docs/validation/PHASE92A_RELEASE_UX_AUDIT.md`.
+
 **0039 has left this list.** Phase 4.5b implemented it, so it now describes code. Two of its
 sections were settled by that implementation and the settlements are recorded inside it.
 
