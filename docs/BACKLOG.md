@@ -23,18 +23,22 @@ has exactly one runtime dependency, added in Phase 3.1: `github.com/twmb/franz-g
 - `internal/adapter/kafka/wire` — one of the two packages that may call `security.Reveal`, and
   the only one that imports the Kafka protocol library
 - `internal/adapter/postgres` and `internal/adapter/postgres/wire` — the PostgreSQL vertical
-  slice through `ReadyForQuery`, and the second and last `security.Reveal` call site
+  slice through `ReadyForQuery`, and the second `security.Reveal` call site
 - `internal/sasl/scram` — the shared SCRAM-SHA-256 core, which never receives plaintext
   (ADR 0055, ADR 0056)
-- `internal/diagnosis/transport`, `internal/diagnosis/postgres`, `internal/diagnosis/kafka` —
-  the concrete rules; with `internal/diagnosis/redis`, 49 finding codes across the four
+- `internal/diagnosis/transport`, `internal/diagnosis/postgres`, `internal/diagnosis/kafka`,
+  `internal/diagnosis/redis`, `internal/diagnosis/rabbitmq` — the concrete rules, **60 finding
+  codes** across the five *(this line read "49 across the four" until Phase 9.0's start-state
+  gate counted them)*
 - `internal/render/terminal` and `internal/render/json` — the two v0.1 output forms, derived
   from one report
-- `internal/app` — the PostgreSQL and Kafka composition roots
+- `internal/adapter/redis`, `internal/adapter/rabbitmq` and their wire packages — the third and
+  fourth vertical slices, and the third and fourth `security.Reveal` call sites
+- `internal/app` — the PostgreSQL, Kafka, Redis and RabbitMQ composition roots
 - `internal/platform/local`, `internal/service/*`, `internal/vocabulary` — vantage collection
   and the shared step vocabulary
-- `internal/cli` and `cmd/svcdoctor` — `svcdoctor diagnose postgres` and
-  `svcdoctor diagnose kafka`
+- `internal/cli` and `cmd/svcdoctor` — `svcdoctor diagnose postgres`, `diagnose kafka`,
+  `diagnose redis` and `diagnose rabbitmq`
 
 **This section was stale until Phase 6.5's audit read it.** It claimed no Go code existed in
 `internal/adapter/postgres`, `internal/render`, `internal/platform`, `internal/app` or
@@ -64,7 +68,8 @@ stale and should be corrected against this table.
 | 5 | Productization, Platform and Renderers | **Complete** — CLI, terminal and JSON renderers, both composition roots |
 | 6 | Kafka BASIC closure and hardening | **Complete** — 6.1a mechanism guard through 6.8 compatibility grading |
 | 7 | Runtime, real-world validation and Redis/Valkey | **Complete** — 7.0 SCRAM bounds, 7.1 OCI runtime, 7.3 PostgreSQL real-world, 7.4 Redis contract freeze, 7.5–7.7 Redis implementation and harness |
-| 8 | RabbitMQ | **8.0 and 8.1 complete** — semantics research, adversarial review, wire measurement and contract freeze. **No RabbitMQ code exists.** Implementation is 8.2 |
+| 8 | RabbitMQ | **Complete** — 8.0 semantics research and wire measurement, 8.1 contract freeze, 8.2 implementation, CLI exposure, integration suites and the 8.2-R3 closure gate. *(This row said "no RabbitMQ code exists" until Phase 9.0's start-state gate read it against the tree.)* |
+| 9 | Multi-target configuration and execution | **9.0 complete** — contract, ADRs 0071-0074 and the Phase 9.0 study. **No multi-target code exists.** Implementation is 9.1 |
 
 **Rows 4 to 6 were stale and are corrected here.** They read "Not started" while PostgreSQL BASIC
 was released and Kafka BASIC had closed — the same staleness Phase 6.5's audit found in the
@@ -4531,6 +4536,71 @@ gated on the username alone (ADR 0068 §4.1).
 The contract and nothing else. An implementer should be able to write RabbitMQ BASIC without
 making a semantic decision; if one is required, that is a defect in these four records and is
 fixed there rather than in code.
+
+## Phase 9.0 — Multi-target configuration and execution contract: COMPLETE
+
+Contract, research and ADR freeze. **No Go file was created or edited**, no dependency was
+added, and nothing was committed, staged, pushed or tagged.
+
+ADRs [0071](decisions/0071-multi-target-configuration-schema.md) to
+[0074](decisions/0074-multi-target-report-and-exit-semantics.md) are Accepted and **none is
+implemented**. `docs/validation/MULTI_TARGET_PHASE90_CONTRACT_STUDY.md` holds the
+measurements, the frozen terminology, the decision table, a 108-case test matrix and a
+40-mutation plan.
+
+The frozen counts are unchanged and were verified mechanically at the start of the phase:
+`SchemaVersion` **1**, **60** finding codes, **42** failure classes, **4** `Reveal` sites,
+**4** `SecretFor` sites, **1** external module.
+
+### What was decided
+
+- **One strict YAML document**, its own `version: 1`, unknown fields and duplicate keys
+  refused, anchors/aliases/merge keys/non-core tags refused, one document, 1 MiB, no
+  interpolation and no templating.
+- **A required, explicit target `id`.** Never positional, never derived from `host:port`,
+  lowercase enforced rather than folded, unique. Duplicate endpoints are supported and never
+  deduplicated.
+- **`env` and `file` credential references only.** A plaintext password is refused by the
+  decoder's type. Preflight proves resolvability and retains no value; resolution is
+  per target. **No secret cache** — the same reference in two targets resolves twice.
+- **Independent targets**, no dependency DAG, no fail-fast, declared configuration order,
+  concurrency default 4 and ceiling 16, three nested budgets whose contexts are derived so
+  the earlier deadline always wins.
+- **A separate aggregate document** with its own schema version, wrapping unmodified
+  `domain.Report` values, four execution states orthogonal to the evidence states, a derived
+  summary that never says "healthy", and the unchanged exit-code contract.
+- **`svcdoctor run --config <file>`.** The four leaf commands are untouched.
+
+### The one dependency this authorizes
+
+Phase 9.1 adds **`go.yaml.in/yaml/v3`**, importable only by `internal/fleet/config`, taking
+the module count from 1 to 2. It has no requirements of its own — measured, unlike
+`gopkg.in/yaml.v3`, which names `gopkg.in/check.v1`. `test/security/dependency_test.go`'s
+`allowedModules` gains one entry with its licence and ADR 0071 §3.3 as its reason.
+
+### Open items this phase created
+
+| Item | Condition |
+|---|---|
+| **No global probe semaphore.** Target concurrency bounds targets, not sockets: a target's peak descriptor use is its whole resolved address set, and Kafka adds the advertised sweep. The 16-target ceiling is derived against a *pessimistic estimate* of per-target fan-out rather than a measurement of it | ADR 0073 §10.1. Reopens on a measured descriptor overrun, or a fifth service that fans out further than Kafka |
+| **An embedded NUL in a secret file is not rejected today.** It is read as an ordinary byte; PostgreSQL refuses it later as a capability gap and the other three do not. Phase 9.0 documented this and deliberately changed nothing | ADR 0072 §12. Reopening it is a change to ADR 0049 and must be argued there, for all four leaf commands |
+| **Declared order over sorted order** is the one decision here made on a tiebreak rather than on a constraint | ADR 0073 §15.4. Reopens on evidence about how reports are actually read |
+
+### Documentation staleness the start-state gate found
+
+`docs/BACKLOG.md`'s Phase 8 roadmap row, its repository-state list, and several paragraphs
+of `CLAUDE.md` still said RabbitMQ was unimplemented and counted 49 finding codes, two
+`Reveal` sites and two composition roots. All of it stopped being true when Phase 8.2
+landed. `docs/COMPATIBILITY.md` was already correct. Every stale statement was corrected in
+this phase; no invariant count changed, because none of them was ever wrong in code.
+
+### What Phase 9.1 may implement
+
+The contract and nothing else. Specifically **not** authorized without reopening an ADR: a
+dependency DAG, fail-fast, cross-target diagnosis, target auto-discovery, a secret-manager
+source, templating, a remote config source, a run-level finding code, a `SchemaVersion`
+change, a global probe semaphore, streaming output, filtering flags, labels, or any
+service-specific flag on `run`.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 

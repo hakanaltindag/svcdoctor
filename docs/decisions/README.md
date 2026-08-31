@@ -71,7 +71,7 @@ something that exists. That is intentional, and they are binding when that work
 starts: **0008** (Kafka wire client), **0009** (service registration), **0011**
 (CLI shape).
 
-**0063 to 0066 are the current occupants of this list.** Phase 7.4 froze the Redis/Valkey BASIC
+**0063 to 0066 have left this list.** Phase 7.4 froze the Redis/Valkey BASIC
 contract before any Redis code exists, so all four decide work not yet written and all four bind
 from Phase 7.5: **0063** (the BASIC journey, the three-command allowlist, RESP2-only, and what
 `PING` is allowed to prove), **0064** (zero-argument `HELLO`, one credential-bearing command per
@@ -80,8 +80,8 @@ detected and not diagnosed), **0066** (prefix-only error classification, observe
 identity, one adapter and one CLI command). Between them they add three `Step` values and nothing
 else: no finding code, no failure class, no `SchemaVersion` change and no dependency.
 
-**0067 to 0070 joined this list in Phase 8.1**, which froze the RabbitMQ BASIC contract before any
-RabbitMQ code exists: **0067** (AMQP 0-9-1 only, one direct endpoint, the five-method allowlist,
+**0067 to 0070 have also left this list.** Phase 8.1 froze the RabbitMQ BASIC contract before any
+RabbitMQ code existed, and Phase 8.2 implemented it: **0067** (AMQP 0-9-1 only, one direct endpoint, the five-method allowlist,
 three service nodes, `Connection.Open-Ok` as the terminal boundary and the graceful close
 epilogue), **0068** (PLAIN only, the mandatory `authentication_failure_close` capability, one
 credential-bearing frame, endpoint-scoped authority and the unchanged verified-TLS-only policy),
@@ -94,6 +94,27 @@ immediately, because PostgreSQL SQLSTATE `53300` migrated onto it in the same ch
 `SchemaVersion` change and no dependency. The contract is measured rather than reasoned:
 `docs/validation/RABBITMQ_PHASE80_CONTRACT_STUDY.md` records what was run and against which
 brokers, and 0067 §4.1 and 0070 §3 record a Phase 8.0A prediction the measurements falsified.
+
+**0071 to 0074 are the current occupants of this list.** Phase 9.0 froze the multi-target
+configuration and execution contract before any multi-target code exists, and all four bind from
+Phase 9.1: **0071** (one strict YAML document, its own `version: 1`, a required and explicit target
+`id`, an envelope with a service-owned `config` node, and the parsing bounds), **0072** (`env` and
+`file` credential references, a plaintext secret refused by the decoder's type, preflight without
+retention followed by per-target resolution, and no secret cache), **0073** (independent targets, a
+bounded worker pool at 4 with a ceiling of 16, three nested budgets, declared configuration order,
+and no run-level finding), **0074** (a separate aggregate document with its own schema version, four
+execution states orthogonal to the evidence states, the unchanged exit-code contract, and
+`svcdoctor run --config`).
+
+Between them they add **nothing** to the frozen counts: `SchemaVersion` stays 1, finding codes stay
+60, failure classes stay 42, and the `Reveal` and `SecretFor` call sites stay at 4 each. They
+authorize **one new dependency** in Phase 9.1 — `go.yaml.in/yaml/v3`, which has none of its own —
+taking the module count from 1 to 2, which is the decision `test/security/dependency_test.go` exists
+to force someone to record. The contract is measured rather than reasoned:
+`docs/validation/MULTI_TARGET_PHASE90_CONTRACT_STUDY.md` records the YAML strictness experiments, the
+report-size measurements every resource bound is derived from, and the two hazards those experiments
+found that the design would otherwise have missed — a merge key is not refused by refusing aliases,
+and a plaintext password is refused by the type system rather than by a check.
 
 **0039 has left this list.** Phase 4.5b implemented it, so it now describes code. Two of its
 sections were settled by that implementation and the settlements are recorded inside it.
