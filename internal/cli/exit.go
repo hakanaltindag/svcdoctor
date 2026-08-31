@@ -5,6 +5,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/app"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
+	"github.com/hakanaltindag/svcdoctor/internal/fleet/config"
 )
 
 // The process status contract from docs/SCOPE.md.
@@ -91,6 +92,69 @@ func ExitCode(result app.Result, err error) int {
 		return ExitIncomplete
 	}
 	if result.Report().Summary().Status() == domain.SummaryStatusProblemsFound {
+		return ExitProblemsFound
+	}
+	return ExitOK
+}
+
+// RunExitCode maps one multi-target run onto a process status.
+//
+// It is pure, total, and the only place the aggregate mapping exists. It reads
+// the run summary and nothing else — not a finding, not a severity, not a
+// finding code, not a graph, not which targets are which service. Severity
+// reaches it only through statuses the embedded reports already derived, so this
+// function cannot form a second opinion that contradicts the document it is
+// describing.
+//
+// # The vocabulary is unchanged, and no code was added
+//
+// docs/SCOPE.md's five codes, applied to a set (ADR 0074 section 6):
+//
+//	0  the run completed and no target's report reached PROBLEMS_FOUND
+//	1  the run completed and at least one did
+//	2  a configuration or usage error; no target was dialled
+//	3  svcdoctor failed and produced no usable aggregate
+//	4  an aggregate exists and the run is incomplete
+//
+// The precedence is docs/SCOPE.md's own, unchanged: 3 > 2 > 4 > 1 > 0.
+//
+// # 4 outranks 1, and that is the worked case
+//
+// One target with a real authentication failure, one cut short locally, one
+// success, exits **4**. Incompleteness qualifies every conclusion, so reporting
+// the authentication failure as though the picture were complete would overstate
+// what was measured. The finding stays in the report, in full. This is the same
+// ordering ExitCode already applies to a single run, and TestRunExitCodeMatrix
+// pins it.
+//
+// # EXECUTION_FAILED contributes to 4, never to 3
+//
+// A single target failing locally does not make the aggregate unusable: the
+// other targets were measured and their reports are truthful. Code 3 is reserved
+// for the case where **no** usable aggregate exists, which is what
+// docs/SCOPE.md says it means.
+func RunExitCode(report domain.RunReport, err error) int {
+	switch {
+	case err == nil:
+		// The ordinary path. Fall through to the report-bearing cases below.
+	case errors.Is(err, ErrUsage), errors.Is(err, app.ErrInvalidInput),
+		errors.Is(err, config.ErrConfig):
+		// A configuration defect is a usage error: the operator wrote something
+		// svcdoctor cannot act on, nothing was dialled, and no report exists.
+		return ExitUsage
+	default:
+		return ExitInternal
+	}
+
+	if report.IsZero() {
+		// No aggregate and no error is a defect in the caller rather than a
+		// diagnosis. Reporting it as OK would be the worst available answer.
+		return ExitInternal
+	}
+	if report.Summary().Incomplete() {
+		return ExitIncomplete
+	}
+	if report.Summary().Status() == domain.SummaryStatusProblemsFound {
 		return ExitProblemsFound
 	}
 	return ExitOK

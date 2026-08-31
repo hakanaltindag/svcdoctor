@@ -39,7 +39,8 @@ Usage:
   svcdoctor <command> [arguments]
 
 Commands:
-  diagnose    measure a service and report what was observed
+  diagnose    measure one service and report what was observed
+  run         measure every target in a configuration file
 
 Flags:
   --help      show this help
@@ -413,5 +414,31 @@ Exit codes:
   2  the invocation could not be used
   3  svcdoctor failed internally
   4  the run was incomplete, which qualifies every conclusion
+`)
+}
+
+func (a *App) usageRun(w io.Writer) {
+	_, _ = fmt.Fprint(w, `Measure every target in a configuration file.
+
+Usage:
+  svcdoctor run --config <file> [flags]
+
+Flags:
+  --config FILE      the configuration to run; required, and a regular file
+  --timeout D        bound on the whole run; overrides the file's run.timeout
+  --concurrency N    how many targets run at once, 1-16; overrides run.concurrency
+  --output text|json which form to write to stdout
+  --shareable        produce the shareable redacted report
+
+Every target is described in the configuration. There are deliberately no
+target flags: a flag that edited one target would mean the file no longer
+describes the run.
+
+Credentials are named by the configuration and never by a flag. A target
+references one with "password: {env: NAME}" or "password: {file: PATH}", and a
+password is never written into the file itself.
+
+Targets are independent. One target's failure never stops another, and the
+report lists them in the order the file declares.
 `)
 }

@@ -116,47 +116,107 @@ func TestNoLeafCommandGainedAConfigurationFlag(t *testing.T) {
 	}
 }
 
-// TestTheRunCommandIsNotRoutedYet is the Phase 9.1A scope boundary.
+// TestTheRunCommandIsRouted was TestTheRunCommandIsNotRoutedYet in Phase 9.1A.
 //
-// ADR 0074 section 10.1 decides `svcdoctor run --config <file>`, and Phase 9.1A
-// builds the configuration foundation without it. ADR 0048's rule is why the
-// command is absent rather than present-and-refusing: **no command is ever
-// exposed as a stub.** A `run` that parsed its flags and then said "not
-// implemented" would be a product surface that does nothing, and an operator
-// would reasonably read its presence as a promise.
+// # It was turned around rather than deleted
 //
-// This test is expected to be inverted in Phase 9.1B, not deleted — the same way
-// the RabbitMQ contract-freeze guard was turned around at 8.2 rather than
-// removed.
-func TestTheRunCommandIsNotRoutedYet(t *testing.T) {
+// The same treatment the RabbitMQ contract-freeze guard got at Phase 8.2: where
+// it asserted that nothing existed, it now asserts that exactly the right thing
+// does. A negative guard that is deleted the moment its subject arrives never
+// records that the arrival was deliberate.
+//
+// ADR 0048's rule is why the command was absent rather than present-and-refusing
+// in 9.1A: no command is ever exposed as a stub, and an operator reasonably reads
+// a command's presence as a promise.
+func TestTheRunCommandIsRouted(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := newTestApp(&stdout, &stderr)
 
-	code := app.Run(context.Background(), []string{"run", "--config", "services.yaml"})
+	// No --config, so this is refused on its own terms rather than as an unknown
+	// command. That distinction is the whole assertion.
+	code := app.Run(context.Background(), []string{"run"})
 
 	if code != ExitUsage {
-		t.Errorf("`svcdoctor run` exited %d, want %d; it is not implemented in Phase 9.1A",
-			code, ExitUsage)
+		t.Errorf("`svcdoctor run` with no --config exited %d, want %d", code, ExitUsage)
 	}
-	if !strings.Contains(stderr.String(), "unknown command") {
-		t.Errorf("stderr = %q, want an unknown-command refusal", stderr.String())
+	if strings.Contains(stderr.String(), "unknown command") {
+		t.Errorf("`run` is still unrouted: %s", stderr.String())
 	}
-	if stdout.Len() != 0 {
-		t.Errorf("stdout = %q, want nothing; a refused invocation produces no artifact",
-			stdout.String())
+	if !strings.Contains(stderr.String(), "--config is required") {
+		t.Errorf("stderr = %q, want the missing-config refusal", stderr.String())
 	}
 }
 
-// TestTheRootUsageNamesNoUnimplementedCommand keeps the help honest.
-func TestTheRootUsageNamesNoUnimplementedCommand(t *testing.T) {
+// TestTheRunCommandRefusesConfigStdin pins ADR 0074 section 10.3.
+func TestTheRunCommandRefusesConfigStdin(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := newTestApp(&stdout, &stderr)
+
+	code := app.Run(context.Background(), []string{"run", "--config", "-"})
+
+	if code != ExitUsage {
+		t.Errorf("`--config -` exited %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr.String(), "regular file") {
+		t.Errorf("stderr = %q, want the reason stated", stderr.String())
+	}
+}
+
+// TestTheRunCommandExposesOnlyRunGlobalFlags is ADR 0074 section 10.2.
+//
+// Every flag it has is run-global, and every flag it must not have is refused as
+// unknown. The second list is the load-bearing one: a `--password-file` here
+// would make one ambient secret available to N targets, which is exactly the
+// cross-contamination ADR 0072 §7 exists to prevent.
+func TestTheRunCommandExposesOnlyRunGlobalFlags(t *testing.T) {
+	present := []string{"config", "timeout", "concurrency", "output", "shareable"}
+	for _, name := range present {
+		t.Run("present/"+name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := newTestApp(&stdout, &stderr)
+			app.Run(context.Background(), []string{"run", "--" + name + "="})
+			if strings.Contains(stderr.String(), "not defined") {
+				t.Errorf("`run` does not define --%s", name)
+			}
+		})
+	}
+
+	absent := []string{
+		"password-file", "password-stdin", "password-env",
+		"host", "port", "vhost", "broker", "username", "user", "database",
+		"sasl-mechanism", "target", "type", "filter",
+		"tls", "tls-ca-file", "tls-server-name", "tls-insecure", "step-timeout",
+	}
+	for _, name := range absent {
+		t.Run("absent/"+name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := newTestApp(&stdout, &stderr)
+			code := app.Run(context.Background(), []string{"run", "--" + name + "=x"})
+
+			if code != ExitUsage {
+				t.Errorf("`run --%s` exited %d, want %d; target data belongs in the "+
+					"configuration", name, code, ExitUsage)
+			}
+			if !strings.Contains(stderr.String(), "not defined") {
+				t.Errorf("`run --%s` was not refused as unknown: %s", name, stderr.String())
+			}
+		})
+	}
+}
+
+// TestTheRootUsageNamesOnlyImplementedCommands keeps the help honest.
+//
+// It was TestTheRootUsageNamesNoUnimplementedCommand in 9.1A. `run` moved from
+// the forbidden list to the required one; `inspect`, `batch`, `multi` and
+// `fleet` stayed forbidden, because none of them exists.
+func TestTheRootUsageNamesOnlyImplementedCommands(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	app := newTestApp(&stdout, &stderr)
 	app.Run(context.Background(), []string{"--help"})
 
 	// Listed commands only, never prose. The help legitimately contains the word
 	// "run" in a sentence — *"from where you run it"* — and a substring search
-	// matched it, which is the false positive this shape exists to avoid: a guard
-	// that fires on ordinary English gets weakened until it fires on nothing.
+	// matched it, which is the false positive this shape exists to avoid.
 	var commands []string
 	for _, line := range strings.Split(stdout.String(), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -168,27 +228,24 @@ func TestTheRootUsageNamesNoUnimplementedCommand(t *testing.T) {
 
 	for _, name := range commands {
 		switch name {
-		case "run", "batch", "multi", "fleet", "inspect":
-			t.Errorf("root help lists the command %q, which Phase 9.1A does not implement.\n\n"+
+		case "batch", "multi", "fleet", "inspect":
+			t.Errorf("root help lists the command %q, which does not exist.\n\n"+
 				"ADR 0048: no command is ever exposed as a stub, and help that names one is "+
 				"the same promise as a command that parses and refuses.\n%s",
 				name, stdout.String())
 		}
 	}
 
-	// And it still lists what does exist, so this cannot pass by the help being
-	// empty or by the parser above finding nothing.
-	if len(commands) == 0 {
-		t.Fatal("no commands were parsed out of the root help; this guard would be vacuous")
-	}
-	var sawDiagnose bool
-	for _, name := range commands {
-		if name == "diagnose" {
-			sawDiagnose = true
+	for _, required := range []string{"diagnose", "run"} {
+		var found bool
+		for _, name := range commands {
+			if name == required {
+				found = true
+			}
 		}
-	}
-	if !sawDiagnose {
-		t.Fatalf("root help does not list `diagnose`; parsed commands were %v", commands)
+		if !found {
+			t.Errorf("root help does not list %q; parsed commands were %v", required, commands)
+		}
 	}
 }
 

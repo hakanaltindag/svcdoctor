@@ -4,6 +4,8 @@ import (
 	"crypto/x509"
 	"errors"
 	"os"
+
+	"github.com/hakanaltindag/svcdoctor/internal/security/trustsource"
 )
 
 // This file is the whole of the TLS-flag contract, for every service.
@@ -17,10 +19,10 @@ import (
 
 // maxCAFileSize bounds the trust material a command will read.
 //
-// A PEM bundle of system-CA size is well under this; anything larger is much
-// more likely to be the wrong file than a trust store, and failing loudly beats
-// reading an arbitrary amount of a file an operator pointed at by mistake.
-const maxCAFileSize = 1 << 20
+// The value and its justification live in internal/security/trustsource, which
+// Phase 9.1B extracted so that a fleet run and a leaf command load trust
+// material through one implementation rather than two.
+const maxCAFileSize = trustsource.MaxBytes
 
 // tlsFlags is the TLS surface every service's flag set exposes.
 //
@@ -86,45 +88,22 @@ func refuseInertTLSFlags(f tlsFlags) error {
 
 // trustSource loads the PEM trust material, or reports that it could not.
 //
-// A nil pool means the system trust store, which is what the adapter documents
-// and what an operator who passed no flag asked for.
-//
-// # It replaces the system roots; it never extends them
-//
-// The pool starts empty and holds exactly what the supplied file contained. That
-// is ADR 0058 section 2, and it is the clause that lets `--tls-ca-file` express
-// *only this issuer is acceptable here* — a run configured with the wrong CA
-// fails rather than quietly succeeding through a public root.
-//
-// # The path may appear in an error; the contents never do
-//
-// A file svcdoctor cannot use has to be nameable or the operator cannot fix it.
-// Its bytes are a different matter: a trust file holds no secret, but the rule
-// that file contents never reach an error message is worth keeping uniform with
-// ADR 0049 rather than reasoned about per file.
+// The rules are internal/security/trustsource's; the wording is this package's,
+// because an operator has to be told which flag to fix. A nil pool means the
+// system trust store, which is what the adapter documents and what an operator
+// who passed no flag asked for.
 func trustSource(path string) (*x509.CertPool, error) {
-	if path == "" {
-		return nil, nil
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, usagef("--tls-ca-file %s cannot be read: %v", path, statReason(err))
-	}
-	if info.Size() > maxCAFileSize {
+	pool, err := trustsource.Load(path)
+	switch {
+	case err == nil:
+		return pool, nil
+	case errors.Is(err, trustsource.ErrTooLarge):
 		return nil, usagef("--tls-ca-file %s is larger than %d bytes", path, maxCAFileSize)
-	}
-
-	pem, err := os.ReadFile(path) //nolint:gosec // G304: the path is the operator's own flag, bounded above.
-	if err != nil {
+	case errors.Is(err, trustsource.ErrNoCertificate):
+		return nil, usagef("--tls-ca-file %s contains no PEM certificate", path)
+	default:
 		return nil, usagef("--tls-ca-file %s cannot be read: %v", path, statReason(err))
 	}
-
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, usagef("--tls-ca-file %s contains no PEM certificate", path)
-	}
-	return pool, nil
 }
 
 // statReason reduces a filesystem error to its cause without echoing the path a

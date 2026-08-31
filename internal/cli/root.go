@@ -132,6 +132,9 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	case "diagnose":
 		return a.diagnose(ctx, args[1:])
 
+	case "run":
+		return a.runCommandEntry(ctx, args[1:])
+
 	default:
 		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: unknown command %q\n\n", args[0])
 		a.usageRoot(a.Stderr)
