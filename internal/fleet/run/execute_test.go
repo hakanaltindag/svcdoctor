@@ -291,11 +291,11 @@ func TestMTE05RunBudgetExhaustedBeforeAllTargetsStart(t *testing.T) {
 	}
 }
 
-// TestMTE17NeverStartedTargetsInvokeNothing is MT-E17, proven by counting.
+// TestMTR15NeverStartedTargetsInvokeNothing is MT-E17, proven by counting.
 //
 // The strongest form of "no fabricated evidence" is that neither the runner nor
 // the resolver was called at all.
-func TestMTE17NeverStartedTargetsInvokeNothing(t *testing.T) {
+func TestMTR15NeverStartedTargetsInvokeNothing(t *testing.T) {
 	h := newHarness(t, "alpha", "bravo", "charlie", "delta").
 		concurrency(1).
 		runTimeout(100*time.Millisecond).
@@ -363,11 +363,11 @@ func TestMTE06CancellationWithCompletedActiveAndQueued(t *testing.T) {
 	}
 }
 
-// TestMTE07AndD02CompletionOrderNeverReachesTheReport is MT-E07 and MT-D02.
+// TestMTE08AndD02CompletionOrderNeverReachesTheReport is MT-E07 and MT-D02.
 //
 // The scenario forces completion order D, B, A, C while the declared order is
 // A, B, C, D. Nothing in the output may reflect the former.
-func TestMTE07AndD02CompletionOrderNeverReachesTheReport(t *testing.T) {
+func TestMTE08AndD02CompletionOrderNeverReachesTheReport(t *testing.T) {
 	h := newHarness(t, "alpha", "bravo", "charlie", "delta").concurrency(4)
 
 	// Gate each target so completion order is chosen rather than raced.
@@ -401,8 +401,8 @@ func TestMTE07AndD02CompletionOrderNeverReachesTheReport(t *testing.T) {
 	}
 }
 
-// TestMTE08DuplicateEndpointsAreDistinctExecutions is MT-E08.
-func TestMTE08DuplicateEndpointsAreDistinctExecutions(t *testing.T) {
+// TestMTE09DuplicateEndpointsAreDistinctExecutions is MT-E08.
+func TestMTE09DuplicateEndpointsAreDistinctExecutions(t *testing.T) {
 	h := newHarness(t, "orders", "billing")
 	for i := range h.cfg.Targets {
 		h.cfg.Targets[i].Host = "db.example.com"
@@ -426,11 +426,11 @@ func TestMTE08DuplicateEndpointsAreDistinctExecutions(t *testing.T) {
 	}
 }
 
-// TestMTE09SameReferenceResolvesIndependently is MT-E09.
+// TestMTE10SameReferenceResolvesIndependently is MT-E09.
 //
 // The references are identical; the authorities are not. Each target receives
 // its own credential object, bound to its own endpoint.
-func TestMTE09SameReferenceResolvesIndependently(t *testing.T) {
+func TestMTE10SameReferenceResolvesIndependently(t *testing.T) {
 	h := newHarness(t, "orders", "billing").
 		withCredential("orders", "SHARED_PASSWORD").
 		withCredential("billing", "SHARED_PASSWORD")
@@ -465,12 +465,12 @@ func TestMTE09SameReferenceResolvesIndependently(t *testing.T) {
 	}
 }
 
-// TestMTE13AndE14NoFailFast is MT-E13 and MT-E14.
+// TestMTE02NoFailFastOnDiagnosticOrExecutionFailure is MT-E13 and MT-E14.
 //
 // A success, a diagnostic failure, a local execution failure, and a success. The
 // fourth must run: one broken target must not hide the ones after it, which is
 // the entire reason an operator put them in one file.
-func TestMTE13AndE14NoFailFast(t *testing.T) {
+func TestMTE02NoFailFastOnDiagnosticOrExecutionFailure(t *testing.T) {
 	h := newHarness(t, "alpha", "bravo", "charlie", "delta").
 		concurrency(1).
 		behave("bravo", behaveProblems).
@@ -526,11 +526,11 @@ func TestARunnerErrorIsAnExecutionFailure(t *testing.T) {
 	}
 }
 
-// TestMTE15RunDeadlineDominatesTargetDeadline is MT-E15.
+// TestMTE17RunDeadlineDominatesTargetDeadline is MT-E15.
 //
 // A target budget can never extend the run's, because the target context is
 // derived from the run's rather than from the root.
-func TestMTE15RunDeadlineDominatesTargetDeadline(t *testing.T) {
+func TestMTE17RunDeadlineDominatesTargetDeadline(t *testing.T) {
 	const runBudget = 200 * time.Millisecond
 
 	h := newHarness(t, "alpha").
@@ -562,8 +562,8 @@ func TestMTE15RunDeadlineDominatesTargetDeadline(t *testing.T) {
 	}
 }
 
-// TestMTE16TargetDeadlineDoesNotCancelSiblings is MT-E16.
-func TestMTE16TargetDeadlineDoesNotCancelSiblings(t *testing.T) {
+// TestATargetDeadlineDoesNotCancelSiblings is MT-E16.
+func TestATargetDeadlineDoesNotCancelSiblings(t *testing.T) {
 	h := newHarness(t, "alpha", "bravo", "charlie").
 		concurrency(1).
 		targetTimeout("alpha", 80*time.Millisecond).
@@ -611,8 +611,8 @@ func TestTheStepTimeoutReachesTheRunnerUnchanged(t *testing.T) {
 	}
 }
 
-// TestMTE10AndE11AndE12Concurrency is MT-E10, MT-E11 and MT-E12.
-func TestMTE10AndE11AndE12Concurrency(t *testing.T) {
+// TestMTE11AndE13AndE14Concurrency is MT-E10, MT-E11 and MT-E12.
+func TestMTE11AndE13AndE14Concurrency(t *testing.T) {
 	t.Run("concurrency 1", func(t *testing.T) {
 		h := newHarness(t, "alpha", "bravo", "charlie").concurrency(1)
 		if _, err := h.execute(context.Background()); err != nil {
@@ -653,12 +653,12 @@ func TestMTE10AndE11AndE12Concurrency(t *testing.T) {
 	})
 }
 
-// TestMTE11MaxConcurrencyIsObserved is MT-E11's substantive half.
+// TestMTE12MaxConcurrencyIsObserved is MT-E11's substantive half.
 //
 // Substantially more targets than workers, and an independent atomic counter
 // inside the runner. Reading the scheduler's own bookkeeping would prove only
 // that it agrees with itself.
-func TestMTE11MaxConcurrencyIsObserved(t *testing.T) {
+func TestMTE12MaxConcurrencyIsObserved(t *testing.T) {
 	for _, workers := range []int{1, 2, 4, config.MaxConcurrency} {
 		t.Run(fmt.Sprintf("concurrency=%d", workers), func(t *testing.T) {
 			ids := make([]string, 0, 64)
@@ -680,12 +680,12 @@ func TestMTE11MaxConcurrencyIsObserved(t *testing.T) {
 	}
 }
 
-// TestMTE20AndConcurrencyOneMatchesTheSequentialReference is MT-E20 and §22.
+// TestConcurrencyOneMatchesTheSequentialReference is MT-E20 and §22.
 //
 // The concurrent executor at concurrency 1 must be indistinguishable from the
 // sequential reference. This is the permanent regression that keeps the two from
 // drifting.
-func TestMTE20AndConcurrencyOneMatchesTheSequentialReference(t *testing.T) {
+func TestConcurrencyOneMatchesTheSequentialReference(t *testing.T) {
 	scenario := func(t *testing.T) *harness {
 		return newHarness(t, "alpha", "bravo", "charlie", "delta").
 			behave("bravo", behaveProblems).

@@ -24,7 +24,7 @@ func withPassword(block string) string {
 // plaintextCanary is the value a misbehaving implementation would echo.
 const plaintextCanary = "hunter2-PLAINTEXT-CANARY"
 
-// TestMTC05AndC18APlaintextPasswordIsRefusedStructurally is MT-C05 and MT-C18.
+// TestMTC06AndS08APlaintextPasswordIsRefusedStructurally is MT-C05 and MT-C18.
 //
 // # This is the single most important refusal in the package
 //
@@ -34,7 +34,7 @@ const plaintextCanary = "hunter2-PLAINTEXT-CANARY"
 //
 // Every scalar shape is here, because "a password" is written in more ways than
 // one and a refusal that only covers the unquoted form is not a refusal.
-func TestMTC05AndC18APlaintextPasswordIsRefusedStructurally(t *testing.T) {
+func TestMTC06AndS08APlaintextPasswordIsRefusedStructurally(t *testing.T) {
 	shapes := []struct{ name, block string }{
 		{"bare scalar", "      password: " + plaintextCanary + "\n"},
 		{"double quoted", "      password: \"" + plaintextCanary + "\"\n"},
@@ -125,8 +125,8 @@ func TestASanitizedDecoderErrorNeverEchoesAScalar(t *testing.T) {
 	}
 }
 
-// TestMTC19BothSourcesAreRefused is MT-C19.
-func TestMTC19BothSourcesAreRefused(t *testing.T) {
+// TestMTC07BothSourcesAreRefused is MT-C19.
+func TestMTC07BothSourcesAreRefused(t *testing.T) {
 	_, err := load(t, withPassword("      password:\n        env: E\n        file: /f\n"))
 	assertCategory(t, err, config.CategoryCredentialReference)
 	if !strings.Contains(err.Error(), "no precedence") {
@@ -134,8 +134,8 @@ func TestMTC19BothSourcesAreRefused(t *testing.T) {
 	}
 }
 
-// TestMTC20NeitherSourceIsRefused is MT-C20, in both spellings.
-func TestMTC20NeitherSourceIsRefused(t *testing.T) {
+// TestMTC08NeitherSourceIsRefused is MT-C20, in both spellings.
+func TestMTC08NeitherSourceIsRefused(t *testing.T) {
 	tests := []struct{ name, block string }{
 		{"empty mapping", "      password: {}\n"},
 		{"explicit null", "      password:\n"},
@@ -184,8 +184,8 @@ func TestNoCredentialsBlockAtAllIsValid(t *testing.T) {
 	}
 }
 
-// TestMTC07EnvNameGrammar is MT-C07's structural half, and MT-S07's.
-func TestMTC07EnvNameGrammar(t *testing.T) {
+// TestEnvNameGrammar is MT-C07's structural half, and MT-S07's.
+func TestEnvNameGrammar(t *testing.T) {
 	valid := []string{"E", "_", "DB_PASSWORD", "db_password", "P1", "_1", "A_1_B"}
 	for _, name := range valid {
 		t.Run("valid/"+name, func(t *testing.T) {
@@ -222,14 +222,14 @@ func TestMTC07EnvNameGrammar(t *testing.T) {
 	})
 }
 
-// TestMTS07ArbitraryInterpolationIsAbsentEverywhere is MT-S07.
+// TestMTC25AndS09ArbitraryInterpolationIsAbsentEverywhere is MT-S07.
 //
 // ADR 0071 section 8.3 refuses `${VAR}` anywhere in a configuration, not only in
 // a credential reference. The proof for every other field is that the value
 // arrives **verbatim**: nothing expands it, so a document that names a variable
 // gets a host, a database or a virtual host with braces in it — and then fails
 // at the layer that actually uses it, having made no substitution.
-func TestMTS07ArbitraryInterpolationIsAbsentEverywhere(t *testing.T) {
+func TestMTC25AndS09ArbitraryInterpolationIsAbsentEverywhere(t *testing.T) {
 	t.Setenv("SVCDOCTOR_TEST_HOST", "secret-host.internal")
 	t.Setenv("DB", "secretdb")
 

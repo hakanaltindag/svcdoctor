@@ -24,7 +24,7 @@ import (
 // docs/validation/MULTI_TARGET_PHASE90_CONTRACT_STUDY.md section 6.1.
 
 // testRegistry builds the production registry.
-func testRegistry(t *testing.T) *config.Registry {
+func testRegistry(t testing.TB) *config.Registry {
 	t.Helper()
 	registry, err := config.NewRegistry(
 		postgres.Factory{}, kafka.Factory{}, redis.Factory{}, rabbitmq.Factory{},
@@ -36,7 +36,7 @@ func testRegistry(t *testing.T) *config.Registry {
 }
 
 // load is the shorthand every case uses.
-func load(t *testing.T, doc string) (config.Config, error) {
+func load(t testing.TB, doc string) (config.Config, error) {
 	t.Helper()
 	return config.Load([]byte(doc), "services.yaml", testRegistry(t))
 }
@@ -165,13 +165,13 @@ func TestMTC01AValidFourServiceFileLoads(t *testing.T) {
 	}
 }
 
-// TestMTC17DeclaredOrderIsPreserved is MT-C17.
+// TestDeclaredOrderIsPreservedByTheLoader is MT-C17.
 //
 // The order in the file is the order in the configuration, and it survives
 // validation, service dispatch and every default being filled in. ADR 0073
 // section 6 makes this the aggregate report's order, so it is pinned here where
 // the slice is built rather than only where it is later rendered.
-func TestMTC17DeclaredOrderIsPreserved(t *testing.T) {
+func TestDeclaredOrderIsPreservedByTheLoader(t *testing.T) {
 	cfg, err := load(t, validFourService)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -244,11 +244,11 @@ targets:
 	}
 }
 
-// TestMTC04UnknownFieldIsRejectedAtEveryLevel is MT-C04.
+// TestMTC04AndC05UnknownFieldIsRejectedAtEveryLevel is MT-C04.
 //
 // Every level, because a strictness that holds at the root and not inside a
 // service configuration is a strictness an operator cannot rely on.
-func TestMTC04UnknownFieldIsRejectedAtEveryLevel(t *testing.T) {
+func TestMTC04AndC05UnknownFieldIsRejectedAtEveryLevel(t *testing.T) {
 	tests := []struct {
 		level string
 		doc   string
@@ -341,12 +341,12 @@ targets:
 	}
 }
 
-// TestMTC09DuplicateYAMLKeyIsRejectedAtEveryLevel is MT-C09.
+// TestMTC14DuplicateYAMLKeyIsRejectedAtEveryLevel is MT-C09.
 //
 // Last-wins is the behaviour `encoding/json` has and this configuration must not:
 // a silently discarded credential reference is the config-file form of a
 // truncated secret.
-func TestMTC09DuplicateYAMLKeyIsRejectedAtEveryLevel(t *testing.T) {
+func TestMTC14DuplicateYAMLKeyIsRejectedAtEveryLevel(t *testing.T) {
 	tests := []struct {
 		level string
 		doc   string
@@ -409,7 +409,7 @@ targets:
 	}
 }
 
-func TestMTC08MalformedYAML(t *testing.T) {
+func TestMTC13MalformedYAML(t *testing.T) {
 	tests := []struct{ name, doc string }{
 		{"tab indentation", "version: 1\ntargets:\n\t- id: a\n"},
 		{"unclosed flow mapping", "version: 1\nrun: {concurrency: 1\n"},
@@ -433,8 +433,8 @@ func TestAnEmptyDocumentIsRefusedWithItsOwnMessage(t *testing.T) {
 	}
 }
 
-// TestOnlyOneDocumentIsAccepted covers ADR 0071 section 8's document rule.
-func TestOnlyOneDocumentIsAccepted(t *testing.T) {
+// TestMTC20OnlyOneDocumentIsAccepted covers ADR 0071 section 8's document rule.
+func TestMTC20OnlyOneDocumentIsAccepted(t *testing.T) {
 	const oneTarget = `
 version: 1
 targets:
@@ -474,12 +474,12 @@ targets:
 	}
 }
 
-// TestMTC11MergeKeyIsRejected is MT-C11, and it is the load-bearing one.
+// TestMTC18MergeKeyIsRejected is MT-C11, and it is the load-bearing one.
 //
 // Phase 9.0 measured that a merge key decodes silently under KnownFields(true)
 // and **without any alias**, so refusing anchors and aliases does not refuse
 // merges. Each shape below is a way to reach the same construct.
-func TestMTC11MergeKeyIsRejected(t *testing.T) {
+func TestMTC18MergeKeyIsRejected(t *testing.T) {
 	tests := []struct{ name, doc string }{
 		{"inline merge into a target", `
 version: 1
@@ -560,13 +560,13 @@ targets:
 	}
 }
 
-// TestMTC12AnchorAndAliasPolicy is MT-C12.
+// TestMTC17AnchorAndAliasPolicy is MT-C12.
 //
 // ADR 0071 section 8.2 refuses both, and the refusal is on the anchor as well as
 // on the alias: an anchor with no alias is still a second way to write a target,
 // and permitting the definition while refusing the use is a rule nobody can
 // predict.
-func TestMTC12AnchorAndAliasPolicy(t *testing.T) {
+func TestMTC17AnchorAndAliasPolicy(t *testing.T) {
 	tests := []struct{ name, doc string }{
 		{"anchor with no alias", `
 version: 1
@@ -651,8 +651,8 @@ targets:
 	})
 }
 
-// TestMTC13CustomTagIsRejected is MT-C13.
-func TestMTC13CustomTagIsRejected(t *testing.T) {
+// TestMTC19CustomTagIsRejected is MT-C13.
+func TestMTC19CustomTagIsRejected(t *testing.T) {
 	tests := []struct{ name, doc string }{
 		{"application tag", `
 version: 1
@@ -700,8 +700,8 @@ targets:
 	}
 }
 
-// TestMTC10ConfigVersion is MT-C10, plus every neighbouring case.
-func TestMTC10ConfigVersion(t *testing.T) {
+// TestMTC15AndC16ConfigVersion is MT-C10, plus every neighbouring case.
+func TestMTC15AndC16ConfigVersion(t *testing.T) {
 	const targets = `
 targets:
   - id: a
@@ -766,8 +766,8 @@ targets:
 	}
 }
 
-// TestTargetIDGrammar covers ADR 0071 section 5.2 at every boundary.
-func TestTargetIDGrammar(t *testing.T) {
+// TestMTC24TargetIDGrammar covers ADR 0071 section 5.2 at every boundary.
+func TestMTC24TargetIDGrammar(t *testing.T) {
 	valid := []string{
 		"a", "orders-db", "orders_db", "a1", "1a", "0",
 		strings.Repeat("a", config.MaxTargetIDBytes),
@@ -835,8 +835,8 @@ targets:
 	}
 }
 
-// TestMTC15AndC16TargetCountBounds is MT-C15 and MT-C16.
-func TestMTC15AndC16TargetCountBounds(t *testing.T) {
+// TestMTC23AndC30TargetCountBounds is MT-C15 and MT-C16.
+func TestMTC23AndC30TargetCountBounds(t *testing.T) {
 	build := func(n int) string {
 		var b strings.Builder
 		b.WriteString("version: 1\ntargets:\n")
@@ -880,8 +880,8 @@ func TestMTC15AndC16TargetCountBounds(t *testing.T) {
 	})
 }
 
-// TestMTC14ConfigByteBound is MT-C14.
-func TestMTC14ConfigByteBound(t *testing.T) {
+// TestMTC22ConfigByteBound is MT-C14.
+func TestMTC22ConfigByteBound(t *testing.T) {
 	dir := t.TempDir()
 	registry := testRegistry(t)
 
@@ -941,8 +941,8 @@ func TestMTC14ConfigByteBound(t *testing.T) {
 	})
 }
 
-// TestTheConfigFileMustBeARegularFile covers ADR 0071 section 8.1.
-func TestTheConfigFileMustBeARegularFile(t *testing.T) {
+// TestMTC21TheConfigFileMustBeARegularFile covers ADR 0071 section 8.1.
+func TestMTC21TheConfigFileMustBeARegularFile(t *testing.T) {
 	dir := t.TempDir()
 	registry := testRegistry(t)
 

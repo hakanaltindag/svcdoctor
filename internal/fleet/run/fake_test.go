@@ -80,6 +80,19 @@ type fakeRunner struct {
 	// how a test chooses a completion order rather than racing for one.
 	gate map[string]chan struct{}
 
+	// barrier, when non-nil, holds every arriving target until barrierWidth of
+	// them have arrived together.
+	//
+	// It is how a concurrency test proves the pool *reaches* its configured size
+	// rather than merely staying under it. Observing a peak of N by racing
+	// instant-returning fakes is luck; requiring N runners to be simultaneously
+	// inside Run before any may leave is a fact. A scheduler whose pool is
+	// smaller than claimed cannot satisfy it, and fails on the deadline below
+	// rather than passing by coincidence.
+	barrier      chan struct{}
+	barrierWidth int
+	barrierCount atomic.Int64
+
 	mu sync.Mutex
 	// startOrder and completionOrder record target ids as they are seen.
 	startOrder      []string
@@ -141,6 +154,21 @@ func (f *fakeRunner) Run(
 	behave := f.script[id]
 	gate := f.gate[id]
 	f.mu.Unlock()
+
+	// A barriered target waits for its peers, which is how a test proves the
+	// pool reaches its configured width.
+	if f.barrier != nil {
+		if f.barrierCount.Add(1) == int64(f.barrierWidth) {
+			close(f.barrier)
+		}
+		select {
+		case <-f.barrier:
+		case <-time.After(30 * time.Second):
+			// The pool never reached barrierWidth. Returning rather than
+			// blocking forever turns a scheduling defect into a failed
+			// assertion on maxActive instead of a hung suite.
+		}
+	}
 
 	// A gated target waits before doing anything else, which is how a test picks
 	// the order results come back in.

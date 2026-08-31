@@ -62,10 +62,10 @@ func writeSecretFile(t *testing.T, value string) string {
 	return path
 }
 
-// TestMTS01NoSecretReachesAnyRunSurface is MT-S01 through MT-S03.
+// TestMTS01ToS04NoSecretReachesAnyRunSurface is MT-S01 through MT-S03.
 //
 // Both credential sources, both output forms, both output modes, and stderr.
-func TestMTS01NoSecretReachesAnyRunSurface(t *testing.T) {
+func TestMTS01ToS04NoSecretReachesAnyRunSurface(t *testing.T) {
 	t.Setenv("SVCDOCTOR_RUN_CANARY", runCanary)
 	secretPath := writeSecretFile(t, runCanary)
 	path := configWithCredentials(t, secretPath)
@@ -97,13 +97,13 @@ func TestMTS01NoSecretReachesAnyRunSurface(t *testing.T) {
 	}
 }
 
-// TestMTS10NoCredentialReferenceReachesTheReport is ADR 0072 section 10.
+// TestMTS11NoCredentialReferenceReachesTheReport is ADR 0072 section 10.
 //
 // The split is deliberate and both halves are asserted: a reference name may
 // reach stderr, because a variable svcdoctor cannot read has to be nameable to
 // the person fixing it — and it must never reach the canonical report, which is
 // attached to tickets and pasted into chats.
-func TestMTS10NoCredentialReferenceReachesTheReport(t *testing.T) {
+func TestMTS11NoCredentialReferenceReachesTheReport(t *testing.T) {
 	secretPath := writeSecretFile(t, runCanary)
 	// The variable is deliberately absent, so preflight refuses the run.
 	os.Unsetenv("SVCDOCTOR_RUN_CANARY")
@@ -114,8 +114,15 @@ func TestMTS10NoCredentialReferenceReachesTheReport(t *testing.T) {
 	})
 
 	// Preflight failed, so no aggregate exists at all.
-	if code != ExitInternal && code != ExitUsage {
-		t.Errorf("exit = %d, want a pre-execution refusal", code)
+	//
+	// The code is asserted **exactly**. It read `!= ExitInternal && != ExitUsage`
+	// until Phase 9.1C, which is why nobody noticed that it was in fact 3: a
+	// missing environment variable was being reported as "svcdoctor itself
+	// failed" rather than as the configuration error ADR 0072 section 5 makes it.
+	// An assertion that accepts two codes cannot detect the wrong one.
+	if code != ExitUsage {
+		t.Errorf("exit = %d, want %d: a credential reference that does not resolve at "+
+			"preflight is a configuration error, not a svcdoctor failure", code, ExitUsage)
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want no report", stdout.String())

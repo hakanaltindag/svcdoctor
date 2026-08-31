@@ -166,8 +166,8 @@ func TestSecretFileSemanticsAreTheLeafCommandsUnchanged(t *testing.T) {
 	}
 }
 
-// TestPreflightRefusals covers ADR 0072 section 5.1's table.
-func TestPreflightRefusals(t *testing.T) {
+// TestMTC09ToC12PreflightRefusals covers ADR 0072 section 5.1's table.
+func TestMTC09ToC12PreflightRefusals(t *testing.T) {
 	dir := t.TempDir()
 
 	t.Run("a missing environment variable", func(t *testing.T) {
@@ -227,12 +227,12 @@ func TestANonRegularCredentialFileIsRefusedAtPreflight(t *testing.T) {
 	assertResolutionError(t, err, "not a regular file")
 }
 
-// TestPreflightRetainsNoSecretValue is MT-S09.
+// TestMTS20PreflightRetainsNoSecretValue is MT-S09.
 //
 // Preflight's whole purpose is to prove resolvability without residency. The
 // configuration is walked afterwards, field by field through reflection, and no
 // reachable string may hold the canary.
-func TestPreflightRetainsNoSecretValue(t *testing.T) {
+func TestMTS20PreflightRetainsNoSecretValue(t *testing.T) {
 	t.Setenv("SVCDOCTOR_TEST_PASSWORD", canary)
 	path := writeSecret(t, canary)
 
@@ -305,8 +305,8 @@ func TestAValidatedConfigHoldsNoSecretBearingField(t *testing.T) {
 	walk(reflect.TypeOf(config.Config{}), "Config")
 }
 
-// TestMTS01NoSecretValueReachesAnError is MT-S01 for the resolver.
-func TestMTS01NoSecretValueReachesAnError(t *testing.T) {
+// TestMTS04NoSecretValueReachesAnError is MT-S01 for the resolver.
+func TestMTS04NoSecretValueReachesAnError(t *testing.T) {
 	// Every failure shape that could plausibly carry a value with it.
 	t.Setenv("SVCDOCTOR_TEST_EMPTY", "")
 	dir := t.TempDir()
@@ -321,6 +321,45 @@ func TestMTS01NoSecretValueReachesAnError(t *testing.T) {
 		{"missing file", "file: " + filepath.Join(dir, "absent"), nil},
 		{"directory", "file: " + dir, nil},
 	}
+
+	// A value that is genuinely present, and resolves.
+	//
+	// # Why this case is here, and what it caught
+	//
+	// Every case above fails because the material is *absent*, so none of them
+	// has a value that could leak — the assertion below is satisfied by there
+	// being nothing to find. Mutation C09, which turns a successful env
+	// resolution into an error naming the value, survived the whole test for
+	// exactly that reason.
+	//
+	// So the success path is exercised with the canary present. It asserts two
+	// things: that resolution succeeds, and that if it ever stops succeeding the
+	// refusal still carries nothing.
+	t.Run("a present value resolves without producing an error", func(t *testing.T) {
+		t.Setenv("SVCDOCTOR_TEST_PRESENT", canary)
+		cfg := loadOne(t, "env: SVCDOCTOR_TEST_PRESENT")
+		resolver := secret.NewResolver()
+
+		if err := resolver.PreflightAll(cfg); err != nil {
+			t.Fatalf("preflight refused a present, non-empty variable: %v", err)
+		}
+		credential, err := resolver.CredentialFor(context.Background(), cfg.Targets[0])
+		if err != nil {
+			for _, message := range []string{
+				err.Error(), fmt.Sprintf("%v", err),
+				fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err),
+			} {
+				if strings.Contains(message, canary) {
+					t.Errorf("a refusal on the success path carried the value: %s", message)
+				}
+			}
+			t.Fatalf("a present, non-empty variable did not resolve: %v", err)
+		}
+		if credential.IsZero() {
+			t.Fatal("a present value produced no credential")
+		}
+	})
+
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.setup != nil {
