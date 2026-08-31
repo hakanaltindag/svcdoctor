@@ -19,7 +19,7 @@
 // imports no adapter, no wire package, no diagnosis package and no probe, calls
 // neither security.Reveal nor Credential.SecretFor, reads no environment
 // variable and no file, and parses no YAML. Each of those is a structural guard
-// in test/security/fleet_run_boundary_test.go rather than a convention.
+// in test/security/fleet_boundary_test.go rather than a convention.
 //
 // It also names no service. A target's kind selects a registered Runner, and
 // adding a fifth service requires no edit here at all — which is the property

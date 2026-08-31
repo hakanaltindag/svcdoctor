@@ -6,6 +6,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/app"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/fleet/config"
+	"github.com/hakanaltindag/svcdoctor/internal/fleet/secret"
 )
 
 // The process status contract from docs/SCOPE.md.
@@ -138,9 +139,29 @@ func RunExitCode(report domain.RunReport, err error) int {
 	case err == nil:
 		// The ordinary path. Fall through to the report-bearing cases below.
 	case errors.Is(err, ErrUsage), errors.Is(err, app.ErrInvalidInput),
-		errors.Is(err, config.ErrConfig):
+		errors.Is(err, config.ErrConfig), errors.Is(err, secret.ErrResolution):
 		// A configuration defect is a usage error: the operator wrote something
 		// svcdoctor cannot act on, nothing was dialled, and no report exists.
+		//
+		// # Why a credential-reference failure belongs here and not at 3
+		//
+		// secret.ErrResolution reaches this function from exactly one place:
+		// PreflightAll, before any target is dialled. ADR 0072 section 5 and the
+		// Phase 9.0 terminology both classify that as a **configuration error** —
+		// "a defect in the file or in a credential reference at preflight. Exit
+		// 2, zero targets dialled, no report" — because an environment variable
+		// the operator has not exported is something they wrote, not something
+		// svcdoctor got wrong.
+		//
+		// Exit 3 means svcdoctor itself failed. Reporting a missing variable that
+		// way tells a CI pipeline the tool is broken when the tool worked
+		// perfectly and the environment is what is incomplete.
+		//
+		// The *other* ErrResolution path — a reference that resolved at preflight
+		// and failed at execution — never arrives here. It is captured inside a
+		// TargetResult as EXECUTION_FAILED, the run still produces an aggregate,
+		// and that aggregate is what decides the code. So this branch cannot
+		// swallow a genuine execution failure.
 		return ExitUsage
 	default:
 		return ExitInternal
