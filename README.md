@@ -807,8 +807,14 @@ L2  TCP                               L6  Topology discovery
 L3  TLS
 ```
 
-svcdoctor has **one runtime dependency**: `github.com/twmb/franz-go/pkg/kmsg` (BSD-3-Clause,
-no transitive dependencies), used only by the Kafka adapter's wire package.
+svcdoctor has **two runtime dependencies**, each confined to a single package and each with
+no transitive dependencies of its own:
+
+- `github.com/twmb/franz-go/pkg/kmsg` (BSD-3-Clause) — Kafka protocol encoding, used only by
+  the Kafka adapter's wire package.
+- `go.yaml.in/yaml/v3` (MIT and Apache-2.0) — multi-target configuration decoding, used only
+  by `internal/fleet/config`. The configuration format it parses is implemented; multi-target
+  **execution is not**, and no command exposes it.
 
 Full detail is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the product boundary is in
 [`docs/SCOPE.md`](docs/SCOPE.md); design records are in

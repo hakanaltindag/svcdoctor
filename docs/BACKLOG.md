@@ -69,7 +69,7 @@ stale and should be corrected against this table.
 | 6 | Kafka BASIC closure and hardening | **Complete** — 6.1a mechanism guard through 6.8 compatibility grading |
 | 7 | Runtime, real-world validation and Redis/Valkey | **Complete** — 7.0 SCRAM bounds, 7.1 OCI runtime, 7.3 PostgreSQL real-world, 7.4 Redis contract freeze, 7.5–7.7 Redis implementation and harness |
 | 8 | RabbitMQ | **Complete** — 8.0 semantics research and wire measurement, 8.1 contract freeze, 8.2 implementation, CLI exposure, integration suites and the 8.2-R3 closure gate. *(This row said "no RabbitMQ code exists" until Phase 9.0's start-state gate read it against the tree.)* |
-| 9 | Multi-target configuration and execution | **9.0 complete** — contract, ADRs 0071-0074 and the Phase 9.0 study. **No multi-target code exists.** Implementation is 9.1 |
+| 9 | Multi-target configuration and execution | **9.0 and 9.1A complete** — contract in ADRs 0071-0074; `internal/fleet/config`, `internal/fleet/secret`, four service config packages and `internal/security/secretinput` implemented. **No multi-target execution exists**: no runner, no worker pool, no aggregate report, no `svcdoctor run`. Execution is 9.1B |
 
 **Rows 4 to 6 were stale and are corrected here.** They read "Not started" while PostgreSQL BASIC
 was released and Kafka BASIC had closed — the same staleness Phase 6.5's audit found in the
@@ -4601,6 +4601,80 @@ dependency DAG, fail-fast, cross-target diagnosis, target auto-discovery, a secr
 source, templating, a remote config source, a run-level finding code, a `SchemaVersion`
 change, a global probe semaphore, streaming output, filtering flags, labels, or any
 service-specific flag on `run`.
+
+## Phase 9.1A — Multi-target configuration foundation: COMPLETE
+
+Implementation of the configuration and credential-reference half of ADRs 0071 and 0072.
+**No multi-target execution was built** — no runner, no worker pool, no concurrency, no
+aggregate report, no `svcdoctor run`. A test asserts the command is unrouted and that the
+root help names it nowhere, because ADR 0048 refuses to expose a command as a stub.
+
+`docs/validation/MULTI_TARGET_PHASE91A_VALIDATION.md` records the measurements, the test
+counts and the mutation closure.
+
+### Packages
+
+- `internal/fleet/config` — bytes, YAML syntax, version, target envelope, bounds, identity,
+  registry dispatch and the credential-reference *shape*. The only importer of the YAML
+  module, and it does **not** import `internal/security`, so it cannot construct a secret.
+- `internal/fleet/secret` — the only fleet package that reads an environment variable or a
+  credential file. Builds `security.Secret` and binds `security.Credential` to the target's
+  own endpoint. Zero-field struct: it cannot cache.
+- `internal/fleet/services/{postgres,kafka,redis,rabbitmq}` — one typed config per service.
+- `internal/security/secretinput` — **extracted, not new.** The one implementation of
+  ADR 0049 §3's read semantics, now shared by `internal/cli` and the fleet resolver, because
+  ADR 0072 §12 forbids a second interpretation of a secret file.
+
+### Counts
+
+`SchemaVersion` **1**, **60** finding codes, **11** RabbitMQ, **42** failure classes, **4**
+`Reveal` and **4** `SecretFor` production call sites — every one unchanged.
+
+External modules **1 → 2**: `go.yaml.in/yaml/v3` v3.0.5, the ADR 0071 §3.3 authorization,
+importable by exactly one package and enforced by a test. It requires nothing of its own, so
+`go.sum` gained no transitive entry. `test/security/dependency_test.go` gained the entry with
+its licence and reason, a named `wantDependencyCount`, and a new test proving a third module
+still fails and that the allowlist and the count cannot drift apart.
+
+### Findings from implementation
+
+| Finding | Consequence |
+|---|---|
+| `yaml.Node.Decode` **ignores** `KnownFields` | Service configs and credential references are strict-decoded through a re-encoded fragment. The natural implementation would have silently accepted unknown fields inside every one |
+| A `*yaml.Node` field **cannot** be captured under `KnownFields(true)` | `config.ServiceNode` exists, which is also what keeps the YAML dependency in one package |
+| A **null value skips `UnmarshalYAML`** entirely | `password:` written and left empty needs its own check; the type system cannot see it |
+| The YAML library **interpolates offending scalars into its own errors** | `password: hunter2` would have put a plaintext password on the terminal. Two independent defences: a Kind check before the decoder formats anything, and a sanitizer over every library error |
+| The explicit `!!merge` refusal is **redundant** with the tag allow-list | Established by mutation A03 surviving its first form. Kept for message quality, and the redundancy is now documented so nobody deletes the allow-list entry believing the branch covers it |
+
+### Mutations
+
+**20 planted, 20 caught, 0 survivors**, tree restored byte-for-byte by sha256.
+`scripts/phase91a-mutations.sh` is committed and re-runnable. Three mutations — A11
+interpolation, A17 a service union in the generic core, A19 raw config retained — had no
+guard when written; each guard was added in response.
+
+### Two deliberate, frozen differences from the leaf commands
+
+Recorded because they look like inconsistencies until the reason is stated, and both are
+ADR 0072's rather than this phase's.
+
+| Difference | Why |
+|---|---|
+| An empty credential file is a fleet **preflight failure** and a leaf-command **"no credential"** | ADR 0072 §5.1 froze the preflight as non-empty; ADR 0049 maps an empty `--password-file` to unset. An operator who wrote a reference asked for a credential. The *read* semantics are byte-identical, from one shared implementation |
+| The fleet preflight requires a **regular file**; `--password-file` does not | The leaf command has no preflight. Tightening released input handling is a decision for ADR 0049, for all four commands at once, and 9.1A does not make it |
+
+### One clarification, changing no decision
+
+`password:` written and left empty is refused with the same reason `password: {}` is refused
+— *a reference that names nothing*. ADR 0072 §2's table lists `{}` and not an explicit null,
+because at contract time the two looked like one case. No ADR text was edited.
+
+### What Phase 9.1B may implement
+
+The runner, worker pool, budgets, cancellation, aggregate report, execution states, exit-code
+mapping, `svcdoctor run --config`, and the run-level redaction entry point. Three tests are
+expected to be **inverted rather than deleted**: `TestTheRunCommandIsNotRoutedYet`,
+`TestTheRootUsageNamesNoUnimplementedCommand`, and the `fleetCorePackages` list.
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
