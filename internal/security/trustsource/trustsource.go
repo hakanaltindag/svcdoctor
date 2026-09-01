@@ -74,3 +74,38 @@ func Load(path string) (*x509.CertPool, error) {
 	}
 	return pool, nil
 }
+
+// Reason phrases why Load refused, without naming the path.
+//
+// # Why the phrasing moved here in Phase 9.2B
+//
+// It was in internal/cli, where the four leaf commands used it. The fleet
+// preflight added in Phase 9.2B needs the same three answers for the same three
+// sentinels, and copying eight lines would have been a second opinion about what
+// "unusable trust material" means — the exact defect this package's own doc
+// comment says it exists to prevent.
+//
+// The caller supplies the subject, so each surface names what the operator can
+// act on:
+//
+//	--tls-ca-file /etc/ca.pem cannot be read: no such file      (leaf command)
+//	target "orders-db": tls.ca_file: cannot be read: no such file  (fleet)
+//
+// The path is the caller's to include or omit; this function never echoes it,
+// and it never carries anything the file held.
+func Reason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrTooLarge):
+		return fmt.Sprintf("is larger than %d bytes", MaxBytes)
+	case errors.Is(err, ErrNoCertificate):
+		return "contains no PEM certificate"
+	case errors.Is(err, os.ErrNotExist):
+		return "cannot be read: no such file"
+	case errors.Is(err, os.ErrPermission):
+		return "cannot be read: permission denied"
+	default:
+		return "cannot be read: unreadable"
+	}
+}

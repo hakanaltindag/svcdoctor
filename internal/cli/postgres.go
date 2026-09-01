@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"strings"
 	"time"
 
 	adapterpostgres "github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
@@ -371,7 +370,7 @@ func checkOutput(output string) error {
 func checkHost(host string) (string, error) {
 	h, err := probe.ParseHost(host)
 	if err != nil {
-		return "", usagef("--host %s", strings.TrimPrefix(err.Error(), "unsupported host: "))
+		return "", usagef("--host %s", probe.Reason(err))
 	}
 	return h.String(), nil
 }

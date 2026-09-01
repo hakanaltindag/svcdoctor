@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 )
 
 // ErrUnsupportedHost reports a host svcdoctor declines to measure, because it
@@ -135,3 +136,26 @@ func (h Host) Addr() (netip.Addr, bool) { return h.addr, h.literal }
 
 // IsZero reports whether h is the invalid zero Host.
 func (h Host) IsZero() bool { return h.name == "" }
+
+// Reason phrases why ParseHost refused, without the sentinel's own prefix.
+//
+// # Why this exists
+//
+// Every caller has to say which input was refused — `--host` for a leaf command,
+// `host` for a configuration field — and then wants the explanation without
+// "unsupported host: " in front of it. internal/cli did that with a
+// strings.TrimPrefix against a copy of this package's sentinel text, which is a
+// literal that goes stale silently the moment the sentinel is reworded.
+//
+// Phase 9.2B added a second caller — the fleet preflight, which refuses the same
+// host before any target is dialled — and moved the trimming here rather than
+// writing the literal twice.
+//
+//	--host fe80::1%en0 carries an IPv6 zone identifier …        (leaf command)
+//	target "orders-db": host: fe80::1%en0 carries an IPv6 …     (fleet)
+func Reason(err error) string {
+	if err == nil {
+		return ""
+	}
+	return strings.TrimPrefix(err.Error(), ErrUnsupportedHost.Error()+": ")
+}

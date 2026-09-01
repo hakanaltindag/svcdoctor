@@ -246,6 +246,18 @@ func (a *App) executeRun(ctx context.Context, cfg config.Config) (domain.RunRepo
 		return domain.RunReport{}, err
 	}
 
+	// ADR 0074 §9: the whole configuration validates before any target is
+	// dialled. Transport preflight runs first because its subject is the target's
+	// own declaration — the host it names and the trust material it points at —
+	// and a defect there is the same class of mistake as a malformed `tls.mode`.
+	// Credentials come last, immediately before the scheduler, because they are
+	// the last thing a run needs and the only one that is not in the file.
+	//
+	// Both are pre-execution and both exit 2. Neither opens a socket.
+	if err := services.PreflightAll(cfg); err != nil {
+		return domain.RunReport{}, err
+	}
+
 	resolver := secret.NewResolver()
 
 	// ADR 0072 §5: preflight proves every credential reference resolvable and

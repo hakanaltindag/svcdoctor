@@ -7,6 +7,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/fleet/config"
 	"github.com/hakanaltindag/svcdoctor/internal/fleet/secret"
+	"github.com/hakanaltindag/svcdoctor/internal/fleet/services"
 )
 
 // The process status contract from docs/SCOPE.md.
@@ -139,9 +140,20 @@ func RunExitCode(report domain.RunReport, err error) int {
 	case err == nil:
 		// The ordinary path. Fall through to the report-bearing cases below.
 	case errors.Is(err, ErrUsage), errors.Is(err, app.ErrInvalidInput),
-		errors.Is(err, config.ErrConfig), errors.Is(err, secret.ErrResolution):
+		errors.Is(err, config.ErrConfig), errors.Is(err, secret.ErrResolution),
+		errors.Is(err, services.ErrPreflight):
 		// A configuration defect is a usage error: the operator wrote something
 		// svcdoctor cannot act on, nothing was dialled, and no report exists.
+		//
+		// # services.ErrPreflight is here for the same reason as the other three
+		//
+		// Phase 9.2A measured a zoned host and a missing `tls.ca_file` reaching a
+		// runner and surfacing as EXECUTION_FAILED / INTERNAL at exit 4 — a typo
+		// reported as "svcdoctor's own invariant failed", and reported with the
+		// code that tells a pipeline to retry. Both are values the operator wrote,
+		// both are refused by the leaf commands at exit 2, and
+		// services.PreflightAll now refuses them here before any target is
+		// dialled. ADR 0077 §2.5.
 		//
 		// # Why a credential-reference failure belongs here and not at 3
 		//

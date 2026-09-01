@@ -2,8 +2,6 @@ package cli
 
 import (
 	"crypto/x509"
-	"errors"
-	"os"
 
 	"github.com/hakanaltindag/svcdoctor/internal/security/trustsource"
 )
@@ -16,13 +14,6 @@ import (
 // ignored them. One of those was right, both were reachable, and nothing in the
 // build noticed. ADR 0060 decides which, and this file is the single place a
 // third service inherits the answer from rather than re-deriving it.
-
-// maxCAFileSize bounds the trust material a command will read.
-//
-// The value and its justification live in internal/security/trustsource, which
-// Phase 9.1B extracted so that a fleet run and a leaf command load trust
-// material through one implementation rather than two.
-const maxCAFileSize = trustsource.MaxBytes
 
 // tlsFlags is the TLS surface every service's flag set exposes.
 //
@@ -94,27 +85,13 @@ func refuseInertTLSFlags(f tlsFlags) error {
 // who passed no flag asked for.
 func trustSource(path string) (*x509.CertPool, error) {
 	pool, err := trustsource.Load(path)
-	switch {
-	case err == nil:
+	if err == nil {
 		return pool, nil
-	case errors.Is(err, trustsource.ErrTooLarge):
-		return nil, usagef("--tls-ca-file %s is larger than %d bytes", path, maxCAFileSize)
-	case errors.Is(err, trustsource.ErrNoCertificate):
-		return nil, usagef("--tls-ca-file %s contains no PEM certificate", path)
-	default:
-		return nil, usagef("--tls-ca-file %s cannot be read: %v", path, statReason(err))
 	}
-}
-
-// statReason reduces a filesystem error to its cause without echoing the path a
-// second time or carrying anything the file held.
-func statReason(err error) string {
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return "no such file"
-	case errors.Is(err, os.ErrPermission):
-		return "permission denied"
-	default:
-		return "unreadable"
-	}
+	// The phrasing is trustsource.Reason's, so the fleet preflight refuses the
+	// same file with the same words. This surface adds the flag name, because an
+	// operator has to be told which flag to fix; the fleet surface adds the
+	// target and the configuration field instead. Phase 9.2B moved the mapping
+	// there rather than copying it, and the strings here are unchanged.
+	return nil, usagef("--tls-ca-file %s %s", path, trustsource.Reason(err))
 }
