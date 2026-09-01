@@ -116,7 +116,9 @@ report-size measurements every resource bound is derived from, and the two hazar
 found that the design would otherwise have missed — a merge key is not refused by refusing aliases,
 and a plaintext password is refused by the type system rather than by a check.
 
-**0075 to 0077 are the newest occupants of this list.** Phase 9.2A audited svcdoctor as an
+**0075 to 0077 have left this list.** Phase 9.2B implemented them, so they now describe code and shipped documents rather than a plan. What they decided is unchanged and is summarized below; where implementation corrected a detail, the correction is recorded inside the ADR rather than smoothed away.
+
+**They were the newest occupants of it.** Phase 9.2A audited svcdoctor as an
 external Senior SRE meets it — README, `--help`, real invocations, real output, real errors — and
 froze the release and user-experience contract before Phase 9.2B changes anything: **0075** (the
 command surface frozen as it stands, one canonical mental model for `diagnose` versus `run`, seven
@@ -131,10 +133,18 @@ survives `| tee` and `|| true`, the single-target completeness asymmetry documen
 fixed, configuration errors returned to exit 2 where ADR 0074 §9 already put them, a shareable
 aggregate that fails closed, and the exact wording the shareable guarantee may and may not use).
 
-They add **nothing** to the frozen counts: `SchemaVersion` stays 1, `RunSchemaVersion` stays 1,
-finding codes stay 60, failure classes stay 42, `Reveal` and `SecretFor` stay at 4 each, and the
-module count stays 2. They authorize **no** new dependency, **no** new command, **no** new flag and
-**no** schema field. Three of the four release blockers they respond to are defects against
+They added **nothing** to the frozen counts: `SchemaVersion` stayed 1, `RunSchemaVersion` stayed 1,
+finding codes stayed 60, failure classes stayed 42, `Reveal` and `SecretFor` stayed at 4 each, and
+the module count stayed 2. They authorized **no** new dependency, **no** new command, **no** new
+flag and **no** schema field, and Phase 9.2B added none of those.
+
+Two of their decisions were weakened by measurement rather than by choice, and both are recorded
+in `docs/validation/PHASE92B_UX_TRACEABILITY.md` rather than quietly restated: 0076 §2.6's
+SHA-pinning requirement is met for two of three actions, because no verified digest for the third
+existed anywhere this phase could check — and writing an unverified one is the defect a pin exists
+to prevent. And 0075's terminal work stops at the blockers: the 100-column bound the audit froze
+as UX-19 is **not met**, is held instead as a regression bound at the measured 277 columns, and
+the wrapping that would meet it is deferred as UX-S09. Three of the four release blockers they respond to are defects against
 contracts this project already holds — the ADR 0018 redaction policy, ADR 0074 §9's
 validate-before-dial requirement, and the honest-documentation rule — so closing them restores those
 contracts rather than reopening Phase 9. What was measured, and the commands that measured it, is in

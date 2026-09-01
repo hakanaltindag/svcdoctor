@@ -71,11 +71,189 @@ stale and should be corrected against this table.
 | 8 | RabbitMQ | **Complete** — 8.0 semantics research and wire measurement, 8.1 contract freeze, 8.2 implementation, CLI exposure, integration suites and the 8.2-R3 closure gate. *(This row said "no RabbitMQ code exists" until Phase 9.0's start-state gate read it against the tree.)* |
 | 9 | Multi-target configuration and execution | **Complete and FROZEN** — contract in ADRs 0071-0074, configuration foundation in 9.1A, execution, the aggregate report and `svcdoctor run --config` in 9.1B, and adversarial closure plus 108-requirement traceability in 9.1C. Validated against all four services through the real command. **No cross-target diagnosis, no dependency DAG, no retry, no filtering and no secret cache** |
 
+| 9.2 | Release readiness and public UX | **Complete** — 9.2A audited the product as an external SRE meets it and froze the release/UX contract in ADRs 0075-0077; 9.2B closed all four release blockers, built the public documentation architecture and the canonical examples, and added the drift guards. **20 mutations planted, 20 caught, 0 survivors.** Deferred findings are listed below |
+
 **Rows 4 to 6 were stale and are corrected here.** They read "Not started" while PostgreSQL BASIC
 was released and Kafka BASIC had closed — the same staleness Phase 6.5's audit found in the
 repository-state section above, in a section it did not reach. The Phase 7 *section* further down
 this file is a separate, still-unstarted item that was renumbered from Phase 6; it is not the
 Phase 7 row above.
+
+## Pre-existing mutation harness debt
+
+Found while re-running every mutation suite during the Phase 9.2B closure pass, and **not
+introduced by it**.
+
+| Suite | Planted | Caught | Survivors |
+|---|---|---|---|
+| Phase 9.1A | 20 | 12 | **8** |
+| Phase 9.1B | 31 | 19 | **12** |
+| Phase 9.1C | 45 | 45 | 0 |
+| Phase 9.2B | 21 | 21 | 0 |
+
+**Phase 9.1A — 8 survivors:**
+`A02` duplicate YAML keys accepted · `A03` YAML merge key accepted · `A04` plaintext scalar
+password accepted · `A05` env and file together accepted · `A06` empty credential reference
+accepted · `A08` target count limit removed · `A09` config byte limit removed · `A10`
+unsupported config version accepted
+
+**Phase 9.1B — 12 survivors:**
+`B05` one resolved credential is shared by every target · `B07` completion order becomes report
+order · `B09` a diagnostic failure stops the run · `B10` an execution failure stops the run ·
+`B14` a target deadline extends the global deadline · `B15` a target timeout cancels its
+siblings · `B16` the concurrency ceiling is removed · `B17` concurrency zero is accepted · `B18`
+the worker count exceeds the configured concurrency · `B26` a resolution failure stops unrelated
+targets · `B27` duplicate endpoints are deduplicated · `B28` the same reference reuses one
+credential object
+
+**Verified byte-identical at the Phase 9.2A baseline (`27d35b1`).** Both scripts were run in a
+scratch worktree checked out at that commit and produced exactly these twenty identifiers, in
+both suites, with the same counts. **Phase 9.2B introduced none of them and resolved none of
+them.**
+
+### Why the number moved from 2 to 20
+
+Phase 9.2B's first report named only `A10` and `B27`. That was a reading error, not a
+measurement: the run was summarised with `tail -1`, which shows the **last** survivor line and
+hides every one above it. The closure pass read the full output.
+
+Nothing about the tree changed between the two readings. The debt was always this size.
+
+### Not fixed here, deliberately
+
+A survivor means one of two things, and they need opposite fixes: either the guard is weak and
+the defect is real, or the mutation no longer describes a behaviour the product has. Several of
+these look like the second — `A04` (plaintext scalar password accepted) is guarded by a decoder
+*type* that Phase 9.1A's mutation may no longer be able to defeat, and `A03`, `A05` and `A06`
+are in the same family. But "looks like" is not a finding, and deciding requires reading each
+mutation against the code it targets.
+
+That is a phase of work, not a footnote in an unrelated closure pass, and doing it here would
+mean twenty judgements made by whoever happened to notice them.
+
+**Must be reconciled before the v0.4.0 Release Candidate Gate can PASS.** Each survivor is
+resolved one of two ways, in writing: the guard is strengthened, or the mutation is retired with
+the reason it no longer describes a reachable defect.
+
+## Release-gate precondition outside the tree
+
+**GitHub private vulnerability reporting is not enabled.** Measured during the Phase 9.2B
+closure pass:
+
+```console
+$ gh api repos/hakanaltindag/svcdoctor/private-vulnerability-reporting
+{"enabled":false}
+```
+
+`SECURITY.md` names it as the project's only reporting channel, so until the setting is on the
+policy links to a form that does not exist. **No commit can fix this** — it is a repository
+setting. Recorded as a line in `docs/RELEASE_CHECKLIST.md`; must be true before the first
+release that ships `SECURITY.md`.
+
+## Deferred Phase 9.2A acceptance requirements
+
+Two of the 24 frozen Phase 9.2A UX acceptance tests are `DEFERRED_BY_CONTRACT` rather than
+`PROVEN`. Neither is missing; both were excluded from Phase 9.2B's scope by the same sentence,
+and both belong to the terminal UX polish group below.
+
+| ID | Requirement | Why deferred |
+|---|---|---|
+| **UX-09** | Terminal mixed run readable | Renderer work excluded from Phase 9.2B. No part implemented, no test. Constituents: UX-S05, S06, S07, S08, S10, S11 |
+| **UX-19** | No emitted line exceeds 100 columns | Responsive wrapping excluded from Phase 9.2B. **277 columns measured**, guarded against exceeding 285 — a regression bound, not a proof. Constituent: UX-S09 |
+
+Full records, with Requirement / Evidence / Current bound / Reason deferred / Future candidate
+phase, are in `docs/validation/PHASE92B_UX_TRACEABILITY.md`.
+
+## Deferred Phase 9.2A findings
+
+Phase 9.2A recorded 4 RELEASE_BLOCKER, 22 SHOULD_FIX and 11 NICE_TO_HAVE findings. Phase 9.2B
+implemented the four blockers and the SHOULD_FIX items that ADR 0075-0077 froze as part of the
+public documentation, example and help contract. **Everything else is listed here rather than
+lost**, with the reason it was not done and where it belongs.
+
+The audit is `docs/validation/PHASE92A_RELEASE_UX_AUDIT.md`; every identifier below is its.
+
+### Terminal rendering — the largest deferred group
+
+Six SHOULD_FIX and five NICE_TO_HAVE findings, all in `internal/render/terminal`. Phase 9.2B's
+scope explicitly excluded renderer work beyond what a blocker required, and none of these is a
+blocker: every one is a legibility defect in output whose **content is already correct**.
+
+Together they are the natural content of one focused phase, because they touch the same files and
+share one constraint — *the renderer creates no finding, computes no severity and interprets no
+protocol*, so every change is layout, wrapping, ordering, deduplication or the wording of text a
+rule already produced.
+
+| ID | Finding | Note |
+|---|---|---|
+| **UX-S05** | The `Run` summary block's labels are not column-aligned, unlike every `Result` block; and it prints `PROBLEMS_FOUND` where `Result` prints `PROBLEMS FOUND` | One run prints two spellings of one state |
+| **UX-S06** | The run summary appears only at the bottom, after every target's full report | "Which target failed?" needs scrolling past thousands of lines for a 20-target run. Wants a one-line-per-target index **before** the detail |
+| **UX-S07** | A RabbitMQ finding's `detail` contains literal Markdown — `**Zero credential bytes were sent.**` — rendered verbatim | The renderer is right not to interpret it; the **finding text** is what changes. Diagnosis-package edit, not a renderer one |
+| **UX-S08** | RabbitMQ recommendations name leaf CLI flags (`--tls require`, `--tls-ca-file`) and are printed unchanged inside a `run --config` report, where neither flag exists | ADR 0077 §2.7 records the rule: a recommendation names the capability, not the flag |
+| **UX-S09** | No wrapping and no width awareness; **277 columns** measured in Phase 9.2B | At 80 columns the finding hierarchy collapses. Bounded by `TestUX1920TheOutputIsStableAndBounded` so it cannot get worse. **This is UX-19's outstanding half** |
+| **UX-S10** | An identical multi-paragraph finding is printed once per resolved address | Two addresses double the output; five quintuple it. Deduplicating rendered text is presentation; concluding that four addresses share a cause would be diagnosis, and is not what this asks for |
+| **UX-S11** | Recommendations say "read the … recorded on the referenced evidence", but the text renderer prints only `evidence: 1` and never the attributes | The user is told to read something the output does not contain, and is not told `--output json` would contain it |
+| UX-N03 | `svcdoctor · run · 1 targets` — pluralization | |
+| UX-N04 | A doubled blank line where the DNS row would be for an address-literal target | |
+| UX-N05 | `first break  L2  tcp` exposes the internal layer vocabulary | Keep `L2` in JSON; `tcp` alone is enough in the terminal |
+| UX-N06 | RabbitMQ renders a `DNS  not attempted` placeholder row for a literal target; the other three omit it entirely, per ADR 0059 | |
+| UX-N07 | `execution incomplete  1 never started, 1 cancelled, 1 cut short` reads as three targets when there are two | |
+
+### Machine consumption and CLI surface
+
+| ID | Finding | Why deferred |
+|---|---|---|
+| **UX-S01** | The single-target JSON report carries no completeness field; only the exit code distinguishes 4 from 0/1 | **Resolved as documented, not fixed.** ADR 0077 §2.4 decides this deliberately: `SchemaVersion` is frozen at 1, and a supported route exists — `run --config` with one target carries `summary.incomplete`. `docs/OUTPUT.md` states the limit plainly. Reopening it needs an ADR, not a patch |
+| **UX-S04** | `--user` (postgres, kafka) versus `--username` (redis, rabbitmq) for one concept | **Decided, not deferred.** ADR 0075 §2.1 declines to rename: `--user` shipped in v0.2.0 and a rename breaks every existing invocation for a cosmetic gain. Documented in one table instead. Revisit only in a phase that may change the CLI |
+| **UX-S12** | Go `flag` package wording escapes on two leaf paths: `invalid value "xx" for flag -timeout: parse error` and `flag provided but not defined: -bogus`, both single-dash for flags typed with two | Leaf-command change, outside this phase's scope. `TestUX17NoUserFacingErrorLeaksAnInternalName` **logs it on every run** rather than hiding it, so it stays visible until fixed |
+| **UX-S13** | `executionError.message` carries raw wrapped Go errors including `stat` and a path, while the credential path is sanitized by `safeMessage` | Half-closed: the **shareable** projection no longer carries any of it (UX-B01). The remaining half is LOCAL_FULL phrasing, which is cosmetic and correct in substance |
+| UX-N01 | `svcdoctor version` is not a command; only `--version` works | ADR 0076 §2.1 declines it: not required for release |
+| UX-N02 | `--version` prints only the version, not commit/OS/arch/Go version | ADR 0076 §2.1: a convenience, and convenience does not gate a release |
+| UX-N08 | The four leaf helps use three opening forms and two credential section titles | Cosmetic; the seven required elements are now asserted, which is the part that matters |
+| UX-N10 | No shell completion | |
+
+### Supply chain and release artifacts
+
+| ID | Finding | Status |
+|---|---|---|
+| **UX-S16-b** | `golangci/golangci-lint-action@v9` in `ci.yml` is pinned by tag | Phase 9.2B pinned the other two with digests this repository already carried, and **declined to invent one** for this action. Pin it in a change that can verify the digest upstream. The guard requires the exception to carry a written reason, so it cannot be forgotten silently |
+| **UX-S17** | No `govulncheck` in CI | The tool is not installed on the machine this phase ran on, and the scope forbids silently downloading tooling. Added to `docs/RELEASE_CHECKLIST.md` as a gate line |
+| **UX-S19** | No prebuilt binary archives since v0.1.0 | ADR 0076 §2.3 froze the five platforms and the checksums. Phase 9.2B **proved all five cross-compile clean** and deliberately built no release automation — the scope excludes it |
+| UX-N09 | No `CODE_OF_CONDUCT.md`, issue/PR templates, `dependabot.yml` | NICE_TO_HAVE. `SECURITY.md` and `CONTRIBUTING.md` were the two ADR 0076 §2.5 required, and both exist |
+| — | SBOM and signature over the **binary archives** | The three mechanisms already exist for the image; extending them is mechanical and belongs with UX-S19 |
+| — | Homebrew, apt, RPM, Windows packaging | OUT_OF_SCOPE per ADR 0076 §2.3 |
+
+### Documentation and demo
+
+| ID | Finding | Status |
+|---|---|---|
+| **UX-S14** | `docs/COMPATIBILITY.md` §2's "this is the whole list" table omits RabbitMQ authentication and the two configuration credential sources | A completeness claim that is not complete. Small, and it belongs to the document's own owner rather than to a documentation-architecture phase |
+| **UX-S15** | `docs/RELEASE_CHECKLIST.md`'s invariant counts were stale | **CLOSED in 9.2B** — counts corrected to 4/4, the eight integration suites listed, and the mutation, documentation and vulnerability-scan gates added |
+| **UX-S20** | The macOS `CGO_ENABLED=0` resolver limitation | **CLOSED in 9.2B** — documented in the README beside the artifacts it affects, with the `GODEBUG=netdns=cgo` workaround, per ADR 0076 §2.4 |
+| **UX-S21** | No CI documentation | **CLOSED in 9.2B** — `docs/CI.md` |
+| **UX-S22** | No canonical example configuration | **CLOSED in 9.2B** — three examples, all parsed by tests |
+| — | A reproducible local demo environment (`examples/demo`) | Declined by the 9.2A audit §5.15 and not reopened: the eight integration fixtures already are one, and a ninth copy of provisioning is a ninth thing to keep working. `docs/QUICKSTART.md` points at them and labels their credentials test-only |
+| UX-N11 | The malformed-YAML error carries `go-yaml`'s own phrasing | Usable: file and line are prefixed |
+
+### Closed in Phase 9.2B
+
+Listed so that all 33 of the audit's non-blocker findings are accounted for, not just the
+outstanding ones.
+
+| ID | Finding | How |
+|---|---|---|
+| **UX-S02** | `run --help` carried no exit-code block | Added, with the run-specific meaning of code 4 |
+| **UX-S03** | `diagnose redis --help` was the only leaf with no exit-code block and no exit-0 caveat | Both added; `diagnose rabbitmq` gained the caveat too |
+| **UX-S14** | *(outstanding — see above)* | — |
+| **UX-S15** | The release checklist's invariant counts were stale | Corrected; eight integration suites, mutation, documentation and scan gates added |
+| **UX-S16** | `ci.yml` was the only tag-pinned workflow | Two of three actions pinned; the third tracked as UX-S16-b with its reason recorded in the file |
+| **UX-S18** | No `CONTRIBUTING.md` | Written, and its required content is asserted by test |
+| **UX-S20** | The macOS resolver limitation was undocumented | Documented beside the artifacts it affects |
+| **UX-S21** | No CI documentation and no exit-code policy guidance | `docs/CI.md`, authoritative, with three policies and four provider examples |
+| **UX-S22** | No canonical example configuration, and nothing parsed the README's | Three examples; every YAML fence in every public document now parses through the real loader |
+
+**Nothing outstanding is a release blocker.** The four that were are closed; see
+`docs/validation/PHASE92B_RELEASE_UX_VALIDATION.md` §7.
 
 Phase 0 is documentation, decisions and tooling. Phase 1 is the pure value model and the
 transformations over it. Phase 2 is the first code that touches a network.
