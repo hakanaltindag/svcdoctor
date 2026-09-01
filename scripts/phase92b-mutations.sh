@@ -62,6 +62,31 @@ SURVIVORS=()
 mutate() {
   local id="$1" desc="$2" file="$3" script="$4" pkg="$5" regex="$6"
 
+  # A -run regex that selects **no test** makes `go test` exit 0, which this
+  # harness would read as a survivor. That is exactly how twenty mutations across
+  # phase91a and phase91b sat "surviving" from Phase 9.1C — which renamed 28 test
+  # functions — until the v0.4.0 release gate measured them: every one was caught
+  # by its package's full suite, and only the narrow regex had gone stale.
+  #
+  # An empty selection is a harness failure rather than a finding about the
+  # product; the two need opposite fixes and look identical without this.
+  #
+  # Checked on the **pristine** tree, before planting. After planting, a mutation
+  # that deliberately breaks the build produces no `=== RUN` either, and a check
+  # placed later cannot tell "the regex matches nothing" from "the mutation did
+  # its job" — which is the same conflation this guard exists to remove.
+  # The output is captured before being searched, deliberately. Piping into
+  # `grep -q` makes grep exit at the first match, `go test` take SIGPIPE, and the
+  # pipeline report failure under `set -o pipefail` — so every regex, including
+  # the ones that match nine tests, looked like it matched none.
+  local selected
+  selected="$(go test "$pkg" -run "$regex" -count=1 -timeout 120s -v 2>/dev/null || true)"
+  if ! printf '%s' "$selected" | grep -q '^=== RUN'; then
+    echo "  $id  NO MATCHING TEST — the -run regex selects nothing: $regex"
+    FAIL=$((FAIL + 1)); SURVIVORS+=("$id (no matching test: $regex)"); return
+  fi
+
+
   if ! python3 - "$file" <<PY
 import sys
 path = sys.argv[1]

@@ -145,10 +145,56 @@ func TestRAB18ManagementPortTargetedAsAMQP(t *testing.T) {
 	if hasNodeAt(t, result, stepAuth) {
 		t.Error("authentication was attempted against a peer that never spoke AMQP")
 	}
-	lower := strings.ToLower(reportText(result))
+	// # Where the ban applies, and where it cannot
+	//
+	// ADR 0067 section 3's rule is behavioural: "the port is never semantic — a
+	// TLS plan comes from --tls and never from the port number." What must not
+	// happen is svcdoctor *deciding* or *asserting* something from 15672.
+	//
+	// So the substring ban belongs on the surfaces that state facts — the
+	// summary, the detail and the recorded attributes. It does **not** belong on
+	// a recommendation, because the frozen recommendation deliberately lists the
+	// candidates an operator should rule out, and one of them is the management
+	// HTTP API. Banning the word there bans the product's own correct prose.
+	//
+	// This assertion used to cover recommendations too, and it passed only
+	// because the scenario usually timed out: the rule that produces this text
+	// fires on StateFail and skips a local-timeout UNKNOWN, so the report was
+	// empty of findings and the ban had nothing to match. The v0.4.0 release
+	// gate hit the fast path and the contradiction surfaced. A guard that passes
+	// when the product learns *less* is not a guard.
+	//
+	// The recommendation is pinned exactly instead, which is stronger than a
+	// substring ban on that surface: any drift toward a real claim fails here
+	// and has to be read by a human.
+	var claims strings.Builder
+	for _, finding := range result.Report().Findings() {
+		claims.WriteString(finding.Summary())
+		claims.WriteString(" ")
+		claims.WriteString(finding.Detail())
+		claims.WriteString(" ")
+	}
+	for _, node := range result.Report().Graph().Nodes() {
+		for key, value := range node.Attributes() {
+			claims.WriteString(" " + string(key) + "=" + value.String())
+		}
+	}
+	lower := strings.ToLower(claims.String())
 	for _, wrong := range []string{"management", "http", "web ui", "port 15672"} {
 		if strings.Contains(lower, wrong) {
 			t.Errorf("svcdoctor inferred a service from a port number: %q", wrong)
+		}
+	}
+
+	const frozenRecommendation = "Confirm the port carries AMQP 0-9-1 rather than the " +
+		"management HTTP API, a TLS listener addressed as plaintext, or another protocol"
+	for _, finding := range result.Report().Findings() {
+		for _, r := range finding.Recommendations() {
+			if r.Action() != frozenRecommendation {
+				t.Errorf("an unexpected recommendation reached this scenario:\n  %s\n\n"+
+					"Only the frozen enumeration is allowed here. Anything else has to be "+
+					"read against ADR 0067 section 3 before it ships.", r.Action())
+			}
 		}
 	}
 }

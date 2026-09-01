@@ -41,6 +41,31 @@ SURVIVORS=()
 mutate() {
   local id="$1" desc="$2" file="$3" script="$4" pkg="$5" regex="$6"
 
+  # A -run regex that selects **no test** makes `go test` exit 0, which this
+  # harness would read as a survivor. That is exactly how twenty mutations across
+  # phase91a and phase91b sat "surviving" from Phase 9.1C — which renamed 28 test
+  # functions — until the v0.4.0 release gate measured them: every one was caught
+  # by its package's full suite, and only the narrow regex had gone stale.
+  #
+  # An empty selection is a harness failure rather than a finding about the
+  # product; the two need opposite fixes and look identical without this.
+  #
+  # Checked on the **pristine** tree, before planting. After planting, a mutation
+  # that deliberately breaks the build produces no `=== RUN` either, and a check
+  # placed later cannot tell "the regex matches nothing" from "the mutation did
+  # its job" — which is the same conflation this guard exists to remove.
+  # The output is captured before being searched, deliberately. Piping into
+  # `grep -q` makes grep exit at the first match, `go test` take SIGPIPE, and the
+  # pipeline report failure under `set -o pipefail` — so every regex, including
+  # the ones that match nine tests, looked like it matched none.
+  local selected
+  selected="$(go test "$pkg" -run "$regex" -count=1 -timeout 120s -v 2>/dev/null || true)"
+  if ! printf '%s' "$selected" | grep -q '^=== RUN'; then
+    echo "  $id  NO MATCHING TEST — the -run regex selects nothing: $regex"
+    FAIL=$((FAIL + 1)); SURVIVORS+=("$id (no matching test: $regex)"); return
+  fi
+
+
   if ! python3 - "$file" <<PY
 import sys
 path = sys.argv[1]
@@ -117,7 +142,7 @@ assert "postgres" in s' \
 mutate B05 "one resolved credential is shared by every target" internal/fleet/run/execute.go \
   's = s.replace("""	credential, err := e.params.Resolver.CredentialFor(e.runCtx, target)""", """	credential, err := e.params.Resolver.CredentialFor(e.runCtx, e.params.Config.Targets[0])""", 1)
 assert "Config.Targets[0])" in s' \
-  ./internal/fleet/run 'TestMTE09SameReferenceResolvesIndependently'
+  ./internal/fleet/run 'TestMTE10SameReferenceResolvesIndependently'
 
 mutate B06 "resolved credentials are cached by reference" internal/fleet/run/run.go \
   's = s.replace("type Params struct {", "var credentialCache sync.Map\n\ntype Params struct {", 1)
@@ -156,7 +181,7 @@ s = s.replace("""	credential, err := e.params.Resolver.CredentialFor(e.runCtx, t
 	}
 	if err != nil {""", 1)
 assert "e.shared" in s' \
-  ./internal/fleet/run 'TestMTE09SameReferenceResolvesIndependently'
+  ./internal/fleet/run 'TestMTE10SameReferenceResolvesIndependently'
 
 mutate B13 "a credential resolution failure becomes an authentication failure" internal/fleet/run/execute.go \
   's = s.replace("""		e.results[index] = mustFailed(id, service,
@@ -222,7 +247,7 @@ func (e *executor) appendCompletion(r domain.TargetResult) {
 	e.nextFree++
 }""", 1)
 assert "appendCompletion" in s' \
-  ./internal/fleet/run 'TestMTE07AndD02CompletionOrderNeverReachesTheReport'
+  ./internal/fleet/run 'TestMTE08AndD02CompletionOrderNeverReachesTheReport'
 
 mutate B08 "target results are sorted by status" internal/fleet/run/execute.go \
   's = s.replace("""	report, err := domain.NewRunReport(domain.RunReportInput{""", """	sort.SliceStable(results, func(i, j int) bool {
@@ -245,7 +270,7 @@ mutate B09 "a diagnostic failure stops the run" internal/fleet/run/execute.go \
 				}
 			}""", 1)
 assert "HasProblems() {" in s' \
-  ./internal/fleet/run 'TestMTE13AndE14NoFailFast'
+  ./internal/fleet/run 'TestMTE02NoFailFastOnDiagnosticOrExecutionFailure'
 
 mutate B10 "an execution failure stops the run" internal/fleet/run/execute.go \
   's = s.replace("""			for index := range next {
@@ -257,7 +282,7 @@ mutate B10 "an execution failure stops the run" internal/fleet/run/execute.go \
 				}
 			}""", 1)
 assert "ExecutionStateExecutionFailed {" in s' \
-  ./internal/fleet/run 'TestMTE13AndE14NoFailFast'
+  ./internal/fleet/run 'TestMTE02NoFailFastOnDiagnosticOrExecutionFailure'
 
 mutate B26 "a resolution failure stops unrelated targets" internal/fleet/run/execute.go \
   's = s.replace("""		e.results[index] = mustFailed(id, service,
@@ -266,7 +291,7 @@ mutate B26 "a resolution failure stops unrelated targets" internal/fleet/run/exe
 			domain.ExecutionErrorCredentialResolution, safeMessage(err))
 		panic("stop the run")""", 1)
 assert "panic(\"stop the run\")" in s' \
-  ./internal/fleet/run 'TestMTE13AndE14NoFailFast'
+  ./internal/fleet/run 'TestMTE02NoFailFastOnDiagnosticOrExecutionFailure'
 
 # --- truthfulness ---------------------------------------------------------
 
@@ -332,7 +357,7 @@ assert "targets healthy" in s' \
 mutate B14 "a target deadline extends the global deadline" internal/fleet/run/execute.go \
   's = s.replace("""	targetCtx, cancel := context.WithTimeout(e.runCtx, target.Timeout)""", """	targetCtx, cancel := context.WithTimeout(context.Background(), target.Timeout)""", 1)
 assert "context.Background(), target.Timeout" in s' \
-  ./internal/fleet/run 'TestMTE15RunDeadlineDominatesTargetDeadline'
+  ./internal/fleet/run 'TestMTE17RunDeadlineDominatesTargetDeadline'
 
 mutate B15 "a target timeout cancels its siblings" internal/fleet/run/execute.go \
   's = s.replace("""	targetCtx, cancel := context.WithTimeout(e.runCtx, target.Timeout)
@@ -341,7 +366,7 @@ mutate B15 "a target timeout cancels its siblings" internal/fleet/run/execute.go
 	targetCtx, cancel := runCtx, runCancel
 	defer cancel()""", 1)
 assert "e.runCtx = runCtx" in s' \
-  ./internal/fleet/run 'TestMTE16TargetDeadlineDoesNotCancelSiblings'
+  ./internal/fleet/run 'TestMTE16ATargetTimeoutDoesNotCancelASibling'
 
 # --- concurrency ----------------------------------------------------------
 
@@ -351,7 +376,7 @@ mutate B16 "the concurrency ceiling is removed" internal/fleet/run/run.go \
 			ErrRun, p.Config.Run.Concurrency, config.MaxConcurrency)""", """	case false:
 		return nil""", 1)
 assert "	case false:" in s' \
-  ./internal/fleet/run 'TestMTE10AndE11AndE12Concurrency'
+  ./internal/fleet/run 'TestMTE11AndE13AndE14Concurrency'
 
 mutate B17 "concurrency zero is accepted" internal/fleet/run/run.go \
   's = s.replace("""	case p.Config.Run.Concurrency < 1:
@@ -359,12 +384,12 @@ mutate B17 "concurrency zero is accepted" internal/fleet/run/run.go \
 			ErrRun, p.Config.Run.Concurrency)""", """	case false:
 		return nil""", 1)
 assert "	case false:" in s' \
-  ./internal/fleet/run 'TestMTE10AndE11AndE12Concurrency'
+  ./internal/fleet/run 'TestMTE11AndE13AndE14Concurrency'
 
 mutate B18 "the worker count exceeds the configured concurrency" internal/fleet/run/execute.go \
   's = s.replace("	for range workers {", "	for range workers * 4 {", 1)
 assert "workers * 4" in s' \
-  ./internal/fleet/run 'TestMTE11MaxConcurrencyIsObserved'
+  ./internal/fleet/run 'TestMTE12MaxConcurrencyIsObserved'
 
 # --- configuration --------------------------------------------------------
 
@@ -392,7 +417,7 @@ mutate B27 "duplicate endpoints are deduplicated" internal/fleet/run/execute.go 
 		targets = unique
 	}""", 1)
 assert "unique = append" in s' \
-  ./internal/fleet/run 'TestMTE08DuplicateEndpointsAreDistinctExecutions'
+  ./internal/fleet/run 'TestMTE09DuplicateEndpointsAreDistinctExecutions'
 
 echo
 AFTER="$(find "${FILES[@]}" -type f -exec shasum -a 256 {} \; | sort)"

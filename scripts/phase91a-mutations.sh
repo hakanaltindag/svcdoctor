@@ -44,6 +44,31 @@ SURVIVORS=()
 mutate() {
   local id="$1" desc="$2" file="$3" script="$4" pkg="$5" regex="$6"
 
+  # A -run regex that selects **no test** makes `go test` exit 0, which this
+  # harness would read as a survivor. That is exactly how twenty mutations across
+  # phase91a and phase91b sat "surviving" from Phase 9.1C — which renamed 28 test
+  # functions — until the v0.4.0 release gate measured them: every one was caught
+  # by its package's full suite, and only the narrow regex had gone stale.
+  #
+  # An empty selection is a harness failure rather than a finding about the
+  # product; the two need opposite fixes and look identical without this.
+  #
+  # Checked on the **pristine** tree, before planting. After planting, a mutation
+  # that deliberately breaks the build produces no `=== RUN` either, and a check
+  # placed later cannot tell "the regex matches nothing" from "the mutation did
+  # its job" — which is the same conflation this guard exists to remove.
+  # The output is captured before being searched, deliberately. Piping into
+  # `grep -q` makes grep exit at the first match, `go test` take SIGPIPE, and the
+  # pipeline report failure under `set -o pipefail` — so every regex, including
+  # the ones that match nine tests, looked like it matched none.
+  local selected
+  selected="$(go test "$pkg" -run "$regex" -count=1 -timeout 120s -v 2>/dev/null || true)"
+  if ! printf '%s' "$selected" | grep -q '^=== RUN'; then
+    echo "  $id  NO MATCHING TEST — the -run regex selects nothing: $regex"
+    FAIL=$((FAIL + 1)); SURVIVORS+=("$id (no matching test: $regex)"); return
+  fi
+
+
   if ! python3 - "$file" <<PY
 import sys
 path = sys.argv[1]
@@ -92,7 +117,7 @@ mutate A02 "duplicate YAML keys accepted" internal/fleet/config/document.go \
 		}
 		return classifyDecodeError(err)""", 1)
 assert "already defined\") {" in s' \
-  ./internal/fleet/config 'TestMTC09'
+  ./internal/fleet/config 'TestMTC14DuplicateYAMLKeyIsRejectedAtEveryLevel'
 
 # A03 must remove BOTH refusals. The explicit branch is redundant with the tag
 # allow-list — established by this mutation surviving when it removed only the
@@ -102,17 +127,17 @@ mutate A03 "YAML merge key accepted" internal/fleet/config/document.go \
 s = s.replace("""	"!!seq":  true,""", """	"!!seq":   true,
 	"!!merge": true,""", 1)
 assert "if false {" in s and "!!merge\": true" in s' \
-  ./internal/fleet/config 'TestMTC11'
+  ./internal/fleet/config 'TestMTC18MergeKeyIsRejected'
 
 mutate A04 "plaintext scalar password accepted" internal/fleet/config/credential.go \
   's = s.replace("	if value.Kind != yaml.MappingNode {\n		return newError(CategoryCredentialReference, fmt.Sprintf(\n			\"must be a mapping naming exactly one source", "	if false {\n		return newError(CategoryCredentialReference, fmt.Sprintf(\n			\"must be a mapping naming exactly one source", 1)
 assert "	if false {" in s' \
-  ./internal/fleet/config 'TestMTC05AndC18'
+  ./internal/fleet/config 'TestMTC06AndS08APlaintextPasswordIsRefusedStructurally'
 
 mutate A05 "env and file together accepted" internal/fleet/config/credential.go \
   's = s.replace("	case fields.Env != \"\" && fields.File != \"\":", "	case false:", 1)
 assert "	case false:" in s' \
-  ./internal/fleet/config 'TestMTC19'
+  ./internal/fleet/config 'TestMTC07BothSourcesAreRefused'
 
 mutate A06 "empty credential reference accepted" internal/fleet/config/credential.go \
   's = s.replace("""	if r.present && r.kind == SourceNone {""", """	if false {""", 1)
@@ -124,7 +149,7 @@ s = s.replace("""	default:
 		return nil
 	}""", 1)
 assert "	if false {" in s' \
-  ./internal/fleet/config 'TestMTC20'
+  ./internal/fleet/config 'TestMTC08NeitherSourceIsRefused'
 
 mutate A07 "duplicate target IDs accepted" internal/fleet/config/load.go \
   's = s.replace("		if first, duplicate := seen[block.ID]; duplicate {", "		if first, duplicate := seen[block.ID]; false && duplicate {", 1)
@@ -134,18 +159,18 @@ assert "false && duplicate" in s' \
 mutate A08 "target count limit removed" internal/fleet/config/load.go \
   's = s.replace("	if len(blocks) > MaxTargets {", "	if false {", 1)
 assert "	if false {" in s' \
-  ./internal/fleet/config 'TestMTC15AndC16'
+  ./internal/fleet/config 'TestMTC23AndC30TargetCountBounds'
 
 mutate A09 "config byte limit removed" internal/fleet/config/document.go \
   's = s.replace("	if info.Size() > MaxBytes {", "	if false {", 1)
 s = s.replace("	if len(data) > MaxBytes {", "	if false {", 1)
 assert s.count("	if false {") >= 2' \
-  ./internal/fleet/config 'TestMTC14'
+  ./internal/fleet/config 'TestMTC22ConfigByteBound'
 
 mutate A10 "unsupported config version accepted" internal/fleet/config/document.go \
   's = s.replace("	case *probe.Version != Version:", "	case false:", 1)
 assert "	case false:" in s' \
-  ./internal/fleet/config 'TestMTC10'
+  ./internal/fleet/config 'TestMTC15AndC16ConfigVersion'
 
 mutate A11 "arbitrary environment interpolation added" internal/fleet/config/load.go \
   's = s.replace("import (\n\t\"errors\"\n\t\"fmt\"\n\t\"math\"\n\t\"time\"\n)", "import (\n\t\"errors\"\n\t\"fmt\"\n\t\"math\"\n\t\"os\"\n\t\"time\"\n)", 1)
