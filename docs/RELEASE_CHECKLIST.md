@@ -27,7 +27,13 @@ fetched it. The tag is immutable whether or not we agree to treat it that way.
       `go test ./...`, `go test -count=1 -race ./...`, `CGO_ENABLED=0 go build ./...`,
       `go mod tidy` (no change), `make check`.
 - [ ] Integration suites, **sequentially** — they contend for ports and containers:
-      `make integration-postgres`, `make integration-kafka`, `make integration-redpanda`.
+      `make integration-postgres`, `make integration-kafka`, `make integration-redpanda`,
+      `make integration-redis`, `make integration-valkey`, `make integration-rabbitmq`,
+      `make integration-lavinmq`, `make integration-multitarget`.
+
+      Eight, not three. Phase 9.2B corrected this list: Redis, Valkey, RabbitMQ, LavinMQ and
+      the multi-target suite all shipped after it was written, and a release gate that runs
+      three of eight suites is a gate with five blind spots.
 - [ ] **The same suites on a native Linux amd64 runner**, via
       `gh workflow run validate-integration.yml --ref <branch>` (or a
       `validate-integration/**` branch push), and all three green.
@@ -39,8 +45,56 @@ fetched it. The tag is immutable whether or not we agree to treat it that way.
       masking rather than the condition. **`v0.3.1` was lost exactly here:** the suites were
       green locally, had never been run on Linux for that tree, and failed on the release
       runner after the tag was already immutable.
-- [ ] Security invariants unchanged: SchemaVersion 1, `Reveal` 2, `SecretFor` 2,
-      Kafka `wire.Authenticate` 1, advertised `SecretFor`/`Reveal`/SASL bytes 0.
+- [ ] Frozen counts unchanged. Every one is pinned by a test, so this is a check that the
+      tests still say what the contract says:
+
+      | | |
+      |---|---|
+      | `domain.SchemaVersion` | 1 |
+      | `domain.RunSchemaVersion` | 1 |
+      | Finding codes | 60 (RabbitMQ 11) |
+      | Failure classes | 42 |
+      | `security.Reveal` production call sites | 4 — one per service, each in its wire package |
+      | `SecretFor` production call sites | 4 |
+      | External modules | 2 |
+
+      Phase 9.2B corrected `Reveal` and `SecretFor` here: both read 2, and both have been 4
+      since RabbitMQ shipped. A checklist item with a stale number is a check that passes
+      while measuring nothing.
+
+- [ ] Kafka `wire.Authenticate` 1; advertised `SecretFor`/`Reveal`/SASL bytes 0.
+- [ ] Secret-leakage suites green: `go test ./test/security/...`, including the aggregate
+      shareable corpus (`TestUX12…`) and the credential-boundary guards.
+- [ ] Documentation and example guards green: every YAML example parses through the real
+      loader, all seven help goldens match, the documented exit codes match the implemented
+      ones, and no documented shell example discards the exit code
+      (`go test ./internal/cli -run TestUX`).
+- [ ] Mutation closure re-run for anything this release touched:
+      `scripts/phase91a-mutations.sh`, `phase91b`, `phase91c`, `phase92b`. **0 survivors.**
+- [ ] Vulnerability scan: `govulncheck ./...`. If the tool is unavailable, say so in the
+      release notes rather than skipping the line silently.
+- [ ] Cross-compilation for the five artifact platforms, `CGO_ENABLED=0`:
+      `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`.
+- [ ] **Private vulnerability reporting is enabled on the repository.** `SECURITY.md` names it
+      as the project's only reporting channel, and the advisory form does not exist while the
+      setting is off — a researcher following the policy would find a dead link.
+
+      ```sh
+      gh api repos/hakanaltindag/svcdoctor/private-vulnerability-reporting   # want {"enabled":true}
+      ```
+
+      **Measured `{"enabled": false}` during the Phase 9.2B closure pass.** It is a repository
+      setting rather than a tree change, so no commit can fix it; it must be turned on by hand
+      before the first release that ships `SECURITY.md`.
+- [ ] **Pre-existing mutation harness debt reconciled: 20 survivors.** Phase 9.1A has 8
+      (`A02` `A03` `A04` `A05` `A06` `A08` `A09` `A10`) and Phase 9.1B has 12 (`B05` `B07` `B09`
+      `B10` `B14` `B15` `B16` `B17` `B18` `B26` `B27` `B28`). All verified byte-identical at
+      `27d35b1`, so none was introduced by Phase 9.2B — and none was resolved by it either.
+
+      Each is resolved in writing one of two ways: the guard is strengthened, or the mutation is
+      retired with the reason it no longer describes a reachable defect. Several look like the
+      second — `A04` plants a plaintext scalar password against a decoder whose *type* refuses
+      one — but that has to be read, not assumed. `docs/BACKLOG.md` carries the full list.
 - [ ] Blocker inventory: every open item classified *release blocker* / *documented
       limitation* / *operational debt* / *future feature*. A blocker is not relabelled to ship.
 - [ ] Release notes written, with the baseline set to **the last actual GitHub Release** — not

@@ -1,0 +1,19 @@
+# The smallest configuration svcdoctor will run.
+#
+#   svcdoctor run --config examples/minimal.yaml
+#
+# Three fields describe a target: an identifier you choose, the service, and the
+# endpoint. Everything else has a default — port 5432 for PostgreSQL, a 30s
+# budget, TLS required and the peer's identity verified.
+#
+# No credential is configured, and that is a valid run: svcdoctor reports that
+# the endpoint requires authentication and sends nothing.
+
+version: 1
+
+targets:
+  - id: orders-db
+    type: postgres
+    host: orders-db.internal.example.com
+    credentials:
+      username: svcdoctor

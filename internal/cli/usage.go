@@ -322,7 +322,17 @@ Credential:
 
 Output:
   --output string           "text" or "json" (default "text")
-  --shareable               produce the redacted report intended for sharing
+  --shareable               produce the shareable redacted report instead of
+                            the local one, using the same diagnosis
+
+Exit codes:
+  0   a report was produced and no error-level problem was proven
+  1   a report was produced and an error-level problem was proven
+  2   svcdoctor was invoked with something it cannot act on
+  3   svcdoctor failed and produced no usable report
+  4   a report was produced but svcdoctor's own execution did not finish
+
+Exit code 0 does not mean this endpoint answered PING. Read the report.
 `)
 }
 
@@ -414,6 +424,8 @@ Exit codes:
   2  the invocation could not be used
   3  svcdoctor failed internally
   4  the run was incomplete, which qualifies every conclusion
+
+Exit code 0 does not mean the virtual host was opened. Read the report.
 `)
 }
 
@@ -440,5 +452,16 @@ password is never written into the file itself.
 
 Targets are independent. One target's failure never stops another, and the
 report lists them in the order the file declares.
+
+Exit codes:
+  0   every target was measured and no error-level problem was proven
+  1   every target was measured and at least one error-level problem was proven
+  2   the configuration could not be used; no target was dialled
+  3   svcdoctor failed and produced no usable aggregate
+  4   an aggregate exists but the run did not finish: a target was cancelled,
+      never started, could not be executed locally, or ran out of budget
+
+Exit code 0 does not mean every service works. It means nothing error-level was
+proven about any of them. Read the report.
 `)
 }

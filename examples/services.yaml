@@ -1,0 +1,82 @@
+# The canonical svcdoctor configuration: one target per supported service.
+#
+#   svcdoctor run --config examples/services.yaml
+#
+# It is meant to be read and copied from, not to be exhaustive. Every field it
+# uses is real; every field it omits has a default that docs/CONFIGURATION.md
+# records.
+#
+# Nothing here is a secret. A password is never written into this file — it is
+# named, by environment variable or by file path, and svcdoctor reads it at the
+# moment the target runs.
+
+version: 1
+
+run:
+  # How many targets run at once. 1-16, default 4. It bounds targets, not
+  # sockets: one target may open a connection per resolved address.
+  concurrency: 4
+
+  # Bound on the whole run. Must not be below any target's own timeout.
+  timeout: 2m
+
+targets:
+  # PostgreSQL. `database` is optional; omitting it lets the server default the
+  # database to the role name.
+  - id: orders-db
+    type: postgres
+    host: orders-db.internal.example.com
+    port: 5432
+    tls:
+      mode: require
+    credentials:
+      username: svcdoctor
+      password:
+        env: ORDERS_DB_PASSWORD
+    config:
+      database: orders
+
+  # Kafka. `sasl_mechanism` has no default and svcdoctor never chooses one: it
+  # decides the framing that carries your password. PLAIN and SCRAM-SHA-256 are
+  # the two svcdoctor can perform.
+  - id: events
+    type: kafka
+    host: kafka-bootstrap.internal.example.com
+    port: 9093
+    tls:
+      mode: require
+    credentials:
+      username: svcdoctor
+      password:
+        env: KAFKA_PASSWORD
+    config:
+      sasl_mechanism: SCRAM-SHA-256
+
+  # Redis or Valkey. One target diagnoses either; which one answered is read
+  # from the endpoint's own reply. Redis serves TLS on a separate port rather
+  # than negotiating it in band, so name the TLS port here.
+  - id: cache
+    type: redis
+    host: cache.internal.example.com
+    port: 6380
+    tls:
+      mode: require
+    credentials:
+      username: svcdoctor
+      password:
+        env: CACHE_PASSWORD
+
+  # RabbitMQ or LavinMQ. `vhost` defaults to "/" and the value used is always
+  # shown in the report.
+  - id: task-queue
+    type: rabbitmq
+    host: rabbit.internal.example.com
+    port: 5671
+    tls:
+      mode: require
+    credentials:
+      username: svcdoctor
+      password:
+        env: RABBITMQ_PASSWORD
+    config:
+      vhost: /production

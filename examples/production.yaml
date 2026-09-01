@@ -1,0 +1,103 @@
+# A production-shaped svcdoctor configuration.
+#
+#   svcdoctor run --config /etc/svcdoctor/services.yaml
+#
+# The difference from examples/services.yaml is not more fields. It is that
+# every choice here is the one you would defend in a review:
+#
+#   * TLS is required and the peer's identity is verified. `insecure` is never
+#     set. svcdoctor withholds a credential over an unverified channel rather
+#     than sending it, so an `insecure` run is also a run that authenticates
+#     nothing.
+#   * The trust source is named explicitly where the issuer is private.
+#     `ca_file` REPLACES the system trust store for that target, so only its
+#     issuers are accepted — which is what makes "only this CA is acceptable
+#     here" expressible.
+#   * Credentials arrive by reference. `env` suits CI, where the platform
+#     injects a masked variable. `file` suits Kubernetes and systemd, where a
+#     secret is mounted at a path.
+#   * Budgets are explicit, so a slow endpoint is reported as slow rather than
+#     as whatever the default happened to be.
+
+version: 1
+
+run:
+  concurrency: 4
+  timeout: 3m
+
+targets:
+  # A private issuer, an explicit budget, and a CI-injected credential.
+  - id: orders-db
+    type: postgres
+    host: orders-db.internal.example.com
+    port: 5432
+    timeout: 45s
+    step_timeout: 15s
+    tls:
+      mode: require
+      ca_file: /etc/svcdoctor/pki/internal-ca.pem
+    credentials:
+      username: svcdoctor
+      password:
+        env: ORDERS_DB_PASSWORD
+    config:
+      database: orders
+
+  # A Kubernetes-mounted secret, and a certificate whose name is not the name
+  # the address resolves from. `server_name` sets both the identity verified
+  # and the name sent in SNI; svcdoctor will not verify one and announce
+  # another.
+  - id: events
+    type: kafka
+    host: kafka-bootstrap.internal.example.com
+    port: 9093
+    timeout: 60s
+    step_timeout: 20s
+    tls:
+      mode: require
+      ca_file: /etc/svcdoctor/pki/internal-ca.pem
+      server_name: kafka.internal.example.com
+    credentials:
+      username: svcdoctor
+      password:
+        file: /run/secrets/kafka-password
+    config:
+      sasl_mechanism: SCRAM-SHA-256
+
+  # An address literal. svcdoctor connects to it directly and resolves nothing,
+  # so the report records no name resolution for this target at all. The
+  # certificate is checked against the name below rather than against the
+  # address.
+  - id: cache
+    type: redis
+    host: 10.20.30.40
+    port: 6380
+    timeout: 30s
+    step_timeout: 10s
+    tls:
+      mode: require
+      ca_file: /etc/svcdoctor/pki/internal-ca.pem
+      server_name: cache.internal.example.com
+    credentials:
+      username: svcdoctor
+      password:
+        file: /run/secrets/cache-password
+
+  # A non-default virtual host. RabbitMQ delays several refusals by exactly
+  # three seconds on purpose, so step_timeout stays well above that: a shorter
+  # budget reports the delay as a local timeout instead of the refusal it is.
+  - id: task-queue
+    type: rabbitmq
+    host: rabbit.internal.example.com
+    port: 5671
+    timeout: 45s
+    step_timeout: 15s
+    tls:
+      mode: require
+      ca_file: /etc/svcdoctor/pki/internal-ca.pem
+    credentials:
+      username: svcdoctor
+      password:
+        file: /run/secrets/rabbitmq-password
+    config:
+      vhost: /production
