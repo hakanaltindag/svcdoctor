@@ -565,14 +565,26 @@ func containsAny(positions []string, value string) bool {
 // can be encoded as one. Keys are included because they are cheap to check and a
 // future map keyed by something identifying would otherwise slip past.
 func stringPositions(out domain.Report) ([]string, error) {
-	encoded, err := json.Marshal(out)
+	return stringPositionsOf(out, "report")
+}
+
+// stringPositionsOf is stringPositions for any document in the canonical
+// schemas.
+//
+// Phase 9.2B added the aggregate residual check, which needs the same scan over
+// a domain.RunReport. The walk is identical and the decision that produced it —
+// decode first, inspect string leaves and object keys, never the raw bytes — is
+// the one recorded above, so there is one implementation rather than two that
+// could drift apart on the case that took a real cluster to find.
+func stringPositionsOf(document any, what string) ([]string, error) {
+	encoded, err := json.Marshal(document)
 	if err != nil {
-		return nil, fmt.Errorf("%w: encoding the redacted report: %w", ErrRedaction, err)
+		return nil, fmt.Errorf("%w: encoding the redacted %s: %w", ErrRedaction, what, err)
 	}
 
 	var decoded any
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		return nil, fmt.Errorf("%w: re-reading the redacted report: %w", ErrRedaction, err)
+		return nil, fmt.Errorf("%w: re-reading the redacted %s: %w", ErrRedaction, what, err)
 	}
 
 	var positions []string
