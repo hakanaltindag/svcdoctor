@@ -86,16 +86,16 @@ fetched it. The tag is immutable whether or not we agree to treat it that way.
       **Measured `{"enabled": false}` during the Phase 9.2B closure pass.** It is a repository
       setting rather than a tree change, so no commit can fix it; it must be turned on by hand
       before the first release that ships `SECURITY.md`.
-- [ ] **Pre-existing mutation harness debt reconciled: 20 survivors.** Phase 9.1A has 8
-      (`A02` `A03` `A04` `A05` `A06` `A08` `A09` `A10`) and Phase 9.1B has 12 (`B05` `B07` `B09`
-      `B10` `B14` `B15` `B16` `B17` `B18` `B26` `B27` `B28`). All verified byte-identical at
-      `27d35b1`, so none was introduced by Phase 9.2B — and none was resolved by it either.
-
-      Each is resolved in writing one of two ways: the guard is strengthened, or the mutation is
-      retired with the reason it no longer describes a reachable defect. Several look like the
-      second — `A04` plants a plaintext scalar password against a decoder whose *type* refuses
-      one — but that has to be read, not assumed. `docs/BACKLOG.md` carries the full list.
-- [ ] Blocker inventory: every open item classified *release blocker* / *documented
+- [x] **Pre-existing mutation harness debt reconciled.** The v0.4.0 gate found all 20 survivors
+      to be stale `-run` selectors left by Phase 9.1C's renumbering, not product gaps: every
+      mutation was caught by its package's full suite. All were repaired, none retired, and all
+      four harnesses now fail loudly on a regex that selects no test.
+      **117 planted, 117 caught, 0 survivors.**
+- [ ] **Release archives and checksums exist for the tag.** ADR 0076 §2.3 requires five platform
+      archives plus `SHA256SUMS`. `release-oci.yml` builds none of them — it attaches only
+      `sbom.cdx.json`. Either the archive job exists, or ADR 0076 §2.3 has been amended. Tracked
+      as RB-05.
+- [ ] Blocker inventory:- [ ] Blocker inventory: every open item classified *release blocker* / *documented
       limitation* / *operational debt* / *future feature*. A blocker is not relabelled to ship.
 - [ ] Release notes written, with the baseline set to **the last actual GitHub Release** — not
       the last Git tag. Those differ.

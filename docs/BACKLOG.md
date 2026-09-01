@@ -79,61 +79,66 @@ repository-state section above, in a section it did not reach. The Phase 7 *sect
 this file is a separate, still-unstarted item that was renumbered from Phase 6; it is not the
 Phase 7 row above.
 
-## Pre-existing mutation harness debt
+## Mutation harness debt — RESOLVED at the v0.4.0 gate
 
-Found while re-running every mutation suite during the Phase 9.2B closure pass, and **not
-introduced by it**.
+Phase 9.2B recorded 20 survivors across `phase91a` (8) and `phase91b` (12). The v0.4.0 Release
+Candidate Gate investigated each one.
+
+**Every one was a `SCRIPT_DEFECT`, and no product behaviour was ever vulnerable.** Phase 9.1C
+renumbered 28 test functions; the two harnesses still named the pre-renumbering tests, and
+`go test -run <regex>` with a regex matching nothing exits 0 — which the harness read as a
+survivor. Each mutation was planted and run against its package's **full** suite: all twenty were
+caught, by a guarding test that had existed and passed the whole time.
+
+**Nothing was retired.** No mutation met the retirement bar; every one still describes a live
+frozen requirement whose guard still exists. All twenty were **repaired** by pointing them at the
+test that actually guards them.
+
+All four harnesses now fail loudly when a `-run` regex selects no test, so this class cannot
+recur silently. That guard immediately found a twenty-first stale selector (`B07`).
 
 | Suite | Planted | Caught | Survivors |
 |---|---|---|---|
-| Phase 9.1A | 20 | 12 | **8** |
-| Phase 9.1B | 31 | 19 | **12** |
-| Phase 9.1C | 45 | 45 | 0 |
-| Phase 9.2B | 21 | 21 | 0 |
+| Phase 9.1A | 20 | **20** | **0** |
+| Phase 9.1B | 31 | **31** | **0** |
+| Phase 9.1C | 45 | **45** | **0** |
+| Phase 9.2B | 21 | **21** | **0** |
 
-**Phase 9.1A — 8 survivors:**
-`A02` duplicate YAML keys accepted · `A03` YAML merge key accepted · `A04` plaintext scalar
-password accepted · `A05` env and file together accepted · `A06` empty credential reference
-accepted · `A08` target count limit removed · `A09` config byte limit removed · `A10`
-unsupported config version accepted
+**117 planted, 117 caught, 0 unexplained survivors.** Full analysis, per mutation, in
+`docs/validation/V040_RELEASE_CANDIDATE_GATE.md` §2.
 
-**Phase 9.1B — 12 survivors:**
-`B05` one resolved credential is shared by every target · `B07` completion order becomes report
-order · `B09` a diagnostic failure stops the run · `B10` an execution failure stops the run ·
-`B14` a target deadline extends the global deadline · `B15` a target timeout cancels its
-siblings · `B16` the concurrency ceiling is removed · `B17` concurrency zero is accepted · `B18`
-the worker count exceeds the configured concurrency · `B26` a resolution failure stops unrelated
-targets · `B27` duplicate endpoints are deduplicated · `B28` the same reference reuses one
-credential object
+## Fixed at the v0.4.0 gate — a guard that passed for the wrong reason
 
-**Verified byte-identical at the Phase 9.2A baseline (`27d35b1`).** Both scripts were run in a
-scratch worktree checked out at that commit and produced exactly these twenty identifiers, in
-both suites, with the same counts. **Phase 9.2B introduced none of them and resolved none of
-them.**
+`TestRAB18ManagementPortTargetedAsAMQP` banned the substrings "management" and "http" anywhere in
+the report, to enforce ADR 0067 §3's rule that the port is never semantic. The frozen
+recommendation in `internal/diagnosis/rabbitmq/protocol.go` legitimately contains "management
+HTTP API" — it lists candidates for the operator to rule out and decides nothing from the port.
 
-### Why the number moved from 2 to 20
+The test passed until now only because `ConnectionStart` fires on `StateFail` and skips a
+local-timeout `UNKNOWN`: when the HTTP listener answered slowly there was **no finding at all**,
+so the ban matched nothing. **A guard that passes only when the product learns less is not a
+guard.**
 
-Phase 9.2B's first report named only `A10` and `B27`. That was a reading error, not a
-measurement: the run was summarised with `tail -1`, which shows the **last** survivor line and
-hides every one above it. The closure pass read the full output.
+The ban now covers the surfaces that state facts — summary, detail, attributes — and the
+recommendation is pinned by exact match, which is stronger there. Production code was untouched
+and was verified byte-identical to `HEAD` before anything changed.
 
-Nothing about the tree changed between the two readings. The debt was always this size.
+## Open v0.4.0 release blockers
 
-### Not fixed here, deliberately
+Both are release-mechanism gaps rather than product defects, and neither can be closed by
+changing the source.
 
-A survivor means one of two things, and they need opposite fixes: either the guard is weak and
-the defect is real, or the mutation no longer describes a behaviour the product has. Several of
-these look like the second — `A04` (plaintext scalar password accepted) is guarded by a decoder
-*type* that Phase 9.1A's mutation may no longer be able to defeat, and `A03`, `A05` and `A06`
-are in the same family. But "looks like" is not a finding, and deciding requires reading each
-mutation against the code it targets.
+**RB-02 — GitHub private vulnerability reporting is disabled.** `SECURITY.md` names it as the
+project's only channel, so while it is off the policy links to a form that does not exist. It is
+a repository setting; no commit can fix it. Required action and re-verification in
+`V040_RELEASE_CANDIDATE_GATE.md` §5.
 
-That is a phase of work, not a footnote in an unrelated closure pass, and doing it here would
-mean twenty judgements made by whoever happened to notice them.
-
-**Must be reconciled before the v0.4.0 Release Candidate Gate can PASS.** Each survivor is
-resolved one of two ways, in writing: the guard is strengthened, or the mutation is retired with
-the reason it no longer describes a reachable defect.
+**RB-05 — no automation produces release archives or checksums.** ADR 0076 §2.3 lists five
+platform archives and `SHA256SUMS` as required. `.github/workflows/release-oci.yml` has no
+`GOOS`/`GOARCH` matrix, no archiving step and no checksum step; its `gh release create` attaches
+only `sbom.cdx.json`. All five archives were built and verified **locally** at the gate, so the
+gap is delivery rather than feasibility. Closing it needs the archive job, a documented manual
+post-tag step, or an amendment to ADR 0076 §2.3.
 
 ## Release-gate precondition outside the tree
 
