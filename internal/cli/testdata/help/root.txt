@@ -1,0 +1,14 @@
+svcdoctor diagnoses service connectivity from where you run it.
+
+Usage:
+  svcdoctor <command> [arguments]
+
+Commands:
+  diagnose    measure one service and report what was observed
+  run         measure every target in a configuration file
+
+Flags:
+  --help      show this help
+  --version   show the svcdoctor version
+
+Run "svcdoctor diagnose --help" for the services that can be diagnosed.

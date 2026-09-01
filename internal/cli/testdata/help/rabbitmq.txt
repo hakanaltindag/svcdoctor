@@ -1,0 +1,82 @@
+svcdoctor diagnose rabbitmq - diagnose one RabbitMQ endpoint
+
+Measures one AMQP 0-9-1 connection to one endpoint, from this vantage: name
+resolution, the TCP connection, the TLS handshake when one is planned, the
+protocol header exchange, SASL PLAIN authentication, and opening the requested
+virtual host.
+
+What this proves, and what it does not:
+  * RabbitMQ BASIC proves only the AMQP 0-9-1 connection journey through
+    Connection.Open-Ok for the requested endpoint and virtual host.
+  * It does NOT prove queue existence, exchange existence, publishing,
+    consuming, configure/write/read permissions, cluster health, quorum queue
+    health, node health, management API health, message delivery, or workload
+    correctness.
+  * It names no queue and no exchange, opens no channel, and calls no HTTP
+    management API. No customer topology is read and none can appear in the
+    report.
+  * Reaching Connection.Open-Ok means this endpoint answered on this connection
+    at this moment. Behind a load balancer svcdoctor cannot say which node
+    answered: every node in a cluster reports the same cluster name.
+  * The credential is sent at most once, in one Connection.Start-Ok frame, and
+    only over a channel whose peer identity was verified. A plaintext connection
+    and a connection with --tls-insecure are both refused, and neither a loopback
+    nor a private address changes that. There is no retry and no reconnect.
+  * svcdoctor implements SASL PLAIN only. It never selects ANONYMOUS, never
+    synthesizes a username, and never falls back to another mechanism.
+
+Usage:
+  svcdoctor diagnose rabbitmq --host <host> [flags]
+
+Required:
+  --host string             the endpoint to diagnose: a hostname or an IPv4 or
+                            IPv6 address literal. An address is connected to
+                            directly and nothing is resolved, so the report
+                            records no name resolution for one. Give IPv6
+                            unbracketed and separately from the port:
+                            --host ::1 --port 5672
+
+Connection:
+  --port uint               the port to connect to (default 5672)
+  --vhost string            the virtual host to open (default "/"). The value
+                            used is always shown in the report, and a refusal
+                            says when the default was used
+
+Authentication:
+  --username string         the identity to authenticate as. Never synthesized:
+                            svcdoctor does not supply "guest" on your behalf
+  --password-file string    read the credential from a file
+  --password-stdin          read the credential from stdin
+
+  The two are mutually exclusive. There is no --password flag: a credential
+  never appears in argv.
+
+Execution budget:
+  --timeout duration        bound on the whole run (default 30s)
+  --step-timeout duration   bound on each individual exchange (default 10s).
+                            Must exceed 3s: RabbitMQ delays several refusals by
+                            exactly that long on purpose, and a shorter budget
+                            reports the delay as a local timeout instead of the
+                            refusal it is
+
+Transport encryption:
+  --tls string              "require" or "disable" (default "require")
+  --tls-ca-file string      PEM trust source replacing the system roots
+  --tls-server-name string  the identity to verify instead of --host
+  --tls-insecure            do not verify the endpoint's identity. Explicit,
+                            per-run, recorded in the report, and never an
+                            automatic fallback. A credential is NOT sent over an
+                            unverified channel
+
+Output:
+  --output string           "text" or "json" (default "text")
+  --shareable               produce the shareable redacted report
+
+Exit codes:
+  0  no ERROR or CRITICAL target-side problem was proven
+  1  a target-side problem was found
+  2  the invocation could not be used
+  3  svcdoctor failed internally
+  4  the run was incomplete, which qualifies every conclusion
+
+Exit code 0 does not mean the virtual host was opened. Read the report.

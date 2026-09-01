@@ -1,0 +1,12 @@
+Measure a service and report what was observed.
+
+Usage:
+  svcdoctor diagnose <service> [flags]
+
+Services:
+  kafka       diagnose a Kafka bootstrap endpoint
+  postgres    diagnose a PostgreSQL endpoint
+  redis       diagnose a Redis or Valkey endpoint
+  rabbitmq    diagnose a RabbitMQ or other AMQP 0-9-1 endpoint
+
+Run "svcdoctor diagnose <service> --help" for its flags.

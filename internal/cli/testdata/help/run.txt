@@ -1,0 +1,33 @@
+Measure every target in a configuration file.
+
+Usage:
+  svcdoctor run --config <file> [flags]
+
+Flags:
+  --config FILE      the configuration to run; required, and a regular file
+  --timeout D        bound on the whole run; overrides the file's run.timeout
+  --concurrency N    how many targets run at once, 1-16; overrides run.concurrency
+  --output text|json which form to write to stdout
+  --shareable        produce the shareable redacted report
+
+Every target is described in the configuration. There are deliberately no
+target flags: a flag that edited one target would mean the file no longer
+describes the run.
+
+Credentials are named by the configuration and never by a flag. A target
+references one with "password: {env: NAME}" or "password: {file: PATH}", and a
+password is never written into the file itself.
+
+Targets are independent. One target's failure never stops another, and the
+report lists them in the order the file declares.
+
+Exit codes:
+  0   every target was measured and no error-level problem was proven
+  1   every target was measured and at least one error-level problem was proven
+  2   the configuration could not be used; no target was dialled
+  3   svcdoctor failed and produced no usable aggregate
+  4   an aggregate exists but the run did not finish: a target was cancelled,
+      never started, could not be executed locally, or ran out of budget
+
+Exit code 0 does not mean every service works. It means nothing error-level was
+proven about any of them. Read the report.

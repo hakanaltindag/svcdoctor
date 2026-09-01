@@ -514,9 +514,13 @@ mutate CEX2 "EXECUTION_FAILED maps to exit 3" internal/cli/exit.go \
 assert "ExecutionFailed() > 0" in s' \
   ./internal/cli 'TestRunExitCodeMatrix'
 
+# The anchor moved in Phase 9.2B, which added services.ErrPreflight to the same
+# branch. The mutation is unchanged in intent — disable the credential-resolution
+# classification and require the exit-2 guards to notice — and is expressed as a
+# `&& false` so the `secret` import stays used and the file still compiles.
 mutate CEX3 "a preflight credential failure is reported as a svcdoctor failure" internal/cli/exit.go \
-  's = s.replace("		errors.Is(err, config.ErrConfig), errors.Is(err, secret.ErrResolution):", "		errors.Is(err, config.ErrConfig):\n		_ = secret.ErrResolution", 1)
-assert "_ = secret.ErrResolution" in s' \
+  's = s.replace("errors.Is(err, secret.ErrResolution),", "errors.Is(err, secret.ErrResolution) \u0026\u0026 false,", 1)
+assert "secret.ErrResolution) \u0026\u0026 false," in s' \
   ./internal/cli 'TestMTS11NoCredentialReferenceReachesTheReport|TestMTR03BlackBoxExitTwo'
 
 mutate CEX4 "run gains a --password-file flag" internal/cli/run.go \
