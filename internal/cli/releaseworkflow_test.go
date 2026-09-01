@@ -1400,3 +1400,308 @@ func TestTheReleaseWorkflowIsSelfSufficientForATag(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Release archives — ADR 0076 §2.3, RB-05
+// ---------------------------------------------------------------------------
+//
+// ADR 0076 §2.3 makes five platform archives and `SHA256SUMS` required
+// artifacts of every release. The v0.4.0 candidate gate found that nothing
+// produced them: no `GOOS`/`GOARCH` matrix, no archiving step, no checksum step,
+// and a `gh release create` attaching exactly one asset. That is RB-05.
+//
+// The mechanism that closes it is `scripts/build-release.sh`, invoked by the
+// workflow. These guards exist for the half a local test cannot reach: that the
+// workflow still calls the shared recipe, still uploads what it produced, and
+// still takes its version from the tag rather than from anywhere else.
+//
+// The drift they prevent is specific. Closing RB-05 with five `go build` lines
+// written into YAML would produce artifacts too — and a second recipe that no
+// local gate exercises, that diverges from the first one on its next edit, and
+// whose divergence is discovered on a tag. `test/release` qualifies the script;
+// these say the release runs *that* script.
+
+const releaseBuilder = "scripts/build-release.sh"
+
+// archivesJob is the job that builds the release archives, extracted the same
+// way releaseJob extracts the Release job.
+func archivesJob(t *testing.T) string {
+	t.Helper()
+	doc := withoutComments(readRepoFile(t, releaseWorkflow))
+	_, job, found := strings.Cut(doc, "\n  archives:")
+	if !found {
+		t.Fatal("release-oci.yml defines no `archives` job, so a tag cut from this tree " +
+			"would publish no binary archives and no SHA256SUMS (ADR 0076 §2.3, RB-05)")
+	}
+	if end := regexp.MustCompile(`(?m)^  [a-z][a-z0-9-]*:`).FindStringIndex(job); end != nil {
+		job = job[:end[0]]
+	}
+	return job
+}
+
+// TestTheReleaseArchivesAreBuiltByTheSharedRecipe is the RB-05 drift guard.
+//
+// One artifact recipe, two callers: a local release qualification and this
+// workflow. A second implementation in YAML would be the same defect RB-05
+// names, one layer up.
+func TestTheReleaseArchivesAreBuiltByTheSharedRecipe(t *testing.T) {
+	job := archivesJob(t)
+
+	if !strings.Contains(job, "./"+releaseBuilder) {
+		t.Fatalf("the archives job does not invoke %s.\n\n"+
+			"The release must build its artifacts with the same script a local "+
+			"qualification runs, or the two recipes drift and only one of them is "+
+			"ever tested.", releaseBuilder)
+	}
+	if readRepoFile(t, releaseBuilder) == "" {
+		t.Fatalf("%s is empty", releaseBuilder)
+	}
+
+	// The workflow calls the recipe. It does not contain one.
+	wf := withoutComments(readRepoFile(t, releaseWorkflow))
+	for _, forbidden := range []struct{ needle, why string }{
+		{"GOOS=", "a cross-compilation matrix in YAML is a second artifact recipe"},
+		{"GOARCH=", "a cross-compilation matrix in YAML is a second artifact recipe"},
+		{"-X main.version=", "version injection belongs to the builder, which is where it is tested"},
+		{"tar -czf", "archiving belongs to the builder"},
+		{"zip -q", "archiving belongs to the builder"},
+		{"go build ./cmd", "the release archives are not built by an ad-hoc go build"},
+	} {
+		if strings.Contains(wf, forbidden.needle) {
+			t.Errorf("release-oci.yml contains %q: %s", forbidden.needle, forbidden.why)
+		}
+	}
+}
+
+// TestTheReleaseArchiveVersionComesFromTheTag pins ADR 0062 §12 across the new
+// path: the Git tag remains the only version authority.
+//
+// A branch name, a workflow input or an edited literal would each be a second
+// authority, and the archive file names carry the version — so a wrong one
+// produces artifacts that disagree with the Release they hang from.
+func TestTheReleaseArchiveVersionComesFromTheTag(t *testing.T) {
+	job := archivesJob(t)
+
+	if !strings.Contains(job, "needs.identity.outputs.version") {
+		t.Error("the archives job does not take its version from the `identity` job, " +
+			"which is the only job that derives one from Git")
+	}
+	if !strings.Contains(job, `"$VERSION" != "${GITHUB_REF_NAME}"`) {
+		t.Error("the archives job does not check that the version it builds is the " +
+			"triggering tag")
+	}
+	if !strings.Contains(job, `./scripts/build-release.sh "$VERSION"`) {
+		t.Error("the archives job does not pass the derived version to the builder")
+	}
+	// A tag is the only thing that may name a release. `github.head_ref` and
+	// `github.ref` (unfiltered) are branch-shaped and must not reach the builder.
+	for _, forbidden := range []string{"github.head_ref", "github.event.inputs", "workflow_dispatch"} {
+		if strings.Contains(job, forbidden) {
+			t.Errorf("the archives job reads %q; a release version comes from the tag", forbidden)
+		}
+	}
+
+	// And the builder itself hardcodes nothing. A version literal in the script
+	// would produce v0.4.0 artifacts for every future tag.
+	script := readRepoFile(t, releaseBuilder)
+	for _, m := range regexp.MustCompile(`(?m)^\s*VERSION=(\S+)`).FindAllStringSubmatch(script, -1) {
+		if regexp.MustCompile(`v[0-9]+\.[0-9]+\.[0-9]+`).MatchString(m[1]) {
+			t.Errorf("the release builder assigns a hardcoded version: %q", m[0])
+		}
+	}
+	if !strings.Contains(script, `grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'`) {
+		t.Error("the release builder does not validate the version it is given; a " +
+			"branch name or a typo would name the artifacts")
+	}
+}
+
+// TestTheReleaseArchivesAreGatedBeforeAnythingIsPublished.
+//
+// The first irreversible act of a release is pointing the GHCR semver tag at a
+// digest. An archive recipe that failed after that point would leave exactly the
+// v0.3.2 shape: a correct published image and an incomplete release, repairable
+// only by burning the next version. So `publish` waits for the archives.
+func TestTheReleaseArchivesAreGatedBeforeAnythingIsPublished(t *testing.T) {
+	needs := jobNeeds(readRepoFile(t, releaseWorkflow))
+
+	for _, job := range []string{"publish", "release"} {
+		if !reaches(needs, job, "archives") {
+			t.Errorf("%q does not depend on the archives job.\n\n"+
+				"Publishing before the artifacts exist advertises a release that is "+
+				"missing half of what ADR 0076 §2.3 requires.", job)
+		}
+	}
+	if !reaches(needs, "archives", "source") {
+		t.Error("the archives job does not depend on the source gates; it would build " +
+			"artifacts from a tree that had not passed `make check`")
+	}
+	if reaches(needs, "archives", "publish") {
+		t.Error("the archives job depends on publication, which inverts the ordering it exists to provide")
+	}
+}
+
+// TestTheGitHubReleaseAttachesEveryRequiredArtifact is the asset contract.
+//
+// The SBOM was the only asset before RB-05. It still has to be one afterwards:
+// the failure mode of adding artifacts is dropping the one that was already
+// there, and nothing else in this file would notice.
+func TestTheGitHubReleaseAttachesEveryRequiredArtifact(t *testing.T) {
+	job := releaseJob(t)
+
+	if !strings.Contains(job, "release-archives-") {
+		t.Fatal("the Release job does not download the archives the `archives` job built")
+	}
+	// Downloaded, not rebuilt. Two builds are two sets of bytes and only one of
+	// them is the set SHA256SUMS describes.
+	// An *invocation*, not a mention: the composed release body legitimately
+	// names the recipe in prose, and a guard that could not tell the two apart
+	// would have to be deleted the first time the body explained itself.
+	if strings.Contains(job, "./"+releaseBuilder) {
+		t.Error("the Release job runs the release builder; it must attach the artifacts " +
+			"the archives job already produced and checksummed")
+	}
+
+	create := releaseCreateCommand(t, job)
+	for _, asset := range []string{
+		"sbom.cdx.json",
+		"release-assets/SHA256SUMS",
+		"release-assets/svcdoctor_*.tar.gz",
+		"release-assets/svcdoctor_*.zip",
+	} {
+		if !strings.Contains(create, asset) {
+			t.Errorf("the GitHub Release does not attach %q", asset)
+		}
+	}
+
+	// The upload globs have to match what the builder actually names. The
+	// builder strips the leading `v` for the file name and keeps it in the tag,
+	// so the two halves are checked against each other rather than assumed.
+	script := readRepoFile(t, releaseBuilder)
+	if !strings.Contains(script, `VERSION_NUMBER="${VERSION#v}"`) {
+		t.Error("the builder no longer derives the file-name version from the tag version")
+	}
+	if !strings.Contains(script, `name="svcdoctor_${VERSION_NUMBER}_${goos}_${goarch}"`) {
+		t.Error("the builder no longer names artifacts svcdoctor_<version>_<os>_<arch>, " +
+			"so the workflow's upload globs no longer describe its output")
+	}
+
+	// And the Release is read back, so "the Release exists" is not mistaken for
+	// "the Release is complete".
+	for _, want := range []string{
+		"gh release view", "--json assets",
+		`svcdoctor_${VERSION#v}_linux_amd64.tar.gz`,
+		`svcdoctor_${VERSION#v}_windows_amd64.zip`,
+	} {
+		if !strings.Contains(job, want) {
+			t.Errorf("the Release job does not verify its published assets (looked for %q)", want)
+		}
+	}
+}
+
+// releaseCreateCommand returns the `gh release create` invocation and its
+// continuation lines, and nothing else in the job.
+//
+// The scope is the point. The Release job legitimately names `sbom.cdx.json`
+// four times — it downloads it, checks it is CycloneDX, and describes it in the
+// composed body — so a guard that searched the whole job would confirm the SBOM
+// was still *mentioned* while it had been dropped from the upload. Measured:
+// that guard existed, and mutation R07 walked straight through it.
+func releaseCreateCommand(t *testing.T, job string) string {
+	t.Helper()
+	_, rest, found := strings.Cut(job, "gh release create")
+	if !found {
+		t.Fatal("the Release job no longer creates a GitHub Release")
+	}
+	var command []string
+	for _, line := range strings.Split(rest, "\n") {
+		command = append(command, line)
+		if !strings.HasSuffix(strings.TrimSpace(line), `\`) {
+			break
+		}
+	}
+	return strings.Join(command, "\n")
+}
+
+// TestTheReleaseBuilderRefusesWhatItMustRefuse reads the recipe statically.
+//
+// `test/release` executes it and proves these behaviours end to end. This is the
+// cheap structural half: every property below is one an edit could remove
+// silently, and a removed refusal looks exactly like a release that worked.
+func TestTheReleaseBuilderRefusesWhatItMustRefuse(t *testing.T) {
+	script := readRepoFile(t, releaseBuilder)
+
+	for _, required := range []struct{ needle, what string }{
+		{"set -euo pipefail", "fail-closed shell semantics"},
+		{"the working tree is dirty", "the dirty-tree refusal"},
+		{"git tag --points-at HEAD", "the check that the version is a tag on HEAD"},
+		{"CGO_ENABLED=0", "a static, cross-compilable build"},
+		{"-X main.version=$VERSION", "the single version-injection mechanism"},
+		{"-trimpath", "a build that carries no local path"},
+		{"SHA256SUMS", "the checksum file ADR 0076 §2.3 requires"},
+		{"sha256_check SHA256SUMS", "verifying the checksums it just wrote"},
+		{"EXPECTED_ARTIFACTS=5", "the artifact count, held independently of the platform list"},
+	} {
+		if !strings.Contains(script, required.needle) {
+			t.Errorf("the release builder no longer has %s (looked for %q)", required.what, required.needle)
+		}
+	}
+
+	// Exactly the five platforms ADR 0076 §2.3 publishes, read from the platform
+	// list itself rather than from the file — the file explains in prose why
+	// freebsd is excluded, and that sentence is not a build target.
+	platforms := regexp.MustCompile(`(?m)^PLATFORMS="([^"]*)"`).FindStringSubmatch(script)
+	if platforms == nil {
+		t.Fatal("the release builder has no PLATFORMS list")
+	}
+	if got := strings.Fields(platforms[1]); len(got) != 5 {
+		t.Errorf("the release builder builds %d platforms, expected 5: %v", len(got), got)
+	}
+	for _, platform := range []string{
+		"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64",
+	} {
+		if !strings.Contains(platforms[1], platform) {
+			t.Errorf("the release builder does not build %s", platform)
+		}
+	}
+	if strings.Contains(platforms[1], "freebsd") {
+		t.Error("the release builder publishes a freebsd artifact; nothing has been run " +
+			"against that platform and an artifact is a claim that one was")
+	}
+
+	// It builds. It does not publish. This script is invoked by a job in a
+	// workflow that holds contents: write.
+	for _, forbidden := range []string{"git push", "git tag -a", "gh release", "docker push", "cosign"} {
+		if strings.Contains(script, forbidden) {
+			t.Errorf("the release builder contains %q; publication is the workflow's", forbidden)
+		}
+	}
+
+	// Both sha256 implementations, because the builder runs on macOS and on
+	// ubuntu-latest and those two disagree about which one exists.
+	for _, tool := range []string{"sha256sum", "shasum -a 256"} {
+		if !strings.Contains(script, tool) {
+			t.Errorf("the release builder does not support %q; it runs on both macOS and Linux", tool)
+		}
+	}
+	if regexp.MustCompile(`\bmd5|sha1\b`).MatchString(script) {
+		t.Error("the release builder names a weaker digest than sha256")
+	}
+}
+
+// TestOrdinaryCIPublishesNothing.
+//
+// `ci.yml` runs on every pull request, which is the widest trigger in the
+// repository. It gained nothing from RB-05 and must gain nothing from it: a
+// release step reachable from a pull request is a release anybody can cause.
+func TestOrdinaryCIPublishesNothing(t *testing.T) {
+	ci := withoutComments(readRepoFile(t, ".github/workflows/ci.yml"))
+
+	for _, forbidden := range []string{
+		"gh release", "docker push", "build-release.sh", "upload-artifact",
+		"contents: write", "packages: write", "id-token: write",
+	} {
+		if strings.Contains(ci, forbidden) {
+			t.Errorf("ci.yml contains %q. It runs on every pull request and publishes nothing.", forbidden)
+		}
+	}
+}

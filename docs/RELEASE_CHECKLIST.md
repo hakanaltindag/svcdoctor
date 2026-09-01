@@ -70,11 +70,25 @@ fetched it. The tag is immutable whether or not we agree to treat it that way.
       ones, and no documented shell example discards the exit code
       (`go test ./internal/cli -run TestUX`).
 - [ ] Mutation closure re-run for anything this release touched:
-      `scripts/phase91a-mutations.sh`, `phase91b`, `phase91c`, `phase92b`. **0 survivors.**
+      `scripts/phase91a-mutations.sh`, `phase91b`, `phase91c`, `phase92b`, `phase93a`.
+      **0 survivors.** Read each script's full output, never `tail -1`.
 - [ ] Vulnerability scan: `govulncheck ./...`. If the tool is unavailable, say so in the
       release notes rather than skipping the line silently.
-- [ ] Cross-compilation for the five artifact platforms, `CGO_ENABLED=0`:
-      `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`.
+- [ ] **Release artifacts build from the candidate tree**, using the same recipe the release
+      workflow runs — five platforms, `CGO_ENABLED=0`, `SHA256SUMS` written and verified:
+
+      ```sh
+      ./scripts/build-release.sh --untagged v<X.Y.Z> /tmp/svcdoctor-release-qualification
+      ```
+
+      `--untagged` waives exactly one rule, that the version is already a tag on HEAD, because
+      qualification necessarily precedes the tag. It waives nothing else: a dirty tree is still
+      refused, and the artifacts are what an official build of the same tree produces. Delete
+      the output afterwards; no archive, checksum or binary belongs in the repository.
+
+      The builder refuses a dirty tree, so a candidate with uncommitted work has to be
+      committed first or qualified from a temporary clean checkout of the intended content.
+      Do not relax the refusal to make this step convenient.
 - [ ] **Private vulnerability reporting is enabled on the repository.** `SECURITY.md` names it
       as the project's only reporting channel, and the advisory form does not exist while the
       setting is off — a researcher following the policy would find a dead link.
@@ -83,19 +97,22 @@ fetched it. The tag is immutable whether or not we agree to treat it that way.
       gh api repos/hakanaltindag/svcdoctor/private-vulnerability-reporting   # want {"enabled":true}
       ```
 
-      **Measured `{"enabled": false}` during the Phase 9.2B closure pass.** It is a repository
-      setting rather than a tree change, so no commit can fix it; it must be turned on by hand
-      before the first release that ships `SECURITY.md`.
+      **Measured `{"enabled": true}` at Phase 9.3A (2026-09-01), closing RB-02.** It read
+      `{"enabled": false}` at the Phase 9.2B closure pass and at the v0.4.0 candidate gate. It
+      is a repository setting rather than a tree change, so no commit can fix it and no commit
+      can break it — re-measure it here every release rather than inheriting this line.
 - [x] **Pre-existing mutation harness debt reconciled.** The v0.4.0 gate found all 20 survivors
       to be stale `-run` selectors left by Phase 9.1C's renumbering, not product gaps: every
       mutation was caught by its package's full suite. All were repaired, none retired, and all
       four harnesses now fail loudly on a regex that selects no test.
       **117 planted, 117 caught, 0 survivors.**
-- [ ] **Release archives and checksums exist for the tag.** ADR 0076 §2.3 requires five platform
-      archives plus `SHA256SUMS`. `release-oci.yml` builds none of them — it attaches only
-      `sbom.cdx.json`. Either the archive job exists, or ADR 0076 §2.3 has been amended. Tracked
-      as RB-05.
-- [ ] Blocker inventory:- [ ] Blocker inventory: every open item classified *release blocker* / *documented
+- [x] **Release archives and checksums have an executable mechanism.** ADR 0076 §2.3 requires
+      five platform archives plus `SHA256SUMS`. `scripts/build-release.sh` produces them, the
+      `archives` job in `release-oci.yml` calls **that script** rather than a copy of it, and
+      the `release` job attaches its output beside `sbom.cdx.json`. Closed at Phase 9.3A as
+      RB-05; the per-release check is the qualification step above and the asset check under
+      CLOSE.
+- [ ] Blocker inventory: every open item classified *release blocker* / *documented
       limitation* / *operational debt* / *future feature*. A blocker is not relabelled to ship.
 - [ ] Release notes written, with the baseline set to **the last actual GitHub Release** — not
       the last Git tag. Those differ.
@@ -148,6 +165,9 @@ Watch the whole run, not just the build. Required gates:
 
 - [ ] source gates (including the `golangci-lint` install — `make check` fails closed without it)
 - [ ] integration suites
+- [ ] the `archives` job: five archives and `SHA256SUMS`, built by `scripts/build-release.sh`
+      from the tagged commit and verified in the job that produced them. It gates `publish`,
+      so an archive failure stops the release **before** the semver tag reaches GHCR
 - [ ] reproducibility: both platform digests identical across two cold-cache builds
 - [ ] staging under `sha-<full release commit>`, refusing to re-point an existing tag
 - [ ] vulnerability scan, blocking, no blanket suppressions
@@ -186,6 +206,18 @@ Watch the whole run, not just the build. Required gates:
       `gh api /repos/<owner>/<repo>/releases/latest --jq .tag_name`.
 - [ ] Release is not a draft and not a prerelease; title is `svcdoctor v<X.Y.Z>`.
 - [ ] The body records the index digest, and `sbom.cdx.json` is attached.
+- [ ] **All six binary assets are attached and verify.** The `release` job reads the asset list
+      back from the API and fails without them, so this is a confirmation rather than a
+      discovery — but download them and check independently, because a checksum file nobody
+      ever verifies is decoration:
+
+      ```sh
+      gh release download v<X.Y.Z> -p 'svcdoctor_*' -p SHA256SUMS
+      sha256sum -c SHA256SUMS      # or: shasum -a 256 -c SHA256SUMS
+      ```
+- [ ] **README's install section names the archives** once they exist. It currently says
+      prebuilt archives exist only for `v0.1.0`, which is true until this release publishes
+      them and false the moment it does.
 - [ ] Re-running the `release` job is safe and was left safe: it verifies an existing Release
       rather than recreating it. If it ever reports a mismatch, that is §D1 of the playbook and
       needs a human, not a re-run.

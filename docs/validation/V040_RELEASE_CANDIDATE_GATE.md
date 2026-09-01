@@ -5,6 +5,12 @@
 **Answer: NOT_RELEASE_READY.** Two blockers are open. Neither is a product defect; both are
 release-mechanism gaps that no amount of testing the source can close.
 
+> **Superseded by §16 — Phase 9.3A blocker closure, 2026-09-01.** Both blockers are now closed:
+> private vulnerability reporting reads `{"enabled":true}`, and the release archives have an
+> executable mechanism. Everything above and below this line is the gate as it was measured at
+> `7e7df84` and is deliberately left unedited — a gate that rewrote its own findings after they
+> were fixed would be a gate nobody could audit. Read §16 for the current state.
+
 | | |
 |---|---|
 | Candidate HEAD | `7e7df84b699357333ae9d8efde8505438ddc6679` |
@@ -615,3 +621,196 @@ closed by changing the source under this gate's scope:
 
 The product itself qualified: 117/117/0 mutations, all gates green, eight integration suites
 passing, artifacts building and verifying on five platforms, and no invariant moved.
+
+
+---
+
+## 16. Phase 9.3A — blocker closure · 2026-09-01
+
+Added after the gate above, which is left exactly as it was measured. This section records what
+changed and what did not.
+
+### 16.1 Ledger
+
+| ID | Gate result | Now | Evidence |
+|---|---|---|---|
+| RB-01 | CLOSED at the gate | **CLOSED** | 117/117/0 across the four historical harnesses, re-run at 9.3A and unchanged — after §16.7a, which is why the first re-run disagreed |
+| RB-02 | **OPEN** | **CLOSED** | `gh api …/private-vulnerability-reporting` → `{"enabled":true}`, re-measured read-only at 9.3A |
+| RB-05 | **OPEN** | **CLOSED** | `scripts/build-release.sh`, called by the `archives` job; proven by `test/release` and 10/10 mutations |
+| RB-09 | CLOSED at the gate | **CLOSED** | RabbitMQ guard repaired at the gate and committed in `3c99cc1`; not reopened |
+| RB-08 | OPEN by construction | **unchanged** | Artifact provenance is still source qualification only. See §16.6 |
+
+### 16.2 RB-02 — measured, not assumed
+
+```console
+$ gh api repos/hakanaltindag/svcdoctor/private-vulnerability-reporting
+{"enabled":true}
+```
+
+Read-only. The setting was turned on outside this phase by the repository administrator, which
+is the action §5 asked for; nothing here wrote to remote repository state and no vulnerability
+report was submitted.
+
+`SECURITY.md` was **not edited**, because it was already correct: it names GitHub private
+vulnerability reporting, links the advisory form, states the supported-version window, and puts
+credential leakage and redaction failure in scope. The document described a mechanism that did
+not exist; the mechanism now exists. Editing truthful prose to celebrate that would only add a
+sentence that could go stale.
+
+### 16.3 RB-05 — one recipe, two callers
+
+`scripts/build-release.sh <version> [output-dir]` is the mechanism. It refuses a malformed
+version, refuses a dirty tree, refuses a version that is not a tag on `HEAD` (waivable **only**
+by `--untagged`, for qualifying a candidate before the tag exists — which waives nothing else),
+builds the five ADR 0076 §2.3 platforms with `CGO_ENABLED=0 -trimpath` and the existing
+`-X main.version=` injection, names archive members explicitly rather than archiving a
+directory, writes `SHA256SUMS` from inside the output directory, and verifies it. It stages
+platform binaries outside the repository and cleans them on success, failure and interrupt. It
+publishes nothing.
+
+The `archives` job in `release-oci.yml` **calls that script**, with the version `identity`
+derived from Git. This is the whole of RB-05's fix: closing it with a `GOOS`/`GOARCH` matrix
+written into YAML would have produced the artifacts and a second recipe that no local gate ever
+runs — the drift RB-05 exists to prevent, one layer up. A guard fails the build if the workflow
+stops calling the script or starts cross-compiling on its own.
+
+**Ordering changed deliberately.** `publish` now needs `archives`. The first irreversible act of
+a release is pointing the GHCR semver tag at a digest; an archive recipe that failed after that
+point would reproduce the v0.3.2 shape — a correct published image and an incomplete release,
+repairable only by burning the next version.
+
+### 16.4 The artifacts, rebuilt through the new mechanism
+
+Qualified with the builder, not by hand. Method, because it matters: the phase's own tree is
+dirty by construction, so the content was copied to a temporary directory outside the
+repository, committed there, tagged `v0.4.0`, and built in **release** mode — the dirty-tree and
+tag refusals were satisfied rather than relaxed. The fixture's commit SHA is not this
+repository's, so this proves the recipe and not the provenance of any particular release.
+
+| Artifact | Contents |
+|---|---|
+| `svcdoctor_0.4.0_linux_amd64.tar.gz` | `svcdoctor`, `LICENSE`, `README.md` |
+| `svcdoctor_0.4.0_linux_arm64.tar.gz` | `svcdoctor`, `LICENSE`, `README.md` |
+| `svcdoctor_0.4.0_darwin_amd64.tar.gz` | `svcdoctor`, `LICENSE`, `README.md` |
+| `svcdoctor_0.4.0_darwin_arm64.tar.gz` | `svcdoctor`, `LICENSE`, `README.md` |
+| `svcdoctor_0.4.0_windows_amd64.zip` | `svcdoctor.exe`, `LICENSE`, `README.md` |
+| `SHA256SUMS` | five lines, no path separators, no self-entry, verifies |
+
+**Naming.** `svcdoctor_<version-without-v>_<os>_<arch>` follows the only binary release this
+project has published — v0.1.0's assets were exactly that shape — and matches §7 of this gate.
+
+**Contents differ from v0.1.0 on purpose.** v0.1.0's archives held a single file, the binary
+named `svcdoctor_0.1.0_darwin_arm64`, with no `LICENSE` and no `README.md`. These hold a binary
+named `svcdoctor` plus both files: Apache-2.0 §4(a) requires giving recipients a copy of the
+licence with a redistributed work, and an archive that extracts to a file the operator must
+rename first is a worse install journey for no gain. §7 of this gate recorded the same contents.
+
+**Native execution:** `svcdoctor_0.4.0_darwin_arm64.tar.gz` extracted to a fresh directory,
+`./svcdoctor --version` → `v0.4.0`, `--help` correct, `file` reports `Mach-O 64-bit executable
+arm64`.
+
+**Foreign artifacts** were built and inspected, not executed — an archive naming a platform has
+to contain a binary *for* that platform, and nothing but `file` can say so:
+
+| Archive | `file` |
+|---|---|
+| `linux_amd64` | ELF 64-bit LSB executable, x86-64, statically linked |
+| `linux_arm64` | ELF 64-bit LSB executable, ARM aarch64, statically linked |
+| `darwin_amd64` | Mach-O 64-bit executable x86_64 |
+| `windows_amd64` | PE32+ executable (console) x86-64, for MS Windows |
+
+**Verified with tools other than the ones that wrote the artifacts:** members listed with
+Python's `tarfile`/`zipfile`, checksums re-verified with `shasum -a 256 -c` where the builder had
+used `sha256sum`. That is not pedantry — §16.5 is a defect that only a second reader could see.
+
+**All output was deleted.** No archive, checksum or binary is in the repository, and `dist/` is
+ignored.
+
+### 16.5 A real defect the executable test found
+
+The first archives this builder produced contained `._svcdoctor`, `._LICENSE` and `._README.md`
+— AppleDouble members holding macOS extended attributes. **`tar -tzf` on macOS did not show
+them**, because bsdtar folds them back on read; Go's `archive/tar` reader did, which is what the
+Linux machine unpacking the release would have seen. A hand-verified archive would have shipped
+three junk files beside the binary.
+
+Fixed by exporting `COPYFILE_DISABLE=1`, which bsdtar honours and GNU tar ignores. Recorded
+because the lesson generalises: the tool that wrote an archive is the wrong tool to verify it
+with, and `test/release` reads both archive formats with the standard library for that reason.
+
+### 16.6 What is still not claimed
+
+**Reproducible archives.** §11 measured the binary as byte-identical across builds and the
+`tar.gz` as not reproducible — `tar` and `gzip` embed modification times. That is unchanged:
+the builder pins no timestamp, ADR 0076 requires no such thing, and its reproducibility clause
+is scoped to the platform image manifest. **No archive reproducibility is claimed.**
+
+**A rehearsed release.** Nothing was tagged, pushed or published. The workflow's behaviour on a
+real tag is proven statically — it calls the shared builder, gates `publish` on it, uploads the
+five archives, `SHA256SUMS` and the unchanged `sbom.cdx.json`, and reads the asset list back
+from the API — and the script itself is proven by execution. Neither is a live GitHub Release,
+and RB-08 stays open by construction: artifact provenance remains source qualification only.
+
+**Container path unchanged.** No image, SBOM, provenance, signature, tag policy or permission
+was touched. The `archives` job holds `contents: read` and nothing else; `contents: write`
+remains held by exactly one job, `release`.
+
+### 16.7 Mutation closure
+
+| Suite | Result |
+|---|---|
+| `scripts/phase91a-mutations.sh` | 20 planted, 20 caught, 0 survivors |
+| `scripts/phase91b-mutations.sh` | 31 planted, 31 caught, 0 survivors |
+| `scripts/phase91c-mutations.sh` | 45 planted, 45 caught, 0 survivors |
+| `scripts/phase92b-mutations.sh` | 21 planted, 21 caught, 0 survivors |
+| `scripts/phase93a-mutations.sh` | **10 planted, 10 caught, 0 survivors** |
+
+127/127/0, all five measured on a clean tree in one sequential pass. Every harness keeps its
+zero-match guard, and 9.3A's has one from the start.
+
+Two of the ten 9.3A mutations were survivors before the guards were tightened, and both are
+recorded because they were guard defects rather than mechanism defects. R07 — dropping
+`sbom.cdx.json` from the upload — survived a guard that searched the whole Release job, where
+the SBOM is legitimately named four times in steps that do not upload it; the guard now reads
+the `gh release create` invocation alone. R06 exposed the same class of problem in the harness
+itself: a mutation that cannot be planted looks exactly like a guard that cannot fail.
+
+### 16.7a An interrupted harness poisoned the run that followed it
+
+An earlier 9.3A pass reported `phase91c` as **44 caught, 1 survivor** — C28, *a target timeout
+cancels its siblings*. It was neither a product defect nor a guard defect, and the diagnosis is
+worth keeping because the failure was silent and self-consistent.
+
+A prior run of that suite had been killed by a command timeout part-way through, leaving **C27's
+mutation planted** in `internal/fleet/run/execute.go`: a target context rooted at
+`context.Background()` rather than at the run context. The next run took that tree as its
+pristine baseline, and with target contexts already detached from the run context, C28's
+mutation — cancelling the run when a target's own deadline expires — could not reach the
+siblings. So the guard passed, correctly, about a tree nobody meant to measure.
+
+Nothing in the harness could see it. The `BEFORE`/`AFTER` checksums prove a run put back what it
+found; they say nothing about whether what it found was the committed tree. The run duly
+reported "tree restored byte-for-byte", and it was telling the truth.
+
+**Diagnosis:** `git diff` on the file, which showed a mutation no one had planted deliberately.
+Reproduced 5/5 on the polluted tree and caught on the restored one, so the survivor was an
+artefact and not an intermittent guard.
+
+**Fix, in all five harnesses:** `restore` now runs from an `EXIT`/`INT`/`TERM`/`HUP` trap,
+guarded on the backup still existing so the ordinary path is not a double restore. A killed run
+puts the tree back instead of leaving a mutation in it. **Proven, not assumed:** `phase91c` was
+started and killed with `SIGTERM` at C11, exited 143, printed the restoration line, and left
+`internal/` and `cmd/` clean.
+
+A start-gate refusing a dirty tree was considered and rejected: these harnesses are run during
+development, on trees with legitimate uncommitted work — including this phase's own. It would
+have produced a false refusal every time and been deleted.
+
+### 16.8 Verdict
+
+**RELEASE_READY**, on the two blockers this phase owns. RB-02 and RB-05 are closed, every
+invariant is unchanged, and `internal/` and `cmd/` carry zero production changes.
+
+The release itself is still a human decision and still needs the ceremony in
+`docs/RELEASE_CHECKLIST.md`: merge, negative check, annotated tag, and a watched workflow run.
+Nothing here has been committed, tagged, pushed or published.

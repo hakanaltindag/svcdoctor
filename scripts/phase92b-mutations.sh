@@ -54,6 +54,34 @@ done
 BEFORE="$(find "${FILES[@]}" -type f -exec shasum -a 256 {} \; | sort)"
 restore() { for f in "${FILES[@]}"; do cp "$BACKUP/$f" "$f"; done; }
 
+# An interrupted harness must not leave a mutation planted.
+#
+# Phase 9.3A measured why this is not hypothetical. A run of this suite was
+# killed by a ten-minute command timeout part-way through, leaving one planted
+# mutation in the working tree. The next run took *that* tree as its pristine
+# baseline, restored to it byte-for-byte at the end, truthfully reported "tree
+# restored" — and reported a survivor that was an artefact of the leftover
+# rather than a gap in any guard.
+#
+# The BEFORE/AFTER checksums cannot catch this: they prove the run put back what
+# it found, not that what it found was the committed tree. A trap can, because
+# the failure is a script that stops between planting and restoring.
+#
+# Guarded on the backup still existing, so the ordinary exit path — which
+# restores and removes the backup itself — is not a double restore from a
+# directory that is gone.
+on_interrupt() {
+  if [ -d "$BACKUP" ]; then
+    restore
+    rm -rf "$BACKUP"
+    echo
+    echo "interrupted: the tree was restored from the backup before exiting."
+  fi
+}
+trap on_interrupt EXIT
+trap 'on_interrupt; exit 130' INT
+trap 'on_interrupt; exit 143' TERM HUP
+
 PASS=0
 FAIL=0
 SURVIVORS=()

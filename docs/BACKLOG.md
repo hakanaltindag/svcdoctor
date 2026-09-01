@@ -123,37 +123,34 @@ The ban now covers the surfaces that state facts — summary, detail, attributes
 recommendation is pinned by exact match, which is stronger there. Production code was untouched
 and was verified byte-identical to `HEAD` before anything changed.
 
-## Open v0.4.0 release blockers
+## v0.4.0 release blockers — both closed at Phase 9.3A (2026-09-01)
 
-Both are release-mechanism gaps rather than product defects, and neither can be closed by
-changing the source.
+Neither was a product defect. One was a repository setting and one was a missing mechanism.
 
-**RB-02 — GitHub private vulnerability reporting is disabled.** `SECURITY.md` names it as the
-project's only channel, so while it is off the policy links to a form that does not exist. It is
-a repository setting; no commit can fix it. Required action and re-verification in
-`V040_RELEASE_CANDIDATE_GATE.md` §5.
-
-**RB-05 — no automation produces release archives or checksums.** ADR 0076 §2.3 lists five
-platform archives and `SHA256SUMS` as required. `.github/workflows/release-oci.yml` has no
-`GOOS`/`GOARCH` matrix, no archiving step and no checksum step; its `gh release create` attaches
-only `sbom.cdx.json`. All five archives were built and verified **locally** at the gate, so the
-gap is delivery rather than feasibility. Closing it needs the archive job, a documented manual
-post-tag step, or an amendment to ADR 0076 §2.3.
-
-## Release-gate precondition outside the tree
-
-**GitHub private vulnerability reporting is not enabled.** Measured during the Phase 9.2B
-closure pass:
+**RB-02 — GitHub private vulnerability reporting · CLOSED.** It was `{"enabled":false}` at the
+v0.4.0 candidate gate, which meant `SECURITY.md` named a channel that did not exist. It has
+since been enabled by the repository administrator and re-verified read-only at Phase 9.3A:
 
 ```console
 $ gh api repos/hakanaltindag/svcdoctor/private-vulnerability-reporting
-{"enabled":false}
+{"enabled":true}
 ```
 
-`SECURITY.md` names it as the project's only reporting channel, so until the setting is on the
-policy links to a form that does not exist. **No commit can fix this** — it is a repository
-setting. Recorded as a line in `docs/RELEASE_CHECKLIST.md`; must be true before the first
-release that ships `SECURITY.md`.
+`SECURITY.md` needed no change — it described the mechanism truthfully all along, and the
+setting was the half that was false.
+
+**RB-05 — release archives and checksums · CLOSED.** `scripts/build-release.sh` is now the
+executable recipe: five platform archives, `SHA256SUMS`, `CGO_ENABLED=0`, `-trimpath`, the
+existing `-X main.version=` injection, a refused dirty tree and a refused untagged HEAD. The
+`archives` job in `.github/workflows/release-oci.yml` **calls that script** rather than
+reimplementing it, and `publish` waits for it, so a broken recipe stops the release before the
+first irreversible act rather than after it. `test/release` executes the builder end to end and
+`internal/cli/releaseworkflow_test.go` holds the workflow to calling it;
+`scripts/phase93a-mutations.sh` is 10 planted, 10 caught, 0 survivors.
+
+**Not claimed:** a live GitHub Release. Nothing was tagged, pushed or published at Phase 9.3A,
+and the workflow's behaviour on a real tag is proven statically and by local execution of the
+same script, which is not the same thing as a rehearsed release.
 
 ## Deferred Phase 9.2A acceptance requirements
 
