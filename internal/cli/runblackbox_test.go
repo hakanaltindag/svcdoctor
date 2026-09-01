@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -199,30 +202,76 @@ func TestMTR05AndR06BlackBoxExitFour(t *testing.T) {
 // TestExitFourOutranksOneThroughTheRealSurface is section 18's required worked
 // scenario, end to end: a target-side problem beside an unmeasured target.
 //
-// The run budget is set so low that scheduling stops partway, which produces
-// both a PROBLEMS_FOUND target and a NOT_STARTED one in a single aggregate. The
-// finding must survive in the report while the code says 4, because
-// incompleteness qualifies every conclusion.
+// The run must produce, in one aggregate, a target that reached PROBLEMS_FOUND
+// and a target that was never started. The exit code must then be 4 and not 1,
+// because incompleteness qualifies every conclusion — and the ERROR finding must
+// survive in the report, because downgrading it would be discarding a
+// measurement that was actually made.
+//
+// # Why the scenario is built from two local sockets
+//
+// The precondition this test needs is that **the run budget expires before the
+// dispatcher has offered every target**. Nothing in the scheduler guarantees
+// that: `dispatch` walks the declared order and stops when the run context is
+// done, so whether any target is left NOT_STARTED depends entirely on how long
+// the earlier targets take. That is a property of the machine's network, not of
+// the scheduler, and it must therefore be constructed rather than hoped for.
+//
+// The original construction pointed sixty targets at the blackholed address
+// 10.255.255.1 and assumed each would block for its step budget. It held on a
+// developer's machine and **failed the v0.4.0 release source gate**, where
+// GitHub's runner has no route to 10.0.0.0/8 at all: every connect failed
+// immediately, all sixty-one targets were dispatched inside the 400 ms budget,
+// nothing was left unstarted, and the scenario the test claimed to exercise
+// never arose. Measured locally afterwards, the same failure reproduced at
+// roughly 1% under GOMAXPROCS=1. A test whose precondition depends on how a
+// particular network fails an unreachable address is a test that reports the
+// network.
+//
+// So both halves are now local sockets with no routing, DNS or timing
+// assumption in them:
+//
+//	refused   a loopback port with nothing listening: connect fails at once,
+//	          which is a definite ERROR and reaches PROBLEMS_FOUND
+//	blocked   a listener that accepts and never answers: the connect succeeds
+//	          and the journey then blocks until that target's own step budget
+//	          expires, on every machine
+//
+// # The margin, stated as arithmetic rather than as a hope
+//
+// One instant target, then 20 targets that each take **at least** the 150 ms
+// step budget, at concurrency 1, under a 600 ms run budget. At most four of the
+// blocked targets can start, so at least sixteen cannot. The bound is one-sided:
+// nothing can make a blocked target return early, because the peer never sends a
+// byte — so a slower machine leaves *more* targets unstarted, never fewer. That
+// is what makes this deterministic rather than lucky.
 func TestExitFourOutranksOneThroughTheRealSurface(t *testing.T) {
-	// The first target fails fast and definitely: an unresolvable name is an
-	// ERROR, so it reaches PROBLEMS_FOUND. Every later target points at a
-	// blackholed address and burns its whole 200 ms budget, so a 400 ms run
-	// budget is exhausted long before the list is finished and the tail is left
-	// NOT_STARTED. Concurrency 1 makes the ordering deterministic.
-	//
+	const (
+		blockedTargets = 20
+		wantUnstarted  = 10 // Well under the sixteen the arithmetic guarantees.
+	)
+
+	problemPort := refusedPort(t)
+	_, blockedPort, err := net.SplitHostPort(tarpit(t))
+	if err != nil {
+		t.Fatalf("tarpit address: %v", err)
+	}
+
+	doc := "version: 1\nrun:\n  concurrency: 1\ntargets:\n" +
+		"  - id: refused\n    type: redis\n    host: 127.0.0.1\n" +
+		"    port: " + problemPort + "\n    timeout: 200ms\n    step_timeout: 150ms\n" +
+		"    tls:\n      mode: disable\n"
+	for i := range blockedTargets {
+		doc += "  - id: blocked" + zeroPad(i) + "\n    type: redis\n    host: 127.0.0.1\n" +
+			"    port: " + blockedPort + "\n    timeout: 200ms\n    step_timeout: 150ms\n" +
+			"    tls:\n      mode: disable\n"
+	}
+
 	// The run budget is deliberately *above* the largest target budget, because
 	// ADR 0073 section 4.4 refuses the reverse — a run bounded below its own
 	// targets guarantees every one of them is cut short.
-	doc := "version: 1\nrun:\n  concurrency: 1\ntargets:\n" +
-		"  - id: resolves-not\n    type: redis\n    host: t.invalid\n" +
-		"    timeout: 200ms\n    step_timeout: 100ms\n    tls:\n      mode: disable\n"
-	for i := range 60 {
-		doc += "  - id: slow" + zeroPad(i) + "\n    type: redis\n    host: 10.255.255.1\n" +
-			"    timeout: 200ms\n    step_timeout: 100ms\n    tls:\n      mode: disable\n"
-	}
-
 	got := runCLI(t, context.Background(), "run", "--config", writeConfig(t, doc),
-		"--timeout", "400ms", "--output", "json")
+		"--timeout", "600ms", "--output", "json")
 
 	if got.code != ExitIncomplete {
 		t.Fatalf("exit = %d, want %d", got.code, ExitIncomplete)
@@ -247,8 +296,15 @@ func TestExitFourOutranksOneThroughTheRealSurface(t *testing.T) {
 		t.Fatalf("the aggregate is not valid JSON: %v", err)
 	}
 
-	if aggregate.Summary.NotStarted == 0 {
-		t.Fatal("no target was left unstarted, so this scenario did not arise")
+	// Both halves of the scenario are asserted as *constructed*, not as merely
+	// present. A run that left one target unstarted by luck would satisfy a
+	// `> 0` check while proving nothing about the construction above.
+	if aggregate.Summary.NotStarted < wantUnstarted {
+		t.Fatalf("only %d of %d targets were left unstarted, want at least %d.\n\n"+
+			"At concurrency 1 a 600 ms run budget cannot reach past four 150 ms "+
+			"targets, so this means the blocked targets did not block — the "+
+			"scenario was not constructed and what follows would prove nothing.",
+			aggregate.Summary.NotStarted, blockedTargets+1, wantUnstarted)
 	}
 	if aggregate.Summary.WithProblems == 0 {
 		t.Fatal("no target reached PROBLEMS_FOUND, so 4-outranks-1 was not exercised")
@@ -274,6 +330,91 @@ func TestExitFourOutranksOneThroughTheRealSurface(t *testing.T) {
 		t.Error("the aggregate reports problems but carries no ERROR finding, so the " +
 			"finding was dropped when the run became incomplete")
 	}
+}
+
+// tarpit is a listener that accepts connections and never answers them.
+//
+// A target pointed here completes its TCP connect and then blocks until its own
+// step budget expires. That is the deterministic half of the scenario above: it
+// depends on loopback and on nothing else — no route to an unreachable network,
+// no resolver, and no assumption about how a particular kernel fails a connect.
+//
+// Accepted connections are held rather than dropped. Releasing one would close
+// it, which would end the peer's read early and hand back exactly the timing
+// dependence this exists to remove. A connection still in the listen backlog is
+// already established from the client's side, so the accept loop keeping up is
+// not part of the contract either.
+//
+// # Why each connection is drained, when nothing here reads a protocol
+//
+// Because closing a socket that still holds unread data makes the kernel send
+// **RST** rather than FIN, and a port retired that way can poison the next
+// listener the kernel hands out on it: every connect to the reused port is reset
+// immediately instead of being accepted. Measured, in the first version of this
+// helper — one iteration in roughly 130 saw *all* of its blocked targets
+// complete at once, which is the same "the scenario was not constructed" failure
+// this test was rewritten to remove, arriving by a different route.
+//
+// Draining costs nothing and changes nothing the peer observes: it is still
+// waiting for a *reply*, and no byte is ever written back to it.
+func tarpit(t *testing.T) string {
+	t.Helper()
+
+	var config net.ListenConfig
+	listener, err := config.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	var mu sync.Mutex
+	var held []net.Conn
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, conn)
+			mu.Unlock()
+			go func() { _, _ = io.Copy(io.Discard, conn) }()
+		}
+	}()
+
+	t.Cleanup(func() {
+		_ = listener.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range held {
+			_ = conn.Close()
+		}
+	})
+
+	return listener.Addr().String()
+}
+
+// refusedPort returns a loopback port with nothing listening on it.
+//
+// Bound and then closed, so the port is known to have been free and is known not
+// to be served. A connect reaches ECONNREFUSED immediately, which is a definite
+// target-side ERROR and needs no network beyond loopback.
+func refusedPort(t *testing.T) string {
+	t.Helper()
+
+	var config net.ListenConfig
+	listener, err := config.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		_ = listener.Close()
+		t.Fatalf("address: %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return port
 }
 
 // TestMTE20AConfigurationErrorDialsNothing is section 19.
