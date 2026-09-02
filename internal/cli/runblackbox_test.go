@@ -248,11 +248,12 @@ func TestMTR05AndR06BlackBoxExitFour(t *testing.T) {
 func TestExitFourOutranksOneThroughTheRealSurface(t *testing.T) {
 	const (
 		blockedTargets = 20
-		wantUnstarted  = 10 // Well under the sixteen the arithmetic guarantees.
+		wantUnstarted  = 10
 	)
 
 	problemPort := refusedPort(t)
-	_, blockedPort, err := net.SplitHostPort(tarpit(t))
+	address, accepted := tarpit(t)
+	_, blockedPort, err := net.SplitHostPort(address)
 	if err != nil {
 		t.Fatalf("tarpit address: %v", err)
 	}
@@ -267,11 +268,20 @@ func TestExitFourOutranksOneThroughTheRealSurface(t *testing.T) {
 			"    tls:\n      mode: disable\n"
 	}
 
-	// The run budget is deliberately *above* the largest target budget, because
-	// ADR 0073 section 4.4 refuses the reverse — a run bounded below its own
-	// targets guarantees every one of them is cut short.
-	got := runCLI(t, context.Background(), "run", "--config", writeConfig(t, doc),
-		"--timeout", "600ms", "--output", "json")
+	// The edge. `accepted` closes when the tarpit accepts its first connection,
+	// which can only be the second target's, and the run is cancelled there.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-accepted
+		cancel()
+	}()
+
+	// Generous, because the budget is no longer the mechanism. It exists so a
+	// broken fixture fails in a second rather than hanging, and it stays above
+	// every target budget because ADR 0073 section 4.4 refuses the reverse.
+	got := runCLI(t, ctx, "run", "--config", writeConfig(t, doc),
+		"--timeout", "5s", "--output", "json")
 
 	if got.code != ExitIncomplete {
 		t.Fatalf("exit = %d, want %d", got.code, ExitIncomplete)
@@ -296,14 +306,15 @@ func TestExitFourOutranksOneThroughTheRealSurface(t *testing.T) {
 		t.Fatalf("the aggregate is not valid JSON: %v", err)
 	}
 
-	// Both halves of the scenario are asserted as *constructed*, not as merely
-	// present. A run that left one target unstarted by luck would satisfy a
-	// `> 0` check while proving nothing about the construction above.
+	// Both halves are asserted as *constructed*, not as merely present. A run
+	// that left one target unstarted by luck would satisfy a `> 0` check while
+	// proving nothing about the construction above.
 	if aggregate.Summary.NotStarted < wantUnstarted {
 		t.Fatalf("only %d of %d targets were left unstarted, want at least %d.\n\n"+
-			"At concurrency 1 a 600 ms run budget cannot reach past four 150 ms "+
-			"targets, so this means the blocked targets did not block — the "+
-			"scenario was not constructed and what follows would prove nothing.",
+			"The run was cancelled as soon as the second target's connection was "+
+			"accepted, so the dispatcher cannot have offered the rest. This means "+
+			"the cancellation did not reach it — the scenario was not constructed "+
+			"and what follows would prove nothing.",
 			aggregate.Summary.NotStarted, blockedTargets+1, wantUnstarted)
 	}
 	if aggregate.Summary.WithProblems == 0 {
@@ -332,32 +343,23 @@ func TestExitFourOutranksOneThroughTheRealSurface(t *testing.T) {
 	}
 }
 
-// tarpit is a listener that accepts connections and never answers them.
+// tarpit is a listener that accepts connections and never answers them, and
+// reports the first connection it accepts.
 //
-// A target pointed here completes its TCP connect and then blocks until its own
-// step budget expires. That is the deterministic half of the scenario above: it
-// depends on loopback and on nothing else — no route to an unreachable network,
-// no resolver, and no assumption about how a particular kernel fails a connect.
+// The returned channel closes on that first accept. Two things are true at that
+// instant and both are needed above: the previous target has finished — the
+// worker is single and takes the next index only after writing the last result —
+// and *this* target's connection is established with a peer that will never
+// speak. So the run can be cancelled there, and the worker cannot advance past
+// the target now blocking on a read that only its own step budget can end.
 //
-// Accepted connections are held rather than dropped. Releasing one would close
-// it, which would end the peer's read early and hand back exactly the timing
-// dependence this exists to remove. A connection still in the listen backlog is
-// already established from the client's side, so the accept loop keeping up is
-// not part of the contract either.
-//
-// # Why each connection is drained, when nothing here reads a protocol
-//
-// Because closing a socket that still holds unread data makes the kernel send
-// **RST** rather than FIN, and a port retired that way can poison the next
-// listener the kernel hands out on it: every connect to the reused port is reset
-// immediately instead of being accepted. Measured, in the first version of this
-// helper — one iteration in roughly 130 saw *all* of its blocked targets
-// complete at once, which is the same "the scenario was not constructed" failure
-// this test was rewritten to remove, arriving by a different route.
-//
-// Draining costs nothing and changes nothing the peer observes: it is still
-// waiting for a *reply*, and no byte is ever written back to it.
-func tarpit(t *testing.T) string {
+// Accepted connections are drained and never written to. Draining is not about
+// reading a protocol: closing a socket that still holds unread data makes the
+// kernel send **RST** rather than FIN, and a port retired that way poisons the
+// next listener the kernel hands out on it. The copy returns when the peer hangs
+// up, which is the first moment at which closing this side can no longer shorten
+// anything.
+func tarpit(t *testing.T) (address string, accepted <-chan struct{}) {
 	t.Helper()
 
 	var config net.ListenConfig
@@ -365,32 +367,25 @@ func tarpit(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+	t.Cleanup(func() { _ = listener.Close() })
 
-	var mu sync.Mutex
-	var held []net.Conn
+	first := make(chan struct{})
+	var once sync.Once
 	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
-			mu.Lock()
-			held = append(held, conn)
-			mu.Unlock()
-			go func() { _, _ = io.Copy(io.Discard, conn) }()
+			once.Do(func() { close(first) })
+			go func() {
+				defer func() { _ = conn.Close() }()
+				_, _ = io.Copy(io.Discard, conn)
+			}()
 		}
 	}()
 
-	t.Cleanup(func() {
-		_ = listener.Close()
-		mu.Lock()
-		defer mu.Unlock()
-		for _, conn := range held {
-			_ = conn.Close()
-		}
-	})
-
-	return listener.Addr().String()
+	return listener.Addr().String(), first
 }
 
 // refusedPort returns a loopback port with nothing listening on it.
