@@ -172,7 +172,7 @@ failed.
 
 ```yaml
 connectivity:
-  image: ghcr.io/hakanaltindag/svcdoctor:v0.3.3
+  image: ghcr.io/hakanaltindag/svcdoctor:v0.4.0
   variables:
     ORDERS_DB_PASSWORD: $ORDERS_DB_PASSWORD    # masked project variable
   script:

@@ -87,7 +87,7 @@ No response-time guarantee is offered, because none could be kept.
 
 **The most recent release only.** Fixes land in a new version; earlier tags are not patched,
 and there is no backport branch. That follows from the rule above: a tag is immutable, so
-"patching v0.3.3" would mean publishing v0.3.4.
+"patching v0.4.0" would mean publishing v0.4.1.
 
 `svcdoctor --version` reports what you are running, and the same value is recorded in every
 report as `run.svcdoctorVersion`. A build from a working checkout reports `dev` and corresponds

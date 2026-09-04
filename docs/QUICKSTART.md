@@ -8,13 +8,13 @@ you can already reach from where you are running this.
 ## 1. Install
 
 ```sh
-go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.3.3
+go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.4.0
 ```
 
 Or run the published image, which needs no Go toolchain:
 
 ```sh
-docker run --rm ghcr.io/hakanaltindag/svcdoctor:v0.3.3 --version
+docker run --rm ghcr.io/hakanaltindag/svcdoctor:v0.4.0 --version
 ```
 
 Check it:

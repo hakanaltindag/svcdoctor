@@ -215,9 +215,12 @@ Watch the whole run, not just the build. Required gates:
       gh release download v<X.Y.Z> -p 'svcdoctor_*' -p SHA256SUMS
       sha256sum -c SHA256SUMS      # or: shasum -a 256 -c SHA256SUMS
       ```
-- [ ] **README's install section names the archives** once they exist. It currently says
-      prebuilt archives exist only for `v0.1.0`, which is true until this release publishes
-      them and false the moment it does.
+- [ ] **Public documentation names this release**, not the previous one. The install pins in
+      `README.md` and `docs/QUICKSTART.md`, the image pin in `docs/CI.md`, the Kubernetes
+      examples, the sample `svcdoctorVersion` in `docs/OUTPUT.md` and the supported-version
+      example in `SECURITY.md` all name a concrete version, and every one of them is stale the
+      moment a release publishes. Closed for v0.4.0 in the Phase 9.4 documentation commit;
+      re-do it for each release.
 - [ ] Re-running the `release` job is safe and was left safe: it verifies an existing Release
       rather than recreating it. If it ever reports a mismatch, that is §D1 of the playbook and
       needs a human, not a re-run.

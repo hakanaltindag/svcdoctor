@@ -134,7 +134,7 @@ meaning svcdoctor's own budget stopped the measurement before anything was prove
 {
   "schemaVersion": 1,
   "run": {
-    "svcdoctorVersion": "v0.3.3",
+    "svcdoctorVersion": "v0.4.0",
     "startedAt": "2026-09-01T12:00:00Z",
     "duration": "13.5ms",
     "service": "postgres",
@@ -164,7 +164,7 @@ edges, because topology discovery can create additional endpoint chains.
 {
   "schemaVersion": 1,
   "kind": "run",
-  "run": { "svcdoctorVersion": "v0.3.3", "concurrency": 4, "outputMode": "LOCAL_FULL", … },
+  "run": { "svcdoctorVersion": "v0.4.0", "concurrency": 4, "outputMode": "LOCAL_FULL", … },
   "targets": [
     { "targetId": "orders-db", "service": "postgres", "executionState": "COMPLETED",
       "report": { … }, "incomplete": false },

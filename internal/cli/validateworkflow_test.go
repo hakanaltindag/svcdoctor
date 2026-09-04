@@ -34,10 +34,23 @@ import (
 
 const validateWorkflow = ".github/workflows/validate-oci.yml"
 
-// releaseNotes is the notes file for the release candidate currently being
-// prepared. Named once because it moves every time a tag burns: v0.3.0's notes
-// became v0.3.1's, and v0.3.1's became these.
-const releaseNotes = "docs/releases/v0.3.3.md"
+// releaseNotes is the notes file for the most recently published release.
+// Named once because it moves every time a release lands, and because a tag can
+// burn: v0.3.0's notes became v0.3.1's, and v0.3.1's became v0.3.3's.
+const releaseNotes = "docs/releases/v0.4.0.md"
+
+// previousPublishedRelease is the release before `releaseNotes` — the baseline
+// its notes must name. It is the last *published* release and not the last Git
+// tag, which is the distinction v0.3.3's notes existed to make.
+const previousPublishedRelease = "v0.3.3"
+
+// burnedTagNotes is the v0.3.3 notes file, and the two assertions below are
+// facts about *that* document rather than about whichever release is current:
+// v0.3.3 is the release whose baseline was v0.1.0 and which had to account for
+// four Git tags that published nothing. It is published and immutable, so the
+// assertions stay pinned to it. The equivalent claim for the current notes is
+// checked separately, because each release has to name its own baseline.
+const burnedTagNotes = "docs/releases/v0.3.3.md"
 
 // stepBlock returns the body of the named workflow step.
 //
@@ -775,7 +788,7 @@ func TestTheSourceGateCanActuallyRunTheLinter(t *testing.T) {
 func TestEveryDocumentedSemverImageIsTheReleasedOne(t *testing.T) {
 	// The current release. One constant, so a version bump has one edit and the
 	// documents cannot drift apart from each other.
-	const released = "v0.3.3"
+	const released = "v0.4.0"
 
 	tagged := regexp.MustCompile(`(?i)ghcr\.io/[a-z0-9._/-]*svcdoctor:(v[0-9][0-9a-z.-]*)`)
 
@@ -1225,11 +1238,25 @@ func assertRetiredVersionIsNotOffered(t *testing.T, retired string) {
 		}
 	}
 
-	// And the release notes must name the correct baseline. The last public
-	// GitHub Release was v0.1.0, not the last Git tag.
-	notes, ok := readRepoFileOptional(t, releaseNotes)
+	// The current release's notes must name their own baseline, and it is the
+	// last *published* release rather than the last Git tag. That is the whole
+	// lesson of v0.3.3, applied to whatever is current.
+	current, ok := readRepoFileOptional(t, releaseNotes)
 	if !ok {
 		t.Fatalf("%s is missing", releaseNotes)
+	}
+	if !strings.Contains(current, "previous published release is **"+previousPublishedRelease+"**") {
+		t.Errorf("%s does not state %s as its baseline.\n\n"+
+			"Notes written against the last Git tag rather than the last published "+
+			"release describe changes users never received.", releaseNotes, previousPublishedRelease)
+	}
+
+	// And the v0.3.3 notes keep their own two assertions, because the four
+	// burned tags between v0.1.0 and v0.3.3 are accounted for there and nowhere
+	// else.
+	notes, ok := readRepoFileOptional(t, burnedTagNotes)
+	if !ok {
+		t.Fatalf("%s is missing", burnedTagNotes)
 	}
 	// The baseline *statement*, not any mention of the version: the notes name
 	// v0.1.0 in several places, so a whole-file check stayed green when the

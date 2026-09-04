@@ -73,6 +73,15 @@ var denials = map[string]bool{
 	// no positive claim gains an exemption. TestTheDocsClaimGuardsCanFail holds
 	// that line — an actual support claim contains none of these.
 	"neither": true, "nor": true,
+	// "unclaimed" is the release notes' way of listing the managed platforms
+	// nobody has run against — "Redpanda Cloud, Confluent Cloud, AWS MSK … remain
+	// unclaimed" is a denial of exactly the thing these guards forbid claiming,
+	// and it read as an overclaim because the vocabulary had no word for it.
+	// Found when the guards followed `releaseNotes` forward to v0.4.0.
+	//
+	// It obeys the same rule as the rest: a sentence claiming support cannot
+	// contain it.
+	"unclaimed": true,
 }
 
 // TestTheREADMENeverClaimsManagedCompatibility keeps provider names where they
@@ -106,33 +115,32 @@ func TestTheREADMENeverClaimsManagedCompatibility(t *testing.T) {
 func assertNoManagedCompatibilityClaim(t *testing.T, name string) {
 	t.Helper()
 
-	inRoadmap := false
-	for _, line := range strings.Split(readRepoFile(t, name), "\n") {
-		if strings.HasPrefix(line, "## ") {
-			inRoadmap = strings.Contains(line, "Roadmap")
-		}
-		if inRoadmap {
-			continue
-		}
-		// Sentence by sentence, not line by line. One README line carries both
-		// the opening capability claim and an unrelated "No APM ... is required"
-		// beside it, and a line-level denial check let a planted "including
-		// Confluent Cloud, AWS MSK and Redpanda" ride on that neighbouring "No".
-		for _, sentence := range claimSentences(line) {
-			for _, provider := range managedProviders {
-				if !strings.Contains(sentence, provider) || denies(sentence) {
-					continue
-				}
-				t.Errorf("%s names %s outside the Roadmap without denying "+
-					"support:\n  %s\n\n"+
-					"Kafka BASIC is validated against Apache Kafka and PostgreSQL "+
-					"BASIC against PostgreSQL and pgBouncer. Protocol similarity is "+
-					"not evidence, and managed-service compatibility is an open "+
-					"backlog item.", name, provider, sentence)
+	// Claim units, not lines. Two defects, learned in that order.
+	//
+	// Sentence by sentence, because one README line carries both the opening
+	// capability claim and an unrelated "No APM ... is required" beside it, and a
+	// line-level denial check let a planted "including Confluent Cloud, AWS MSK
+	// and Redpanda" ride on that neighbouring "No".
+	//
+	// And *across* lines, because Markdown wraps prose to a column: the release
+	// notes' "Redpanda Cloud, Confluent Cloud, AWS MSK … remain unclaimed" puts
+	// the providers on one line and the denial on the next, and a line-wise walk
+	// saw the first half alone. The sibling guards already used `claimUnits` for
+	// exactly this; this one did not, and it went unnoticed until the guards
+	// followed `releaseNotes` forward to a document whose denial wraps.
+	for _, sentence := range claimUnits(docOutsideRoadmap(t, name)) {
+		for _, provider := range managedProviders {
+			if !strings.Contains(sentence, provider) || denies(sentence) {
+				continue
 			}
+			t.Errorf("%s names %s outside the Roadmap without denying "+
+				"support:\n  %s\n\n"+
+				"Kafka BASIC is validated against Apache Kafka and PostgreSQL "+
+				"BASIC against PostgreSQL and pgBouncer. Protocol similarity is "+
+				"not evidence, and managed-service compatibility is an open "+
+				"backlog item.", name, provider, sentence)
 		}
 	}
-
 }
 
 // TestTheDocsRecordIPLiteralSupport is the inverse of the guard Phase 6.5 held

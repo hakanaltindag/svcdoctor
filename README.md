@@ -60,13 +60,13 @@ no SQL, so no customer data is touched and none can appear in a report.
 ## Install
 
 ```sh
-go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.3.3
+go install github.com/hakanaltindag/svcdoctor/cmd/svcdoctor@v0.4.0
 ```
 
 Or run the published image, which needs no Go toolchain:
 
 ```sh
-docker run --rm ghcr.io/hakanaltindag/svcdoctor:v0.3.3 \
+docker run --rm ghcr.io/hakanaltindag/svcdoctor:v0.4.0 \
   diagnose postgres --host db.internal --user app
 ```
 
@@ -81,10 +81,23 @@ go build -o svcdoctor ./cmd/svcdoctor
 recorded in every report. A build from a working checkout — or from a modified one — reports
 `dev`, because neither corresponds to a released commit.
 
+Or download a prebuilt archive from the
+[v0.4.0 release](https://github.com/hakanaltindag/svcdoctor/releases/tag/v0.4.0). Five platforms
+are published — `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64` and
+`windows/amd64` — each containing the binary, `LICENSE` and `README.md`. Verify what you
+downloaded before running it:
+
+```sh
+sha256sum -c SHA256SUMS      # or: shasum -a 256 -c SHA256SUMS
+```
+
+The archives are checksummed, not signed; the *image* is what carries a cosign signature and an
+attested SBOM.
+
 Published images are on GHCR: `ghcr.io/hakanaltindag/svcdoctor`, `linux/amd64` and
-`linux/arm64`. Pin the digest for anything that matters. There is deliberately no moving tag,
-so every reference names an exact version. There are no Homebrew, apt or RPM distributions,
-and prebuilt binary archives exist only for `v0.1.0`.
+`linux/arm64`. Pin the digest for anything that matters. There is deliberately no moving tag —
+no `latest`, no `v0`, no `v0.4` — so every reference names an exact version. There are no
+Homebrew, apt or RPM distributions.
 
 ### One platform note, because it affects what svcdoctor measures
 
@@ -350,7 +363,7 @@ rather than user documentation. You should not need any of them to run svcdoctor
 docker run --rm \
   --read-only --cap-drop=ALL --security-opt=no-new-privileges --user=65532:65532 \
   -v /run/secrets/pg:/run/secrets:ro \
-  ghcr.io/hakanaltindag/svcdoctor:v0.3.3 \
+  ghcr.io/hakanaltindag/svcdoctor:v0.4.0 \
   diagnose postgres --host db.internal --user app \
     --password-file /run/secrets/password --output json
 ```
@@ -553,9 +566,10 @@ cross-package and environment-dependent tests.
 
 ## Roadmap
 
-`v0.1.0` was PostgreSQL only. `v0.3.3` is the current release, the first published as a signed,
-attested container image, and it carries PostgreSQL and Kafka. Redis/Valkey, RabbitMQ/LavinMQ
-and `svcdoctor run --config` are implemented and **not yet in a published release**.
+`v0.1.0` was PostgreSQL only. `v0.3.3` added Kafka and was the first published as a signed,
+attested container image. **`v0.4.0` is the current release**: it is the first to carry all four
+service families — PostgreSQL, Kafka, Redis/Valkey and RabbitMQ/LavinMQ — and
+`svcdoctor run --config`, and the first since `v0.1.0` to publish prebuilt binary archives.
 
 Next, in no committed order:
 
