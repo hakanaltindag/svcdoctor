@@ -23,7 +23,7 @@ func TestDNSNoAddressIsConfirmed(t *testing.T) {
 	lookup := b.lookup(advertisement, "broker-2.internal", domain.StateFail, domain.FailureDNSNoAddress)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	confirmed(t, f)
 	wantRefs(t, f, exchange, advertisement, lookup)
 	assertRefsAreClean(t, graph, f, exchange, advertisement)
@@ -43,7 +43,7 @@ func TestDNSResolverFailureIsConfirmed(t *testing.T) {
 		advertisement, "broker-2.internal", domain.StateFail, domain.FailureDNSResolverFailure)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	confirmed(t, f)
 	wantRefs(t, f, exchange, advertisement, lookup)
 
@@ -63,7 +63,7 @@ func TestPlaintextSingleRefusedConnectionIsConfirmed(t *testing.T) {
 	refused := b.connect(lookup, "10.20.0.2", 9093, domain.StateFail, domain.FailureTCPConnectionRefused)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	confirmed(t, f)
 	wantRefs(t, f, exchange, advertisement, refused)
 	assertRefsAreClean(t, graph, f, exchange, advertisement)
@@ -84,7 +84,7 @@ func TestPlaintextEveryConnectionFailsIsOneFinding(t *testing.T) {
 	second := b.connect(lookup, "10.20.0.2", 9093, domain.StateFail, domain.FailureTCPConnectionTimeout)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	confirmed(t, f)
 	wantRefs(t, f, exchange, advertisement, first, second)
 
@@ -111,7 +111,7 @@ func TestTLSPlanWithEveryConnectionFailedCitesTheBlockerNotTheSkip(t *testing.T)
 	secondSkip := b.skippedHandshake(second, "10.20.0.2", 9093)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	confirmed(t, f)
 
 	// Identical to the plaintext row: the references do not depend on the plan.
@@ -148,7 +148,7 @@ func TestTLSPlanWithEveryHandshakeFailedIsConfirmed(t *testing.T) {
 		secondTCP, "10.20.0.2", 9093, domain.StateFail, domain.FailureTLSHostnameMismatch)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	confirmed(t, f)
 
 	// No TCP PASS node: a failed handshake exists only if the connection was
@@ -178,7 +178,7 @@ func TestMixedCausalLayersCitesEachPathsOwnOwner(t *testing.T) {
 		connected, "10.20.0.2", 9093, domain.StateFail, domain.FailureTLSUnknownAuthority)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	confirmed(t, f)
 	wantRefs(t, f, exchange, advertisement, refused, rejected)
 	assertRefsAreClean(t, graph, f, exchange, advertisement)
@@ -245,7 +245,7 @@ func TestRecommendationsFollowTheEvidencedLayers(t *testing.T) {
 			advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 			tc.build(b, advertisement)
 
-			f := only(t, AdvertisedEndpointUnreachable(b.freeze()))
+			f := only(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 			got := make([]string, 0, len(f.Recommendations()))
 			for _, r := range f.Recommendations() {
 				got = append(got, r.Action())

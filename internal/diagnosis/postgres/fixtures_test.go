@@ -194,11 +194,11 @@ func boolPtr(v bool) *bool { return &v }
 // anchor order: the engine sorts, so wiring order must not reach the output.
 func allFindings(g domain.Graph) []domain.Finding {
 	var out []domain.Finding
-	out = append(out, Session(g)...)
-	out = append(out, Authentication(g)...)
-	out = append(out, Startup(g)...)
-	out = append(out, TLS(g)...)
-	out = append(out, SSLRequest(g)...)
+	out = append(out, Session(rctx(g))...)
+	out = append(out, Authentication(rctx(g))...)
+	out = append(out, Startup(rctx(g))...)
+	out = append(out, TLS(rctx(g))...)
+	out = append(out, SSLRequest(rctx(g))...)
 	domain.SortFindings(out)
 	return out
 }

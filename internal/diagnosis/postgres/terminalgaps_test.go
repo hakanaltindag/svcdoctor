@@ -106,7 +106,7 @@ func TestAMissingCredentialIsNotConfusedWithAnythingElse(t *testing.T) {
 			b.authNode(c.state, c.class, "", nil, "")
 			graph := b.freeze()
 
-			findings := Authentication(graph)
+			findings := Authentication(rctx(graph))
 			if c.want == "" {
 				if len(findings) != 0 {
 					t.Fatalf("got %v, want no finding", codesOf(findings))
@@ -244,7 +244,7 @@ func TestTheNegotiationFloorRequiresAFailedNegotiation(t *testing.T) {
 			b := newBuilder(t)
 			b.sslNode(state, domain.FailureProtocolUnexpectedResponse, nil)
 
-			if got := SSLRequest(b.freeze()); len(got) != 0 {
+			if got := SSLRequest(rctx(b.freeze())); len(got) != 0 {
 				t.Errorf("got %v, want none: only a failed negotiation is a failure",
 					codesOf(got))
 			}

@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicerabbitmq "github.com/hakanaltindag/svcdoctor/internal/service/rabbitmq"
 )
@@ -36,7 +37,9 @@ const (
 //
 // It is a diagnosis.Rule. It anchors at the connection_start node and keys on
 // the node's own state, so it cannot fire for a step that passed.
-func ConnectionStart(g domain.Graph) []domain.Finding {
+func ConnectionStart(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range nodesAt(g, servicerabbitmq.StepConnectionStart) {
 		if node.State() != domain.StateFail {

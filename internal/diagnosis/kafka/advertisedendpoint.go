@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
@@ -76,7 +77,9 @@ const discriminator = "re-run with a larger execution budget so the unmeasured p
 // named the endpoint, and the contrast with a successful bootstrap; a generic
 // one would add nothing the evidence node does not already state, which is the
 // duplicate test ADR 0034 section 3 defines.
-func AdvertisedEndpointUnreachable(g domain.Graph) []domain.Finding {
+func AdvertisedEndpointUnreachable(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	// Graph.Nodes returns canonical order, so the findings are produced in a
 	// deterministic order before the engine sorts them, and the rule's own

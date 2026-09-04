@@ -26,7 +26,7 @@ func TestFailureBesideAnUnknownPathIsAHypothesis(t *testing.T) {
 		lookup, "10.20.0.2", 9093, domain.StateUnknown, domain.FailureExecLocalTimeout)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	hypothesis(t, f)
 
 	// Both halves of the claim are evidenced: the failure, and the path that was
@@ -63,7 +63,7 @@ func TestFailureBesideABudgetSkippedPathIsAHypothesis(t *testing.T) {
 	budgetSkipHandshake := b.skippedHandshake(unattempted, "10.20.0.2", 9093)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	hypothesis(t, f)
 
 	// The budget-skipped TCP node is cited; both prerequisite skips beneath the
@@ -94,7 +94,7 @@ func TestSeveralFailuresAndSeveralUnmeasuredPathsCiteEveryOwner(t *testing.T) {
 	cancelled := b.connect(lookup, "10.20.0.4", 9093, domain.StateSkipped, domain.FailureExecCancelled)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	hypothesis(t, f)
 	wantRefs(t, f, exchange, advertisement, refused, reset, timedOut, cancelled)
 }
@@ -115,7 +115,7 @@ func TestAHandshakeThatNeverFinishedIsIncompleteness(t *testing.T) {
 		secondTCP, "10.20.0.2", 9093, domain.StateUnknown, domain.FailureExecLocalTimeout)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	hypothesis(t, f)
 	wantRefs(t, f, exchange, advertisement, rejected, unfinished)
 	assertRefsAreClean(t, graph, f, exchange, advertisement)
@@ -132,7 +132,7 @@ func TestTheHypothesisDoesNotTriggerProblemsFound(t *testing.T) {
 	b.connect(lookup, "10.20.0.1", 9093, domain.StateFail, domain.FailureTCPConnectionRefused)
 	b.connect(lookup, "10.20.0.2", 9093, domain.StateUnknown, domain.FailureExecLocalTimeout)
 
-	f := only(t, AdvertisedEndpointUnreachable(b.freeze()))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 	if f.Severity() == domain.SeverityError || f.Severity() == domain.SeverityCritical {
 		t.Errorf("severity = %s; a hypothesis must not make the run exit non-zero", f.Severity())
 	}

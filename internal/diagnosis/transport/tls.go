@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
@@ -242,7 +243,9 @@ var tlsClaims = map[domain.FailureClass]tlsClaim{
 //
 // Neither needs suppression, precedence, a service-name check, Origin or
 // identifier parsing, and this file contains none.
-func TLS(g domain.Graph) []domain.Finding {
+func TLS(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	// Canonical sweep order, canonical handshake order, deterministic findings
 	// before the engine sorts anything.

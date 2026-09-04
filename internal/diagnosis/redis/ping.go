@@ -3,6 +3,7 @@ package redis
 import (
 	"fmt"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
 )
@@ -112,7 +113,9 @@ const (
 //
 // SKIPPED produces nothing: the authentication node that blocked it owns that
 // failure, and the graph records the blocking edge.
-func Ping(g domain.Graph) []domain.Finding {
+func Ping(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range nodesAt(g, serviceredis.StepPing) {
 		finding, ok := evaluatePing(node)

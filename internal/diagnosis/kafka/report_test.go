@@ -74,7 +74,7 @@ func TestAConfirmedFindingMakesTheRunReportProblems(t *testing.T) {
 	unreachable(b, exchange, 2, "broker-2.internal:9093", "broker-2.internal", "10.20.0.2")
 	graph := b.freeze()
 
-	report := assemble(t, graph, AdvertisedEndpointUnreachable(graph))
+	report := assemble(t, graph, AdvertisedEndpointUnreachable(rctx(graph)))
 	summary := report.Summary()
 
 	if summary.Status() != domain.SummaryStatusProblemsFound {
@@ -100,7 +100,7 @@ func TestAHypothesisAloneDoesNotReportProblems(t *testing.T) {
 	b.connect(l, "10.20.0.2", 9093, domain.StateUnknown, domain.FailureExecLocalTimeout)
 	graph := b.freeze()
 
-	report := assemble(t, graph, AdvertisedEndpointUnreachable(graph))
+	report := assemble(t, graph, AdvertisedEndpointUnreachable(rctx(graph)))
 	summary := report.Summary()
 
 	if summary.Status() != domain.SummaryStatusOK {
@@ -139,7 +139,7 @@ func TestCanonicalJSONIsStable(t *testing.T) {
 		}
 		graph := b.freeze()
 
-		encoded, err := json.Marshal(assemble(t, graph, AdvertisedEndpointUnreachable(graph)).Findings())
+		encoded, err := json.Marshal(assemble(t, graph, AdvertisedEndpointUnreachable(rctx(graph))).Findings())
 		if err != nil {
 			t.Fatalf("marshalling findings: %v", err)
 		}
@@ -155,11 +155,14 @@ func TestCanonicalJSONIsStable(t *testing.T) {
 // diagnosis.Rule shape, so no contract change was needed to add the first
 // service rule.
 //
-// There is no registry, no RulesForService and no init registration. Service
-// selection happens by explicit wiring at a composition root that does not exist
-// yet (ADR 0009), and the rule itself is enough until it does.
+// There is still no RulesForService and no init registration. Phase 10.1a added
+// a Registry, and it changed nothing about that: a registry is assembled by
+// explicit wiring at a composition root and holds only what that root put in it
+// (ADR 0009, ADR 0080 section 2.4).
 func TestTheRuleWiresIntoTheEngineUnchanged(t *testing.T) {
-	engine := diagnosis.NewEngine(AdvertisedEndpointUnreachable)
+	var _ diagnosis.Rule = AdvertisedEndpointUnreachable
+
+	engine := testEngine(AdvertisedEndpointUnreachable)
 	if engine.RuleCount() != 1 {
 		t.Fatalf("rule count = %d, want 1", engine.RuleCount())
 	}
@@ -169,7 +172,7 @@ func TestTheRuleWiresIntoTheEngineUnchanged(t *testing.T) {
 	unreachable(b, exchange, 2, "broker-2.internal:9093", "broker-2.internal", "10.20.0.2")
 	reachable(b, exchange, 3, "broker-3.internal:9093", "broker-3.internal", "10.20.0.3")
 
-	findings := engine.Diagnose(b.freeze())
+	findings := engine.Diagnose(rctx(b.freeze()))
 	if len(findings) != 1 {
 		t.Fatalf("findings = %d, want 1", len(findings))
 	}
@@ -191,7 +194,7 @@ func TestAnUnusableAdvertisementAssemblesAndReportsProblems(t *testing.T) {
 	b.unusable(exchange, 2, ":9093", "", 9093)
 	graph := b.freeze()
 
-	findings := UnusableAdvertisement(graph)
+	findings := UnusableAdvertisement(rctx(graph))
 	report := assemble(t, graph, findings)
 	summary := report.Summary()
 
@@ -223,7 +226,7 @@ func TestBothKafkaFindingsAssembleTogether(t *testing.T) {
 	b.unusable(exchange, 3, "broker-3.internal:0", "broker-3.internal", 0)
 	graph := b.freeze()
 
-	report := assemble(t, graph, bothRules().Diagnose(graph))
+	report := assemble(t, graph, bothRules().Diagnose(rctx(graph)))
 	if len(report.Findings()) != 2 {
 		t.Fatalf("findings = %d, want 2", len(report.Findings()))
 	}

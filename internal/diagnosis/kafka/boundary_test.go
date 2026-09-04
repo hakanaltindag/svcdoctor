@@ -58,8 +58,19 @@ func parse(t *testing.T, name string) *ast.File {
 // a leaf vocabulary package rather than the boundary being weakened to reach
 // them (ADR 0034 section 19). Anything else appearing here would be a layer this
 // package has no business touching.
+//
+// # Why internal/diagnosis is on the list from Phase 10.1a
+//
+// ADR 0080 section 2.1 widened diagnosis.Rule from a graph to a RuleContext, so
+// a rule package must name the type it accepts. ADR 0080 section 2.6 draws the
+// direction that makes that safe: a rule package imports the engine, the engine
+// imports no subpackage of its own, and a cycle is therefore impossible rather
+// than merely avoided. The allowlist keeps the sharper half honest — an import
+// of a *sibling* rule package would still fail here, which is the coupling that
+// would let one service's reasoning depend on another's.
 func TestTheRuleImportsOnlyDomainAndTheKafkaVocabulary(t *testing.T) {
 	allowed := map[string]bool{
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis":     true,
 		"github.com/hakanaltindag/svcdoctor/internal/domain":        true,
 		"github.com/hakanaltindag/svcdoctor/internal/service/kafka": true,
 	}
@@ -104,19 +115,25 @@ func TestTheRulePerformsNoIO(t *testing.T) {
 	}
 }
 
-// TestTheRuleHasTheUnchangedContractShape proves no argument was added.
+// TestTheRuleHasTheFrozenContractShape proves the rule takes exactly the frozen
+// context and returns exactly findings.
 //
-// A context, a ServiceID, a Vantage or a Report on this signature would each be
-// a contract change to diagnosis.Rule, and none was needed: the graph carries
-// everything the policy asks for.
-func TestTheRuleHasTheUnchangedContractShape(t *testing.T) {
+// It read "want domain.Graph" until Phase 10.1a. ADR 0080 section 2.1 replaced
+// the graph with RuleContext, once, so that the *next* admitted fact is a field
+// on that struct rather than a third signature — and RuleContext's own field set
+// is pinned separately, so widening it stays a decision rather than a drift.
+//
+// The rest of the assertion is unchanged and is the point: one argument, one
+// result. A context.Context, a ServiceID or a Report appearing here would each
+// be a contract change, and none is needed.
+func TestTheRuleHasTheFrozenContractShape(t *testing.T) {
 	var rule diagnosis.Rule = AdvertisedEndpointUnreachable
 
 	signature := reflect.TypeOf(rule)
 	if signature.NumIn() != 1 {
 		t.Fatalf("the rule takes %d arguments, want 1", signature.NumIn())
 	}
-	if got, want := signature.In(0), reflect.TypeOf(domain.Graph{}); got != want {
+	if got, want := signature.In(0), reflect.TypeOf(diagnosis.RuleContext{}); got != want {
 		t.Errorf("argument = %s, want %s", got, want)
 	}
 	if signature.NumOut() != 1 {
@@ -145,7 +162,7 @@ func TestTheRuleDoesNotMutateTheGraph(t *testing.T) {
 	}
 	length := graph.Len()
 
-	AdvertisedEndpointUnreachable(graph)
+	AdvertisedEndpointUnreachable(rctx(graph))
 
 	if graph.Len() != length {
 		t.Errorf("graph length changed from %d to %d", length, graph.Len())

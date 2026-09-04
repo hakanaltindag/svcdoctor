@@ -3,6 +3,7 @@ package kafka
 import (
 	"fmt"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
@@ -638,7 +639,9 @@ var protocolLayers = map[domain.Step]domain.Layer{
 //
 // **Local budget outcomes.** `UNKNOWN` with `EXEC_LOCAL_TIMEOUT` or
 // `EXEC_CANCELLED` reaches the operator as `Result.Incomplete()`.
-func Protocol(g domain.Graph) []domain.Finding {
+func Protocol(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	// Canonical node order in, deterministic findings out, before the engine
 	// sorts anything.

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
@@ -239,7 +240,9 @@ var tlsClaims = map[domain.FailureClass]tlsClaim{
 // not the anchor, and not `postgres.startup`, `postgres.authentication` or
 // `postgres.session`. It changes no path selection, presents no credential and
 // introduces no retry.
-func TLS(g domain.Graph) []domain.Finding {
+func TLS(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	// Canonical node order in, deterministic order out, before the engine sorts.
 	for _, node := range g.Nodes() {

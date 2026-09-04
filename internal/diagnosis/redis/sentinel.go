@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
 )
@@ -49,7 +50,9 @@ const (
 // It is a diagnosis.Rule. It anchors at the HELLO node and reads one attribute
 // on it, which the adapter took from a closed set — so the predicate cannot be
 // satisfied by a string the peer chose.
-func Sentinel(g domain.Graph) []domain.Finding {
+func Sentinel(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range nodesAt(g, serviceredis.StepHello) {
 		mode, ok := stringAttr(node, serviceredis.AttrMode)

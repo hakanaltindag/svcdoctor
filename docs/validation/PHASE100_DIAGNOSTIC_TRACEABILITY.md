@@ -3,8 +3,35 @@
 Every load-bearing contract frozen by ADRs 0078–0083, with its owner, its future implementation
 site, its future test, and whether it is security- or schema-relevant.
 
-**Nothing here is implemented.** The "package" and "test" columns name where the contract will
-land, so that a later phase can be checked against this table rather than against memory.
+**Phase 10.0 implemented nothing; Phase 10.1A implemented part of this table.** The "package"
+and "test" columns name where each contract lands, so that a later phase can be checked against
+this table rather than against memory. The status column below says which are done.
+
+## Phase 10.1A status
+
+Implemented and enforced by a named test:
+
+`DIAG-009` `DIAG-011` `DIAG-012` `DIAG-015` `DIAG-016` `DIAG-017` `DIAG-018` `DIAG-019`
+`DIAG-020` `DIAG-021` `DIAG-022` `DIAG-023` `DIAG-024` `DIAG-025` `DIAG-026` `DIAG-027`
+`DIAG-028` `DIAG-031` `DIAG-032` `DIAG-033` `DIAG-034` `DIAG-035` `DIAG-036` `DIAG-037`
+`DIAG-039` `DIAG-041` `DIAG-042` `DIAG-047` `DIAG-048`
+
+Implemented internally and **not emitted**, by the 10.1a/10.1b split in
+`docs/design/DIAGNOSTIC_INTELLIGENCE.md` section P: `DIAG-013` (the boundary is computed and
+tested against all six shapes; the finding code arrives in 10.1b, so the count is still 60).
+
+Unchanged and still true without new work: `DIAG-001` `DIAG-002` `DIAG-003` `DIAG-010`
+`DIAG-029` `DIAG-046`.
+
+Belonging to a later phase: `DIAG-004` `DIAG-005` `DIAG-006` `DIAG-007` `DIAG-008` `DIAG-014`
+`DIAG-030` `DIAG-038` `DIAG-040` `DIAG-043` `DIAG-044` `DIAG-045` — the renderer guards
+(10.5), the golden incident corpus (10.6), and the claim-discipline properties that need a
+service rule to hold them against (10.2 onward). `DIAG-005` and `DIAG-008` have generic
+analogues that *are* held now — `P03`, `P04` and the boundary properties — and gain their
+per-rule form when rules exist to test.
+
+See `docs/validation/PHASE101A_DIAGNOSTIC_CORE_VALIDATION.md`, which also records three
+deviations from the frozen records and why each was taken.
 
 **Scope note.** Thirty-four requirements, not three hundred. A row earns its place by being a
 contract someone could plausibly break; restating a type definition is not one.
@@ -80,3 +107,6 @@ failure classes **42** · `Reveal` **4** · `SecretFor` **4** · external module
 
 Authorized to change in 10.1, and nowhere else: finding codes **60 → 61**
 (`DIAG_FAILURE_BOUNDARY`), and three additive fields inside `recommendations[]`.
+
+**Re-proven unchanged at the end of Phase 10.1A.** Both authorized changes belong to 10.1b,
+which is the half of the split that changes reports; 10.1a took neither.

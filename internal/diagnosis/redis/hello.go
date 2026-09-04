@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
 )
@@ -55,7 +56,9 @@ const (
 //     cut short, and a finding would dress svcdoctor's limit as a target defect.
 //
 // SKIPPED produces nothing either: its blocker owns that failure.
-func Hello(g domain.Graph) []domain.Finding {
+func Hello(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range nodesAt(g, serviceredis.StepHello) {
 		if node.State() != domain.StateFail {

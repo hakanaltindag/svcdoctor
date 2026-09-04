@@ -179,12 +179,27 @@ func TestTheCompositionWiresEveryOwnerOfWhatItCanProduce(t *testing.T) {
 		"diagnosiskafka.UnusableAdvertisement",
 	}
 
-	got := rulesWiredIn(t, filepath.Join(repositoryRoot(t), kafkaCompositionFile))
+	wantIDs := []string{
+		"transport/dns",
+		"transport/tcp",
+		"transport/tls",
+		"kafka/protocol",
+		"kafka/advertised-endpoint",
+		"kafka/unusable-advertisement",
+	}
+
+	gotIDs, got := rulesWiredIn(t, filepath.Join(repositoryRoot(t), kafkaCompositionFile))
 
 	if !slices.Equal(got, want) {
 		t.Errorf("DiagnoseKafka wires %v,\nwant %v.\n\n"+
 			"An outcome whose owner is not wired reaches the report as findings=[] "+
 			"and status OK, which is precisely what ADR 0054 forbids.", got, want)
+	}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Errorf("DiagnoseKafka registers %v,\nwant %v.\n\n"+
+			"A rule identity is stable, lower-case and hyphenated, and the generic "+
+			"transport rules must carry the same identity in every composition root "+
+			"(ADR 0080 section 2.5, ADR 0081 section 2.6).", gotIDs, wantIDs)
 	}
 }
 
@@ -403,32 +418,66 @@ func TestTheProtocolClosureTestExists(t *testing.T) {
 
 // --- source helpers ---------------------------------------------------------
 
-// rulesWiredIn returns the rule expressions passed to diagnosis.NewEngine, in
-// source order.
-func rulesWiredIn(t *testing.T, path string) []string {
+// rulesWiredIn returns the identities and the rule expressions a composition
+// root registers, in source order.
+//
+// # Why it reads an Add chain rather than NewEngine's arguments
+//
+// It read NewEngine's arguments until Phase 10.1a. ADR 0080 sections 2.4 and 2.5
+// gave every rule a stable identity and made a rule set a frozen, identified
+// collection, so the wiring moved into a `diagnosis.NewRuleSet().Add(id, rule)`
+// chain and NewEngine now takes the frozen result. The property this guard
+// exists for is unchanged and so is its exactness in both directions: a produced
+// outcome whose owner is not wired reaches a report as silence (ADR 0054).
+//
+// Both halves are returned because both can drift. A misspelled identity would
+// not change which rules ran today, but it would silently give one rule two
+// names across the four composition roots that share the generic transport
+// rules — and the merge tie-break of ADR 0081 section 2.6 is defined on that
+// name.
+func rulesWiredIn(t *testing.T, path string) (ids []string, rules []string) {
 	t.Helper()
 
-	var rules []string
-	found := false
+	sets := 0
 	ast.Inspect(parseFile(t, path), func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
-		if !ok || selectorName(call.Fun) != "diagnosis.NewEngine" {
+		if !ok {
 			return true
 		}
-		if found {
-			t.Errorf("%s calls diagnosis.NewEngine more than once; "+
-				"one composition wires one engine", path)
+		if selectorName(call.Fun) == "diagnosis.NewRuleSet" {
+			sets++
+			return true
 		}
-		found = true
-		for _, arg := range call.Args {
-			rules = append(rules, selectorName(arg))
+
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Add" || len(call.Args) != 2 {
+			return true
 		}
+		literal, ok := call.Args[0].(*ast.BasicLit)
+		if !ok {
+			t.Errorf("%s registers a rule under a non-literal identity; "+
+				"a rule identity must never be derived from a runtime value "+
+				"(ADR 0081 section 2.6)", path)
+			return true
+		}
+		ids = append(ids, strings.Trim(literal.Value, `"`))
+		rules = append(rules, selectorName(call.Args[1]))
 		return true
 	})
-	if !found {
-		t.Fatalf("%s wires no diagnosis engine", path)
+
+	switch {
+	case sets == 0:
+		t.Fatalf("%s builds no diagnosis rule set", path)
+	case sets > 1:
+		t.Errorf("%s builds %d rule sets; one composition wires one engine", path, sets)
 	}
-	return rules
+
+	// The chain is written outermost-call-first in the AST, which is the reverse
+	// of how a reader sees it. Restoring source order is what makes the expected
+	// list in each guard readable beside the composition it pins.
+	slices.Reverse(ids)
+	slices.Reverse(rules)
+	return ids, rules
 }
 
 // selectorName renders `pkg.Name`, or the empty string for anything else.

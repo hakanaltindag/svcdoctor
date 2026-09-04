@@ -129,7 +129,7 @@ func pass(t *testing.T, o options) *run {
 			t.Fatalf("Freeze: %v", ferr)
 		}
 		out.graph = graph
-		out.findings = engine().Diagnose(graph)
+		out.findings = engine().Diagnose(diagnosis.RuleContext{Graph: graph})
 		out.report = assemble(t, graph, out.findings, o)
 		out.shareable = mustRedact(t, out.report)
 		out.elapsed = time.Since(started)
@@ -203,10 +203,17 @@ func pass(t *testing.T, o options) *run {
 
 // engine wires both Kafka rules, the way a composition root would.
 func engine() diagnosis.Engine {
-	return diagnosis.NewEngine(
-		diagnosiskafka.AdvertisedEndpointUnreachable,
-		diagnosiskafka.UnusableAdvertisement,
-	)
+	// The identities match the ones internal/app registers these rules under, so
+	// this harness and the production path differ in nothing but the graph. See
+	// ADR 0080 sections 2.4 and 2.5.
+	registry, err := diagnosis.NewRuleSet().
+		Add("kafka/advertised-endpoint", diagnosiskafka.AdvertisedEndpointUnreachable).
+		Add("kafka/unusable-advertisement", diagnosiskafka.UnusableAdvertisement).
+		Freeze()
+	if err != nil {
+		panic("integration harness: freezing the rule set: " + err.Error())
+	}
+	return diagnosis.NewEngine(registry)
 }
 
 func assemble(t *testing.T, g domain.Graph, f []domain.Finding, o options) domain.Report {

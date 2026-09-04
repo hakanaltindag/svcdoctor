@@ -36,7 +36,7 @@ func TestOneUnreachableBrokerAmongThreeProducesOneFinding(t *testing.T) {
 	unreachable(b, exchange, 2, "broker-2.internal:9093", "broker-2.internal", "10.20.0.2")
 	reachable(b, exchange, 3, "broker-3.internal:9093", "broker-3.internal", "10.20.0.3")
 
-	f := only(t, AdvertisedEndpointUnreachable(b.freeze()))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 	confirmed(t, f)
 	if got := f.Subject().Ref(); got != "broker-2.internal:9093" {
 		t.Errorf("subject = %q, want the unreachable advertisement's endpoint", got)
@@ -53,7 +53,7 @@ func TestThreeUnreachableBrokersProduceThreeIndependentFindings(t *testing.T) {
 	unreachable(b, exchange, 2, "broker-2.internal:9093", "broker-2.internal", "10.20.0.2")
 	unreachable(b, exchange, 3, "broker-3.internal:9093", "broker-3.internal", "10.20.0.3")
 
-	findings := AdvertisedEndpointUnreachable(b.freeze())
+	findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 	if len(findings) != 3 {
 		t.Fatalf("findings = %d, want 3 (one per advertisement, never an aggregate)", len(findings))
 	}
@@ -92,7 +92,7 @@ func TestConfirmedHypothesisAndReachableCoexist(t *testing.T) {
 
 	reachable(b, exchange, 3, "broker-3.internal:9093", "broker-3.internal", "10.20.0.3")
 
-	findings := AdvertisedEndpointUnreachable(b.freeze())
+	findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 	if len(findings) != 2 {
 		t.Fatalf("findings = %d, want 2: %v", len(findings), summaries(findings))
 	}
@@ -124,7 +124,7 @@ func TestTwoAdvertisementsOfOneEndpointProduceTwoFindings(t *testing.T) {
 	unreachable(b, exchange, 1, "broker.internal:9093", "broker.internal", "10.20.0.9")
 	unreachable(b, exchange, 2, "broker.internal:9093", "broker.internal", "10.20.0.9")
 
-	findings := AdvertisedEndpointUnreachable(b.freeze())
+	findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 	if len(findings) != 2 {
 		t.Fatalf("findings = %d, want 2 (two advertisement facts, one endpoint)", len(findings))
 	}
@@ -144,7 +144,7 @@ func TestOneNodeIDAtTwoEndpointsProducesTwoFindings(t *testing.T) {
 	unreachable(b, exchange, 1, "broker-a.internal:9093", "broker-a.internal", "10.20.0.1")
 	unreachable(b, exchange, 1, "broker-b.internal:9093", "broker-b.internal", "10.20.0.2")
 
-	findings := AdvertisedEndpointUnreachable(b.freeze())
+	findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 	if len(findings) != 2 {
 		t.Fatalf("findings = %d, want 2 (one node identifier, two endpoints)", len(findings))
 	}
@@ -169,7 +169,7 @@ func TestControllerIdentityDoesNotChangeSeverity(t *testing.T) {
 			})
 		unreachable(b, exchange, 2, "broker-2.internal:9093", "broker-2.internal", "10.20.0.2")
 		reachable(b, exchange, 7, "broker-7.internal:9093", "broker-7.internal", "10.20.0.7")
-		return only(t, AdvertisedEndpointUnreachable(b.freeze()))
+		return only(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 	}
 
 	// Node 2 is the unreachable broker in both graphs; in the first it is also

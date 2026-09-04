@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
@@ -119,7 +120,9 @@ var negotiationFloorClasses = map[domain.FailureClass]bool{
 // UNKNOWN — cancellation, an exhausted budget — is not a failure and produces
 // nothing. A SKIPPED node, where the run asked for no TLS, is likewise not a
 // finding: nothing failed, and `postgres.tls.plan` on that node states why.
-func SSLRequest(g domain.Graph) []domain.Finding {
+func SSLRequest(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	// Graph.Nodes returns canonical order, so findings are produced in a
 	// deterministic order before the engine sorts them, and the rule's own

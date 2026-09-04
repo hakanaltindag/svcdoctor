@@ -219,7 +219,7 @@ func TestRealHandshakeIdentityMismatchProducesTheGenericFinding(t *testing.T) {
 
 	requireHandshakeClass(t, graph, domain.FailureTLSHostnameMismatch)
 
-	findings := diagnosis.NewEngine(diagnosistransport.TLS).Diagnose(graph)
+	findings := genericTLSDiagnose(t, graph)
 	finding := requireSingleFinding(t, findings, "TLS_IDENTITY_MISMATCH")
 
 	if got := finding.Subject().Ref(); !strings.Contains(got, genericTLSAddress) {
@@ -248,7 +248,7 @@ func TestRealHandshakeUnknownAuthorityProducesTheGenericFinding(t *testing.T) {
 
 	requireHandshakeClass(t, graph, domain.FailureTLSUnknownAuthority)
 
-	findings := diagnosis.NewEngine(diagnosistransport.TLS).Diagnose(graph)
+	findings := genericTLSDiagnose(t, graph)
 	requireSingleFinding(t, findings, "TLS_CHAIN_NOT_TRUSTED")
 }
 
@@ -259,7 +259,7 @@ func TestRealHandshakePassProducesNoFinding(t *testing.T) {
 
 	requireHandshakeState(t, graph, domain.StatePass)
 
-	if findings := diagnosis.NewEngine(diagnosistransport.TLS).Diagnose(graph); len(findings) != 0 {
+	if findings := genericTLSDiagnose(t, graph); len(findings) != 0 {
 		t.Fatalf("a successful handshake produced %d findings, want none", len(findings))
 	}
 }
@@ -270,7 +270,7 @@ func TestGenericTLSFindingSurvivesRedaction(t *testing.T) {
 	peerAddr, pool := genericTLSPeer(t, genericTLSOther)
 	graph := genericTLSGraph(t, peerAddr, pool)
 
-	findings := diagnosis.NewEngine(diagnosistransport.TLS).Diagnose(graph)
+	findings := genericTLSDiagnose(t, graph)
 	local := genericTLSReport(t, graph, findings)
 	before := requireSingleFinding(t, local.Findings(), "TLS_IDENTITY_MISMATCH")
 
@@ -415,4 +415,25 @@ func genericTLSReport(
 		t.Fatalf("NewReport: %v", err)
 	}
 	return report
+}
+
+// genericTLSDiagnose runs the generic TLS rule over a graph.
+//
+// Phase 10.1a made a rule set an identified, frozen collection (ADR 0080
+// sections 2.4 and 2.5) and widened diagnosis.Rule to take a RuleContext (ADR
+// 0080 section 2.1). Both are wiring concerns, and these tests are about what
+// the rule concludes, so the wiring is written once here.
+//
+// The identity matches the one internal/app wires the same rule in under, so
+// this exercise and the production path differ in nothing but the graph.
+func genericTLSDiagnose(t *testing.T, graph domain.Graph) []domain.Finding {
+	t.Helper()
+
+	registry, err := diagnosis.NewRuleSet().
+		Add("transport/tls", diagnosistransport.TLS).
+		Freeze()
+	if err != nil {
+		t.Fatalf("freezing the rule set: %v", err)
+	}
+	return diagnosis.NewEngine(registry).Diagnose(diagnosis.RuleContext{Graph: graph})
 }

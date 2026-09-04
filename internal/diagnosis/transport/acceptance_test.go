@@ -33,7 +33,7 @@ func TestDNSFailureClassMapping(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			graph := requestedDNS(t, domain.StateFail, c.class)
 
-			finding := requireOne(t, DNS(graph), c.want)
+			finding := requireOne(t, DNS(rctx(graph)), c.want)
 
 			if got, want := finding.Subject().Ref(), "db.example.com:5432"; got != want {
 				t.Errorf("subject = %q, want the logical endpoint %q", got, want)
@@ -64,7 +64,7 @@ func TestDNSFailureClassMapping(t *testing.T) {
 			}
 
 			// TCP withholds on the same graph: no connection was measured.
-			requireNone(t, TCP(graph))
+			requireNone(t, TCP(rctx(graph)))
 		})
 	}
 }
@@ -84,8 +84,8 @@ func TestDNSWithholdsOnEveryNonFailure(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			graph := requestedDNS(t, c.state, c.class)
-			requireNone(t, DNS(graph))
-			requireNone(t, TCP(graph))
+			requireNone(t, DNS(rctx(graph)))
+			requireNone(t, TCP(rctx(graph)))
 		})
 	}
 }
@@ -102,7 +102,7 @@ func TestDNSWithholdsOnAnUnauthorizedClass(t *testing.T) {
 		domain.FailureProtocolMalformedResponse,
 	} {
 		t.Run(class.String(), func(t *testing.T) {
-			requireNone(t, DNS(requestedDNS(t, domain.StateFail, class)))
+			requireNone(t, DNS(rctx(requestedDNS(t, domain.StateFail, class))))
 		})
 	}
 }
@@ -140,7 +140,7 @@ func TestTCPAllPathsFailProducesOneFinding(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			graph := requestedTCP(t, c.outcomes...)
 
-			finding := requireOne(t, TCP(graph), CodeConnectionNotEstablished)
+			finding := requireOne(t, TCP(rctx(graph)), CodeConnectionNotEstablished)
 
 			if got, want := finding.Subject().Ref(), "db.example.com:5432"; got != want {
 				t.Errorf("subject = %q, want the logical endpoint %q", got, want)
@@ -161,7 +161,7 @@ func TestTCPAllPathsFailProducesOneFinding(t *testing.T) {
 			}
 
 			// DNS withholds on the same graph: the lookup passed.
-			requireNone(t, DNS(graph))
+			requireNone(t, DNS(rctx(graph)))
 		})
 	}
 }
@@ -188,7 +188,7 @@ func TestMixedFailureClassesProduceOneStableCode(t *testing.T) {
 				fail("10.0.0.1", first),
 				fail("10.0.0.2", second),
 			)
-			finding := requireOne(t, TCP(graph), CodeConnectionNotEstablished)
+			finding := requireOne(t, TCP(rctx(graph)), CodeConnectionNotEstablished)
 			if got := len(finding.EvidenceRefs()); got != 3 {
 				t.Errorf("%s + %s: got %d refs, want 3", first, second, got)
 			}
@@ -212,7 +212,7 @@ func TestTCPWithholdsWhenAnyPathSucceeds(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			requireNone(t, TCP(requestedTCP(t, c.outcomes...)))
+			requireNone(t, TCP(rctx(requestedTCP(t, c.outcomes...))))
 		})
 	}
 }
@@ -240,7 +240,7 @@ func TestTCPWithholdsWhenMeasurementIsIncomplete(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			requireNone(t, TCP(requestedTCP(t, c.outcomes...)))
+			requireNone(t, TCP(rctx(requestedTCP(t, c.outcomes...))))
 		})
 	}
 }
@@ -252,7 +252,7 @@ func TestTCPWithholdsOnAnUnauthorizedFailureClass(t *testing.T) {
 		fail("10.0.0.1", domain.FailureTCPConnectionRefused),
 		fail("10.0.0.2", domain.FailureProtocolPeerClosed),
 	)
-	requireNone(t, TCP(graph))
+	requireNone(t, TCP(rctx(graph)))
 }
 
 // TestRow17DNSFailureLeavesNoTCPClaim pins that a failed lookup produces the DNS
@@ -260,15 +260,15 @@ func TestTCPWithholdsOnAnUnauthorizedFailureClass(t *testing.T) {
 func TestRow17DNSFailureLeavesNoTCPClaim(t *testing.T) {
 	graph := requestedDNS(t, domain.StateFail, domain.FailureDNSNoAddress)
 
-	requireOne(t, DNS(graph), CodeNameNotResolved)
-	requireNone(t, TCP(graph))
+	requireOne(t, DNS(rctx(graph)), CodeNameNotResolved)
+	requireNone(t, TCP(rctx(graph)))
 }
 
 // TestRow18ManyAddressesStillProduceOneFinding pins the aggregation unit.
 func TestRow18ManyAddressesStillProduceOneFinding(t *testing.T) {
 	graph := requestedTCP(t, twentyFailures(t)...)
 
-	finding := requireOne(t, TCP(graph), CodeConnectionNotEstablished)
+	finding := requireOne(t, TCP(rctx(graph)), CodeConnectionNotEstablished)
 	if got := len(finding.EvidenceRefs()); got != 21 {
 		t.Errorf("got %d refs, want 21 (twenty connections and the lookup)", got)
 	}
@@ -286,8 +286,8 @@ func TestRow20ADNSNodeWithNoAnchorIsNotOwned(t *testing.T) {
 	b.connect(lookup, "10.0.0.1", domain.StateFail, domain.FailureTCPConnectionRefused)
 	graph := b.freeze()
 
-	requireNone(t, DNS(graph))
-	requireNone(t, TCP(graph))
+	requireNone(t, DNS(rctx(graph)))
+	requireNone(t, TCP(rctx(graph)))
 }
 
 // TestRows21And22ADiscoveredSweepIsNotOwned reproduces the Kafka shape.
@@ -303,8 +303,8 @@ func TestRows21And22ADiscoveredSweepIsNotOwned(t *testing.T) {
 	b.connect(lookup, "10.20.0.1", domain.StateFail, domain.FailureTCPConnectionRefused)
 	graph := b.freeze()
 
-	requireNone(t, DNS(graph))
-	requireNone(t, TCP(graph))
+	requireNone(t, DNS(rctx(graph)))
+	requireNone(t, TCP(rctx(graph)))
 }
 
 // TestAServiceNodeBeneathAConnectionIsNotDiagnosed is the PostgreSQL in-band
@@ -325,8 +325,8 @@ func TestAServiceNodeBeneathAConnectionIsNotDiagnosed(t *testing.T) {
 	graph := b.freeze()
 
 	// The connection passed, so no TCP claim; and nothing below it is reachable.
-	requireNone(t, DNS(graph))
-	requireNone(t, TCP(graph))
+	requireNone(t, DNS(rctx(graph)))
+	requireNone(t, TCP(rctx(graph)))
 }
 
 // --- shapes the rules must refuse to recognize ---------------------------------
@@ -340,8 +340,8 @@ func TestAnUnrecognizedShapeWithholdsEverything(t *testing.T) {
 			domain.LayerDNS, domain.StateFail, domain.FailureDNSNoAddress)
 		graph := b.freeze()
 
-		requireNone(t, DNS(graph))
-		requireNone(t, TCP(graph))
+		requireNone(t, DNS(rctx(graph)))
+		requireNone(t, TCP(rctx(graph)))
 	})
 
 	t.Run("two lookups under one anchor", func(t *testing.T) {
@@ -351,8 +351,8 @@ func TestAnUnrecognizedShapeWithholdsEverything(t *testing.T) {
 		b.lookup(anchor, "other.example.com", domain.StateFail, domain.FailureDNSNoAddress)
 		graph := b.freeze()
 
-		requireNone(t, DNS(graph))
-		requireNone(t, TCP(graph))
+		requireNone(t, DNS(rctx(graph)))
+		requireNone(t, TCP(rctx(graph)))
 	})
 
 	t.Run("a lookup child that is not a connection", func(t *testing.T) {
@@ -363,8 +363,8 @@ func TestAnUnrecognizedShapeWithholdsEverything(t *testing.T) {
 			domain.LayerTCP, domain.StateFail, domain.FailureTCPConnectionRefused)
 		graph := b.freeze()
 
-		requireNone(t, DNS(graph))
-		requireNone(t, TCP(graph))
+		requireNone(t, DNS(rctx(graph)))
+		requireNone(t, TCP(rctx(graph)))
 	})
 
 	t.Run("an anchor with no sweep", func(t *testing.T) {
@@ -372,8 +372,8 @@ func TestAnUnrecognizedShapeWithholdsEverything(t *testing.T) {
 		b.anchor("db.example.com:5432")
 		graph := b.freeze()
 
-		requireNone(t, DNS(graph))
-		requireNone(t, TCP(graph))
+		requireNone(t, DNS(rctx(graph)))
+		requireNone(t, TCP(rctx(graph)))
 	})
 }
 
@@ -396,7 +396,7 @@ func TestAnAnchorShapedNodeWithTheWrongFieldsIsNotAnAnchor(t *testing.T) {
 		}, "")
 		b.lookup(anchor, "db.example.com", domain.StateFail, domain.FailureDNSNoAddress)
 
-		requireNone(t, DNS(b.freeze()))
+		requireNone(t, DNS(rctx(b.freeze())))
 	})
 
 	t.Run("wrong subject kind", func(t *testing.T) {
@@ -411,7 +411,7 @@ func TestAnAnchorShapedNodeWithTheWrongFieldsIsNotAnAnchor(t *testing.T) {
 		}, "")
 		b.lookup(anchor, "db.example.com", domain.StateFail, domain.FailureDNSNoAddress)
 
-		requireNone(t, DNS(b.freeze()))
+		requireNone(t, DNS(rctx(b.freeze())))
 	})
 }
 

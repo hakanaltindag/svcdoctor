@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
@@ -101,7 +102,9 @@ const (
 // The last is deliberately a closed vocabulary. DNS_NXDOMAIN falls into it: the
 // class exists, has no producer, and gets no mapping here — dead code for an
 // unreachable case would be a claim waiting for someone to enable it.
-func DNS(g domain.Graph) []domain.Finding {
+func DNS(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, s := range collectSweeps(g) {
 		finding, ok := evaluateDNS(s)

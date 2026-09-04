@@ -210,14 +210,14 @@ func everyFindingThisPackageCanBuild(t *testing.T) []domain.Finding {
 		exchange := b.metadata(domain.StatePass)
 		advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 		tc.build(b, advertisement)
-		out = append(out, AdvertisedEndpointUnreachable(b.freeze())...)
+		out = append(out, AdvertisedEndpointUnreachable(rctx(b.freeze()))...)
 	}
 
 	// The advertisement the cluster could not state usably.
 	b := newBuilder(t)
 	exchange := b.metadata(domain.StatePass)
 	b.unusableAdvertised(exchange, 3)
-	out = append(out, UnusableAdvertisement(b.freeze())...)
+	out = append(out, UnusableAdvertisement(rctx(b.freeze()))...)
 
 	return out
 }

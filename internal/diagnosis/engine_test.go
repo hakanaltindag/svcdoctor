@@ -2,6 +2,8 @@ package diagnosis
 
 import (
 	"encoding/json"
+	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -115,7 +117,33 @@ func testFinding(t *testing.T, code string, severity domain.Severity, ref string
 
 // ruleReturning returns a rule that always emits the given findings.
 func ruleReturning(findings ...domain.Finding) Rule {
-	return func(domain.Graph) []domain.Finding { return findings }
+	return func(RuleContext) []domain.Finding { return findings }
+}
+
+// rctx wraps a graph in the context a rule receives.
+//
+// These tests are about the engine, not about what a rule reads, so the vantage
+// is unset and the run is not marked incomplete. A test that needs either says
+// so at its own call site.
+func rctx(g domain.Graph) RuleContext { return RuleContext{Graph: g} }
+
+// engineOf wires rules under positional identities and returns the engine.
+//
+// Identity matters to the engine only for duplicate detection and, later, for
+// the merge tie-break; which rule holds which name is the composition root's
+// business. Naming them positionally keeps these tests about evaluation.
+func engineOf(t *testing.T, rules ...Rule) Engine {
+	t.Helper()
+
+	set := NewRuleSet()
+	for i, rule := range rules {
+		set.Add("test/rule-"+strconv.Itoa(i), rule)
+	}
+	registry, err := set.Freeze()
+	if err != nil {
+		t.Fatalf("freezing the rule set: %v", err)
+	}
+	return NewEngine(registry)
 }
 
 func codesOf(findings []domain.Finding) []domain.FindingCode {
@@ -146,18 +174,18 @@ func TestZeroEngineHasNoRules(t *testing.T) {
 	if e.RuleCount() != 0 {
 		t.Errorf("RuleCount() = %d, want 0", e.RuleCount())
 	}
-	if got := e.Diagnose(testGraph(t)); got != nil {
+	if got := e.Diagnose(rctx(testGraph(t))); got != nil {
 		t.Errorf("Diagnose() = %v, want nil", got)
 	}
 }
 
 func TestEmptyRuleSet(t *testing.T) {
-	e := NewEngine()
+	e := engineOf(t)
 
 	if e.RuleCount() != 0 {
 		t.Errorf("RuleCount() = %d, want 0", e.RuleCount())
 	}
-	if got := e.Diagnose(testGraph(t)); got != nil {
+	if got := e.Diagnose(rctx(testGraph(t))); got != nil {
 		t.Errorf("Diagnose() = %v, want nil", got)
 	}
 }
@@ -171,12 +199,12 @@ func TestEmptyGraphIsValid(t *testing.T) {
 	}
 
 	seen := 0
-	e := NewEngine(func(g domain.Graph) []domain.Finding {
-		seen = g.Len()
+	e := engineOf(t, func(ctx RuleContext) []domain.Finding {
+		seen = ctx.Graph.Len()
 		return nil
 	})
 
-	if got := e.Diagnose(empty); got != nil {
+	if got := e.Diagnose(rctx(empty)); got != nil {
 		t.Errorf("Diagnose() = %v, want nil", got)
 	}
 	if seen != 0 {
@@ -186,9 +214,9 @@ func TestEmptyGraphIsValid(t *testing.T) {
 
 func TestOneRuleOneFinding(t *testing.T) {
 	want := testFinding(t, "TCP_CONNECTION_REFUSED", domain.SeverityError, "bad")
-	e := NewEngine(ruleReturning(want))
+	e := engineOf(t, ruleReturning(want))
 
-	got := e.Diagnose(testGraph(t))
+	got := e.Diagnose(rctx(testGraph(t)))
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1", len(got))
 	}
@@ -198,7 +226,7 @@ func TestOneRuleOneFinding(t *testing.T) {
 }
 
 func TestMultipleRules(t *testing.T) {
-	e := NewEngine(
+	e := engineOf(t,
 		ruleReturning(testFinding(t, "AAA_FIRST", domain.SeverityError, "bad")),
 		ruleReturning(testFinding(t, "BBB_SECOND", domain.SeverityError, "ok")),
 		ruleReturning(), // a rule that finds nothing
@@ -208,7 +236,7 @@ func TestMultipleRules(t *testing.T) {
 		),
 	)
 
-	got := e.Diagnose(testGraph(t))
+	got := e.Diagnose(rctx(testGraph(t)))
 	if len(got) != 4 {
 		t.Fatalf("got %d findings, want 4", len(got))
 	}
@@ -219,33 +247,55 @@ func TestMultipleRules(t *testing.T) {
 
 // TestNilRulesAreRejected pins that a wiring mistake cannot silently shrink the
 // rule set.
+//
+// # What changed in Phase 10.1a, and why it is stronger
+//
+// NewEngine used to skip a nil rule while its documentation said it rejected
+// one, so a wiring mistake produced an engine with fewer rules than the
+// composition listed and a report missing findings nobody noticed were absent.
+// Registration now refuses it: the rule set carries the error and Freeze returns
+// it, so the mistake cannot reach an Engine at all.
 func TestNilRulesAreRejected(t *testing.T) {
-	e := NewEngine(
-		ruleReturning(testFinding(t, "AAA_ONE", domain.SeverityError, "bad")),
-		nil,
-		ruleReturning(testFinding(t, "BBB_TWO", domain.SeverityError, "ok")),
-	)
+	set := NewRuleSet().
+		Add("test/one", ruleReturning(testFinding(t, "AAA_ONE", domain.SeverityError, "bad"))).
+		Add("test/nil", nil).
+		Add("test/two", ruleReturning(testFinding(t, "BBB_TWO", domain.SeverityError, "ok")))
 
-	if e.RuleCount() != 2 {
-		t.Errorf("RuleCount() = %d, want 2", e.RuleCount())
+	registry, err := set.Freeze()
+	if !errors.Is(err, ErrInvalidRuleSet) {
+		t.Fatalf("Freeze() error = %v, want ErrInvalidRuleSet", err)
 	}
-	if got := e.Diagnose(testGraph(t)); len(got) != 2 {
-		t.Errorf("got %d findings, want 2", len(got))
+	if registry.Len() != 0 {
+		t.Errorf("a refused rule set produced %d rules, want none", registry.Len())
 	}
 }
 
 // TestEngineIsImmutableAfterConstruction proves a caller cannot change an
 // engine's behaviour by reusing the slice it passed in.
 func TestEngineIsImmutableAfterConstruction(t *testing.T) {
-	rules := []Rule{ruleReturning(testFinding(t, "AAA_ONE", domain.SeverityError, "bad"))}
+	set := NewRuleSet().
+		Add("test/one", ruleReturning(testFinding(t, "AAA_ONE", domain.SeverityError, "bad")))
 
-	e := NewEngine(rules...)
-	rules[0] = ruleReturning(
+	registry, err := set.Freeze()
+	if err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	e := NewEngine(registry)
+
+	// Adding to the builder after the freeze, and editing the slice the frozen
+	// registry hands out, are the two ways a caller could reach an engine's
+	// behaviour. Neither does.
+	set.Add("test/injected", ruleReturning(
 		testFinding(t, "ZZZ_INJECTED", domain.SeverityCritical, "ok"),
 		testFinding(t, "YYY_INJECTED", domain.SeverityCritical, "ok"),
-	)
+	))
+	handedOut := registry.Rules()
+	if len(handedOut) != 1 {
+		t.Fatalf("Rules() = %d entries, want 1", len(handedOut))
+	}
+	handedOut[0] = RegisteredRule{}
 
-	got := e.Diagnose(testGraph(t))
+	got := e.Diagnose(rctx(testGraph(t)))
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1", len(got))
 	}
@@ -258,18 +308,18 @@ func TestEngineIsImmutableAfterConstruction(t *testing.T) {
 
 func TestRepeatedEvaluationIsIdentical(t *testing.T) {
 	g := testGraph(t)
-	e := NewEngine(
+	e := engineOf(t,
 		ruleReturning(testFinding(t, "BBB_TWO", domain.SeverityWarn, "ok")),
 		ruleReturning(testFinding(t, "AAA_ONE", domain.SeverityCritical, "bad")),
 		ruleReturning(testFinding(t, "CCC_THREE", domain.SeverityInfo, "later")),
 	)
 
-	first, err := json.Marshal(e.Diagnose(g))
+	first, err := json.Marshal(e.Diagnose(rctx(g)))
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	for i := 0; i < 25; i++ {
-		again, err := json.Marshal(e.Diagnose(g))
+		again, err := json.Marshal(e.Diagnose(rctx(g)))
 		if err != nil {
 			t.Fatalf("json.Marshal: %v", err)
 		}
@@ -302,7 +352,7 @@ func TestFindingOrderIsCanonicalNotRuleOrder(t *testing.T) {
 			wired = append(wired, src[i])
 		}
 
-		got := codesOf(NewEngine(wired...).Diagnose(g))
+		got := codesOf(engineOf(t, wired...).Diagnose(rctx(g)))
 		if !equalCodes(got, want) {
 			t.Errorf("rule order %v produced %v, want %v", order, got, want)
 		}
@@ -318,7 +368,7 @@ func TestOrderMatchesReportOrder(t *testing.T) {
 		testFinding(t, "CCC_WARN", domain.SeverityWarn, "later"),
 	}
 
-	fromEngine := codesOf(NewEngine(ruleReturning(findings...)).Diagnose(testGraph(t)))
+	fromEngine := codesOf(engineOf(t, ruleReturning(findings...)).Diagnose(rctx(testGraph(t))))
 
 	independent := make([]domain.Finding, len(findings))
 	copy(independent, findings)
@@ -341,20 +391,20 @@ func TestGraphIsUnchangedByDiagnosis(t *testing.T) {
 	}
 
 	// A rule that reads everything it can reach, including relationship lists.
-	e := NewEngine(func(g domain.Graph) []domain.Finding {
-		for _, n := range g.Nodes() {
-			parents := g.Parents(n.ID())
+	e := engineOf(t, func(ctx RuleContext) []domain.Finding {
+		for _, n := range ctx.Graph.Nodes() {
+			parents := ctx.Graph.Parents(n.ID())
 			for i := range parents {
 				parents[i] = "mutated"
 			}
-			blockers := g.BlockedBy(n.ID())
+			blockers := ctx.Graph.BlockedBy(n.ID())
 			for i := range blockers {
 				blockers[i] = "mutated"
 			}
 		}
 		return nil
 	})
-	e.Diagnose(g)
+	e.Diagnose(rctx(g))
 
 	if g.Len() != 3 {
 		t.Errorf("Len() = %d, want 3", g.Len())
@@ -378,16 +428,24 @@ func TestGraphIsUnchangedByDiagnosis(t *testing.T) {
 
 // --- duplicates --------------------------------------------------------------
 
-// TestDuplicateFindingsArePreserved pins the decision not to deduplicate. Two
-// rules reaching the same conclusion means the rule set says it twice, and
-// deciding which to discard would require defining when two findings are the
-// same conclusion, which no document does. See ADR 0017.
-func TestDuplicateFindingsArePreserved(t *testing.T) {
+// TestP18DuplicateFindingsAreStillPreserved is the property that makes Phase
+// 10.1a a phase that changes no report.
+//
+// ADR 0017 declined to deduplicate for want of a definition of when two findings
+// are the same conclusion. ADR 0081 section 2.1 supplies it, and Converge
+// implements the merge — but nothing wires it in, deliberately: merging changes
+// the findings array, and 10.1a is the half of the split that changes nothing
+// (docs/design/DIAGNOSTIC_INTELLIGENCE.md section P).
+//
+// So the engine still concatenates and sorts. This test fails the day merging is
+// wired in, which is the day 10.1b starts and the day a golden report is
+// expected to move.
+func TestP18DuplicateFindingsAreStillPreserved(t *testing.T) {
 	duplicate := testFinding(t, "TCP_CONNECTION_REFUSED", domain.SeverityError, "bad")
 
-	e := NewEngine(ruleReturning(duplicate), ruleReturning(duplicate))
+	e := engineOf(t, ruleReturning(duplicate), ruleReturning(duplicate))
 
-	got := e.Diagnose(testGraph(t))
+	got := e.Diagnose(rctx(testGraph(t)))
 	if len(got) != 2 {
 		t.Fatalf("got %d findings, want 2 (no deduplication)", len(got))
 	}
@@ -449,6 +507,7 @@ func TestEngineHasNoServiceDispatch(t *testing.T) {
 		}](e)},
 		{"Register", hasMethod[interface{ Register(string, Rule) }](e)},
 		{"RulesFor", hasMethod[interface{ RulesFor(string) []Rule }](e)},
+		{"ForOwner", hasMethod[interface{ ForOwner(string) Engine }](e)},
 	}
 	for _, f := range forbidden {
 		if f.has {
@@ -456,9 +515,10 @@ func TestEngineHasNoServiceDispatch(t *testing.T) {
 		}
 	}
 
-	// NewEngine takes rules, not service names: a rule set is chosen by wiring.
-	if NewEngine().RuleCount() != 0 {
-		t.Error("NewEngine should accept only rules")
+	// An engine takes a frozen registry, not a service name: a rule set is
+	// chosen by wiring, and the engine cannot narrow or widen it afterwards.
+	if NewEngine(Registry{}).RuleCount() != 0 {
+		t.Error("an engine over the zero registry should hold no rules")
 	}
 }
 
@@ -469,24 +529,36 @@ func TestDiagnoseReturnsNoError(t *testing.T) {
 	var e any = Engine{}
 
 	if _, ok := e.(interface {
-		Diagnose(domain.Graph) ([]domain.Finding, error)
+		Diagnose(RuleContext) ([]domain.Finding, error)
 	}); ok {
 		t.Error("Diagnose must not return an error")
 	}
 	if _, ok := e.(interface {
-		Diagnose(domain.Graph) []domain.Finding
+		Diagnose(RuleContext) []domain.Finding
 	}); !ok {
 		t.Error("Diagnose should return findings only")
 	}
 }
 
-// TestRuleSignatureTakesOnlyTheGraph pins the contract shape decided in ADR 0017.
-func TestRuleSignatureTakesOnlyTheGraph(t *testing.T) {
-	// Compiles only while Rule is exactly func(domain.Graph) []domain.Finding.
-	var r Rule = func(domain.Graph) []domain.Finding { return nil }
+// TestRuleSignatureTakesOnlyTheRuleContext pins the contract shape.
+//
+// ADR 0017 fixed it at a graph; ADR 0080 section 2.1 widened it to RuleContext
+// in Phase 10.1a, and the widening was made once so that the next admitted fact
+// is a field rather than a third signature. The old shape must no longer
+// satisfy the type, which is what the negative half asserts.
+func TestRuleSignatureTakesOnlyTheRuleContext(t *testing.T) {
+	// Compiles only while Rule is exactly func(RuleContext) []domain.Finding.
+	var r Rule = func(RuleContext) []domain.Finding { return nil }
 
-	if got := r(testGraph(t)); got != nil {
+	if got := r(rctx(testGraph(t))); got != nil {
 		t.Errorf("a rule returning nil should yield nil, got %v", got)
+	}
+
+	var e any = Engine{}
+	if _, ok := e.(interface {
+		Diagnose(domain.Graph) []domain.Finding
+	}); ok {
+		t.Error("the pre-10.1a graph-only shape must no longer be accepted")
 	}
 }
 

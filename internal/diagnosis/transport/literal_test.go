@@ -43,7 +43,7 @@ func TestNoDNSFindingCanFireForAResolutionFreeSweep(t *testing.T) {
 			g := literalSweep(t, endpoint,
 				fail("10.0.0.1", domain.FailureTCPConnectionRefused))
 
-			if findings := DNS(g); len(findings) != 0 {
+			if findings := DNS(rctx(g)); len(findings) != 0 {
 				t.Fatalf("DNS produced %d findings for a sweep that resolved nothing: %v",
 					len(findings), findings)
 			}
@@ -68,7 +68,7 @@ func TestAResolutionFreeSweepHoldsNoDNSNode(t *testing.T) {
 func TestTheDNSRuleStillFiresForAName(t *testing.T) {
 	g := requestedDNS(t, domain.StateFail, domain.FailureDNSNoAddress)
 
-	findings := DNS(g)
+	findings := DNS(rctx(g))
 	if len(findings) != 1 || findings[0].Code() != CodeNameNotResolved {
 		t.Fatalf("DNS findings = %v, want one %s", findings, CodeNameNotResolved)
 	}
@@ -79,7 +79,7 @@ func TestTheDNSRuleStillFiresForAName(t *testing.T) {
 func TestALiteralTCPFailureIsOwned(t *testing.T) {
 	g := literalSweep(t, "10.0.0.1:5432", fail("10.0.0.1", domain.FailureTCPConnectionRefused))
 
-	findings := TCP(g)
+	findings := TCP(rctx(g))
 	if len(findings) != 1 {
 		t.Fatalf("TCP findings = %d, want 1: a reachable failing stage must have an owner", len(findings))
 	}
@@ -101,7 +101,7 @@ func TestALiteralTCPFailureIsOwned(t *testing.T) {
 func TestALiteralTCPFindingCitesOnlyItsConnections(t *testing.T) {
 	g := literalSweep(t, "10.0.0.1:5432", fail("10.0.0.1", domain.FailureTCPConnectionRefused))
 
-	refs := TCP(g)[0].EvidenceRefs()
+	refs := TCP(rctx(g))[0].EvidenceRefs()
 	if len(refs) != 1 {
 		t.Fatalf("refs = %v, want exactly the connection", refs)
 	}
@@ -113,8 +113,8 @@ func TestALiteralTCPFindingCitesOnlyItsConnections(t *testing.T) {
 // The prose must not describe resolution that did not happen. This is the
 // sentence the shipped binary printed for `--host 127.0.0.1`.
 func TestALiteralTCPFindingClaimsNoResolution(t *testing.T) {
-	literal := TCP(literalSweep(t, "10.0.0.1:5432",
-		fail("10.0.0.1", domain.FailureTCPConnectionRefused)))[0]
+	literal := TCP(rctx(literalSweep(t, "10.0.0.1:5432",
+		fail("10.0.0.1", domain.FailureTCPConnectionRefused))))[0]
 
 	for _, forbidden := range []string{
 		"the hostname resolved",
@@ -135,7 +135,7 @@ func TestALiteralTCPFindingClaimsNoResolution(t *testing.T) {
 func TestANamedTCPFindingStillDescribesResolution(t *testing.T) {
 	g := requestedTCP(t, fail("10.0.0.1", domain.FailureTCPConnectionRefused))
 
-	findings := TCP(g)
+	findings := TCP(rctx(g))
 	if len(findings) != 1 {
 		t.Fatalf("TCP findings = %d, want 1", len(findings))
 	}
@@ -147,9 +147,9 @@ func TestANamedTCPFindingStillDescribesResolution(t *testing.T) {
 // Both shapes carry one code. A second code here would split the machine
 // contract on something an operator does not act on differently.
 func TestBothShapesShareOneCode(t *testing.T) {
-	literal := TCP(literalSweep(t, "10.0.0.1:5432",
-		fail("10.0.0.1", domain.FailureTCPConnectionRefused)))[0]
-	named := TCP(requestedTCP(t, fail("10.0.0.1", domain.FailureTCPConnectionRefused)))[0]
+	literal := TCP(rctx(literalSweep(t, "10.0.0.1:5432",
+		fail("10.0.0.1", domain.FailureTCPConnectionRefused))))[0]
+	named := TCP(rctx(requestedTCP(t, fail("10.0.0.1", domain.FailureTCPConnectionRefused))))[0]
 
 	if literal.Code() != named.Code() {
 		t.Fatalf("codes diverged: %s vs %s", literal.Code(), named.Code())
@@ -174,7 +174,7 @@ func TestLiteralTCPAggregationIsUnchanged(t *testing.T) {
 	}
 	for name, outcomes := range tests {
 		t.Run(name, func(t *testing.T) {
-			if findings := TCP(literalSweep(t, "10.0.0.1:5432", outcomes...)); len(findings) != 0 {
+			if findings := TCP(rctx(literalSweep(t, "10.0.0.1:5432", outcomes...))); len(findings) != 0 {
 				t.Fatalf("TCP produced %v, want none", findings)
 			}
 		})
@@ -190,7 +190,7 @@ func TestALiteralTLSFailureIsOwned(t *testing.T) {
 	b.node(connect, "tls.handshake/10.0.0.1:9093", vocabulary.StepTLSHandshake,
 		domain.LayerTLS, domain.StateFail, domain.FailureTLSHostnameMismatch)
 
-	findings := TLS(b.freeze())
+	findings := TLS(rctx(b.freeze()))
 	if len(findings) != 1 {
 		t.Fatalf("TLS findings = %d, want 1: a reachable failing handshake must have an owner",
 			len(findings))
@@ -222,7 +222,7 @@ func TestEveryTLSClaimSurvivesTheLiteralShape(t *testing.T) {
 			b.node(connect, "tls.handshake/10.0.0.1:9093", vocabulary.StepTLSHandshake,
 				domain.LayerTLS, domain.StateFail, class)
 
-			findings := TLS(b.freeze())
+			findings := TLS(rctx(b.freeze()))
 			if len(findings) != 1 || findings[0].Code() != want {
 				t.Fatalf("findings = %v, want one %s", findings, want)
 			}
@@ -242,13 +242,13 @@ func TestAMixedSweepShapeWithholdsEveryClaim(t *testing.T) {
 	b.connect(anchor, "10.0.0.2", domain.StateFail, domain.FailureTCPConnectionRefused)
 	g := b.freeze()
 
-	if findings := TCP(g); len(findings) != 0 {
+	if findings := TCP(rctx(g)); len(findings) != 0 {
 		t.Errorf("TCP produced %v for a mixed shape, want none", findings)
 	}
-	if findings := DNS(g); len(findings) != 0 {
+	if findings := DNS(rctx(g)); len(findings) != 0 {
 		t.Errorf("DNS produced %v for a mixed shape, want none", findings)
 	}
-	if findings := TLS(g); len(findings) != 0 {
+	if findings := TLS(rctx(g)); len(findings) != 0 {
 		t.Errorf("TLS produced %v for a mixed shape, want none", findings)
 	}
 }
@@ -261,7 +261,7 @@ func TestAnUnrecognizedAnchorChildStillWithholds(t *testing.T) {
 		domain.LayerProtocol, domain.StateFail, domain.FailureProtocolPeerClosed)
 	g := b.freeze()
 
-	if findings := TCP(g); len(findings) != 0 {
+	if findings := TCP(rctx(g)); len(findings) != 0 {
 		t.Fatalf("TCP produced %v, want none", findings)
 	}
 }
@@ -274,7 +274,7 @@ func TestSeveralLiteralConnectionsAggregateNormally(t *testing.T) {
 		fail("10.0.0.1", domain.FailureTCPConnectionRefused),
 		fail("10.0.0.2", domain.FailureTCPConnectionTimeout))
 
-	findings := TCP(g)
+	findings := TCP(rctx(g))
 	if len(findings) != 1 {
 		t.Fatalf("TCP findings = %d, want 1", len(findings))
 	}
@@ -285,7 +285,7 @@ func TestSeveralLiteralConnectionsAggregateNormally(t *testing.T) {
 	partial := literalSweep(t, "10.0.0.1:5432",
 		fail("10.0.0.1", domain.FailureTCPConnectionRefused),
 		pass("10.0.0.2"))
-	if findings := TCP(partial); len(findings) != 0 {
+	if findings := TCP(rctx(partial)); len(findings) != 0 {
 		t.Fatalf("a partial success produced %v, want none", findings)
 	}
 }

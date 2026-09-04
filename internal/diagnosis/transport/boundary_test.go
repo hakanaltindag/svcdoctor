@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
@@ -72,10 +73,22 @@ func namesUsedIn(t *testing.T, name string) map[string]bool {
 //
 // depguard already denies the probe, adapter, render, platform and security
 // imports repository-wide. This adds what depguard cannot express: that a rule
-// which consumes a frozen graph needs nothing beyond the graph and the names on
-// it, and that the composition root is above this package rather than beside it.
+// which consumes a frozen graph needs nothing beyond the graph, the names on it,
+// and the rule contract it satisfies — and that the composition root is above
+// this package rather than beside it.
+//
+// # Why internal/diagnosis is on the list from Phase 10.1a
+//
+// ADR 0080 section 2.1 widened diagnosis.Rule from a graph to a RuleContext, so
+// a rule package must name the type it accepts. ADR 0080 section 2.6 draws the
+// direction that makes that safe: a rule package imports the engine, the engine
+// imports no subpackage of its own, and a cycle is therefore impossible rather
+// than merely avoided. The allowlist is what keeps the second half honest — an
+// import of a *sibling* rule package would fail here, which is the coupling that
+// would let one service's reasoning depend on another's.
 func TestDiagnosisImportsOnlyTheEvidenceModel(t *testing.T) {
 	allowed := map[string]bool{
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis":  true,
 		"github.com/hakanaltindag/svcdoctor/internal/domain":     true,
 		"github.com/hakanaltindag/svcdoctor/internal/vocabulary": true,
 	}
@@ -358,21 +371,24 @@ func TestTheScanSeesTheCode(t *testing.T) {
 	}
 }
 
-// TestTheRuleContractIsUnchanged pins that both rules satisfy diagnosis.Rule
-// without this package importing it.
+// TestTheRuleContractIsUnchanged pins that both rules satisfy diagnosis.Rule.
 //
-// Importing internal/diagnosis here would be circular in spirit: the engine holds
-// rules, and a rule that reached back for the engine's type would invite the
-// coupling ADR 0017 avoided by making a rule a plain function.
+// It used to add that this package proved it without importing the engine, on
+// the grounds that reaching back for the engine's type would be circular in
+// spirit. Phase 10.1a settled that the other way: ADR 0080 section 2.1 widened
+// the contract to a RuleContext, so a rule must name the type it accepts, and
+// ADR 0080 section 2.6 draws the direction explicitly — a rule package imports
+// the engine, the engine imports no subpackage of its own, and the cycle is
+// impossible rather than avoided.
 func TestTheRuleContractIsUnchanged(t *testing.T) {
-	var rules []func(domain.Graph) []domain.Finding
+	var rules []diagnosis.Rule
 	rules = append(rules, DNS, TCP)
 
 	if len(rules) != 2 {
 		t.Fatalf("got %d rules, want 2", len(rules))
 	}
 	for _, rule := range rules {
-		if got := rule(domain.Graph{}); got != nil {
+		if got := rule(rctx(domain.Graph{})); got != nil {
 			t.Errorf("a rule returned %v for the zero graph, want nil", got)
 		}
 	}

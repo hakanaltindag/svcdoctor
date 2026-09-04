@@ -167,21 +167,34 @@ func DiagnoseRedis(ctx context.Context, params RedisParams) (Result, error) {
 	// leave something unmeasured, and saying so is the honest answer.
 	incomplete := incompleteRun(ctx, graph, false)
 
-	findings := diagnosis.NewEngine(
-		diagnosistransport.DNS,
-		diagnosistransport.TCP,
-		diagnosistransport.TLS,
-		diagnosisredis.Hello,
-		diagnosisredis.Sentinel,
-		diagnosisredis.Authentication,
-		diagnosisredis.Ping,
-	).Diagnose(graph)
-
-	report, err := buildRedisReport(graph, findings, target, params, startedAt)
+	// Each rule is wired in under a stable identity; see the note in
+	// diagnosePostgres for why the identity is written here rather than
+	// exported from the rule's own package.
+	registry, err := diagnosis.NewRuleSet().
+		Add("transport/dns", diagnosistransport.DNS).
+		Add("transport/tcp", diagnosistransport.TCP).
+		Add("transport/tls", diagnosistransport.TLS).
+		Add("redis/hello", diagnosisredis.Hello).
+		Add("redis/sentinel", diagnosisredis.Sentinel).
+		Add("redis/authentication", diagnosisredis.Authentication).
+		Add("redis/ping", diagnosisredis.Ping).
+		Freeze()
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{report: report, incomplete: incomplete}, nil
+
+	outcome := diagnosis.NewEngine(registry).Evaluate(diagnosis.RuleContext{
+		Graph:      graph,
+		Vantage:    params.Vantage,
+		Incomplete: incomplete,
+	})
+
+	report, err := buildRedisReport(graph, outcome.Findings(), target, params, startedAt)
+	if err != nil {
+		return Result{}, err
+	}
+	// A discarded rule makes the run incomplete; see diagnosePostgres.
+	return Result{report: report, incomplete: incomplete || outcome.Failed()}, nil
 }
 
 // measureRedis performs every network stage and records what happened.

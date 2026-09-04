@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
 )
@@ -111,7 +112,9 @@ const (
 // It is a diagnosis.Rule. One finding per authentication node at most, chosen on
 // state and failure class so that the four outcomes are disjoint by construction
 // and no node can produce two.
-func Authentication(g domain.Graph) []domain.Finding {
+func Authentication(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range nodesAt(g, serviceredis.StepAuthentication) {
 		finding, ok := evaluateAuthentication(node)

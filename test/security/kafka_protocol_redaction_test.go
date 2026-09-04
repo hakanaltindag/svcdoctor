@@ -75,7 +75,7 @@ func protocolReport(
 		t.Fatalf("freezing: %v", err)
 	}
 
-	findings := diagnosiskafka.Protocol(graph)
+	findings := diagnosiskafka.Protocol(ruleContextFor(graph))
 	if len(findings) != 1 {
 		t.Fatalf("%s %s/%s produced %d findings, want 1", step, state, class, len(findings))
 	}

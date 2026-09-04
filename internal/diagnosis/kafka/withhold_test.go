@@ -84,7 +84,7 @@ func TestOneWorkingAddressWithholdsTheFinding(t *testing.T) {
 			exchange := b.metadata(domain.StatePass)
 			advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 			tc.build(b, advertisement)
-			none(t, AdvertisedEndpointUnreachable(b.freeze()))
+			none(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 		})
 	}
 }
@@ -136,7 +136,7 @@ func TestNothingPositivelyEvidencedWithholdsTheFinding(t *testing.T) {
 			exchange := b.metadata(domain.StatePass)
 			advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 			tc.build(b, advertisement)
-			none(t, AdvertisedEndpointUnreachable(b.freeze()))
+			none(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 		})
 	}
 }
@@ -149,7 +149,7 @@ func TestAnUnusableAdvertisementProducesNoReachabilityFinding(t *testing.T) {
 	b := newBuilder(t)
 	exchange := b.metadata(domain.StatePass)
 	b.unusableAdvertised(exchange, 3)
-	none(t, AdvertisedEndpointUnreachable(b.freeze()))
+	none(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 }
 
 // TestAFailedMetadataExchangeWithholdsTheFinding covers the contrast half of the
@@ -160,7 +160,7 @@ func TestAFailedMetadataExchangeWithholdsTheFinding(t *testing.T) {
 	exchange := b.metadata(domain.StateFail)
 	advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 	b.lookup(advertisement, "broker-2.internal", domain.StateFail, domain.FailureDNSNXDomain)
-	none(t, AdvertisedEndpointUnreachable(b.freeze()))
+	none(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 }
 
 // TestAnOrphanAdvertisementWithholdsTheFinding covers the same requirement from
@@ -173,5 +173,5 @@ func TestAnOrphanAdvertisementWithholdsTheFinding(t *testing.T) {
 		domain.LayerTopology, "kafka.broker_advertised", domain.StatePass, domain.FailureNone, "",
 		map[domain.AttributeKey]domain.AttrValue{"kafka.broker.node_id": domain.IntAttr(2)})
 	b.lookup(advertisement, "broker-2.internal", domain.StateFail, domain.FailureDNSNXDomain)
-	none(t, AdvertisedEndpointUnreachable(b.freeze()))
+	none(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 }

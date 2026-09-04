@@ -1,80 +1,130 @@
 package diagnosis
 
 import (
-	"slices"
-
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
 // Engine evaluates a fixed set of rules against an evidence graph.
 //
-// It is deliberately small. It holds rules, runs them, collects what they
-// return, and orders the result. It makes no diagnostic judgement of its own:
-// it does not filter, rank, merge, or suppress findings, and it knows nothing
+// It is deliberately small. It holds a frozen Registry, runs its rules, collects
+// what they return, and orders the result. It makes no diagnostic judgement of
+// its own: it does not filter, rank or suppress findings, and it knows nothing
 // about any service.
 //
-// There is no registration mechanism, no plugin discovery and no dispatch table.
-// Rules arrive as arguments, which is the same explicit composition-root wiring
-// ADR 0009 chose for services.
+// There is no plugin discovery and no dispatch table. Rules arrive in a Registry
+// assembled at a composition root, which is the same explicit wiring ADR 0009
+// chose for services.
 //
-// An Engine is immutable once built: it copies the rules it is given, has no
-// method that changes them, and evaluation writes nothing back. That makes
-// Diagnose safe to call repeatedly and concurrently on one Engine.
+// An Engine is immutable once built: the Registry it holds has no mutation
+// methods and evaluation writes nothing back. That makes Evaluate safe to call
+// repeatedly and concurrently on one Engine, which is what a fleet run of up to
+// 512 targets does with a single shared rule set.
 //
 // The zero Engine is valid and has no rules.
 type Engine struct {
-	rules []Rule
+	registry Registry
 }
 
-// NewEngine returns an engine that evaluates rules in the order given.
+// NewEngine returns an engine that evaluates the registry's rules.
 //
-// The slice is copied, so a caller cannot change an engine's behaviour after
-// building it. Nil entries are rejected rather than skipped: a nil rule is a
-// wiring mistake, and quietly ignoring it would produce a report missing
-// findings nobody noticed were absent.
-func NewEngine(rules ...Rule) Engine {
-	out := make([]Rule, 0, len(rules))
-	for _, r := range rules {
-		if r == nil {
-			continue
-		}
-		out = append(out, r)
-	}
-	return Engine{rules: slices.Clip(out)}
+// It cannot fail. Every way a rule set can be wrong — an unparseable identity, a
+// nil rule, two rules claiming one identity — is refused by RuleSet.Add and
+// rechecked by RuleSet.Freeze, so a Registry that exists is already valid. That
+// is where ADR 0080 section 2.4's rejection lives: strictly earlier than engine
+// construction, at the point that names the offending call, and still entirely
+// at wiring time where an operator can never reach it.
+func NewEngine(registry Registry) Engine {
+	return Engine{registry: registry}
 }
 
 // RuleCount returns how many rules the engine will evaluate.
-func (e Engine) RuleCount() int { return len(e.rules) }
+func (e Engine) RuleCount() int { return e.registry.Len() }
 
-// Diagnose evaluates every rule against g and returns the findings.
+// Registry returns the rules the engine holds.
+func (e Engine) Registry() Registry { return e.registry }
+
+// Evaluate runs every rule against ctx and returns the findings and any rule
+// failures.
 //
-// The result is in the canonical order defined by domain.SortFindings, which is
-// the same order a report uses. Rules are evaluated in wiring order, but that
-// order does not reach the output: reordering the rule set produces the same
-// findings in the same sequence, so how the engine was assembled cannot change
-// what a report looks like.
+// The findings are in the canonical order defined by domain.SortFindings, which
+// is the same order a report uses. Rules are evaluated in registration order,
+// but that order does not reach the output: reordering the rule set produces the
+// same findings in the same sequence, so how the engine was assembled cannot
+// change what a report looks like.
+//
+// # What the engine does not do, in this phase
 //
 // Findings are returned exactly as the rules produced them. The engine does not
-// deduplicate: two rules reporting the same conclusion means the rule set says
-// something twice, and deciding which of two findings to discard would require
-// defining when two findings are the same conclusion, which no document does.
-// Dropping one could also remove a real finding that merely looked similar. See
-// ADR 0017.
+// yet merge two rules that reached one conclusion; ADR 0081 section 2.1 supplies
+// the identity definition that makes merging possible, and Converge implements
+// it, but nothing wires it in. Landing the merge changes reports, and Phase
+// 10.1a is the half of the split that does not (docs/design/DIAGNOSTIC_INTELLIGENCE.md
+// section P).
 //
-// Diagnose returns no error. Rules read a frozen in-memory graph and have
-// nothing operational to fail at; see Rule.
+// # Rule failure
+//
+// A rule that panics is a defect in svcdoctor, not a fact about the target. Its
+// output is discarded whole rather than partially trusted — half a rule's
+// findings are not a weaker version of its conclusion, they are an arbitrary
+// prefix of one — and evaluation continues, because a report missing one rule's
+// findings is closer to the truth than no report at all.
+//
+// The failure is recorded in the Outcome so a composition root can mark the run
+// incomplete. It never becomes a finding: a finding is a claim about the target,
+// and svcdoctor falling over is a claim about svcdoctor (ADR 0083 section 2.3).
+// The panic value is not captured, because it can hold anything the panicking
+// code had in hand and this document is designed to be shared.
 //
 // The graph is not modified. domain.Graph exposes no mutation and copies on
 // read, so this is a property of the type rather than a promise made here.
-func (e Engine) Diagnose(g domain.Graph) []domain.Finding {
-	var findings []domain.Finding
-	for _, rule := range e.rules {
-		findings = append(findings, rule(g)...)
+func (e Engine) Evaluate(ctx RuleContext) Outcome {
+	var out Outcome
+	for _, rule := range e.registry.rules {
+		findings, ok := evaluateOne(rule, ctx)
+		if !ok {
+			out.failures = append(out.failures, RuleFailure{rule: rule.id})
+			continue
+		}
+		out.findings = append(out.findings, findings...)
 	}
-	if len(findings) == 0 {
-		return nil
+	if len(out.findings) == 0 {
+		out.findings = nil
+		return out
 	}
 
-	domain.SortFindings(findings)
-	return findings
+	domain.SortFindings(out.findings)
+	return out
+}
+
+// Diagnose runs every rule against ctx and returns the findings alone.
+//
+// It is Evaluate with the failure list dropped, and it exists because most
+// callers — every rule test in the tree — have no run to mark incomplete. It is
+// one implementation, not a second contract.
+//
+// Production code must not use it: discarding the failure list there would turn
+// a diagnostic defect into a silently shorter report, which is precisely what
+// ADR 0083 section 2.3 refuses. TestDIAG041ProductionEvaluatesRatherThanDiagnoses
+// fails the build if a production file outside this package calls it.
+func (e Engine) Diagnose(ctx RuleContext) []domain.Finding {
+	return e.Evaluate(ctx).findings
+}
+
+// evaluateOne runs one rule and converts a panic into a discarded result.
+//
+// The recovered value is deliberately not returned. Nothing in svcdoctor may act
+// on it: it is not a diagnostic outcome, it is not rendered, and it is not
+// stored. Naming the rule is the whole of what a caller needs, because the whole
+// of the response is "discard this rule's output and mark the run incomplete".
+//
+// The findings slice is built inside the deferred recovery's scope so that a
+// rule which panics after returning some findings loses all of them. A partial
+// slice is not a partial conclusion.
+func evaluateOne(rule RegisteredRule, ctx RuleContext) (findings []domain.Finding, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			findings, ok = nil, false
+		}
+	}()
+	return rule.eval(ctx), true
 }

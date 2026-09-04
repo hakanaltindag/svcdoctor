@@ -211,21 +211,42 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 	// precedence, no pre-diagnosis special case. They are inert on a graph with no
 	// requested-target anchor and cannot reach service-owned evidence, so nothing
 	// arbitrates between the two sets (ADR 0043 sections 1 and 9).
-	findings := diagnosis.NewEngine(
-		diagnosistransport.DNS,
-		diagnosistransport.TCP,
-		diagnosispostgres.SSLRequest,
-		diagnosispostgres.TLS,
-		diagnosispostgres.Startup,
-		diagnosispostgres.Authentication,
-		diagnosispostgres.Session,
-	).Diagnose(graph)
-
-	report, err := buildReport(graph, findings, target, params, startedAt)
+	//
+	// Each rule is wired in under a stable identity. The identity is written
+	// here rather than exported from the rule's own package because this is the
+	// only place that decides which rules run together, and duplicate detection
+	// is a property of the set rather than of any rule in it (ADR 0080 section
+	// 2.4). TestDIAG021EachCompositionRootWiresTheRulesItDeclares pins the list,
+	// so a spelling cannot drift between the four roots that share the generic
+	// transport rules.
+	registry, err := diagnosis.NewRuleSet().
+		Add("transport/dns", diagnosistransport.DNS).
+		Add("transport/tcp", diagnosistransport.TCP).
+		Add("postgres/ssl-request", diagnosispostgres.SSLRequest).
+		Add("postgres/tls", diagnosispostgres.TLS).
+		Add("postgres/startup", diagnosispostgres.Startup).
+		Add("postgres/authentication", diagnosispostgres.Authentication).
+		Add("postgres/session", diagnosispostgres.Session).
+		Freeze()
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{report: report, incomplete: incomplete}, nil
+
+	outcome := diagnosis.NewEngine(registry).Evaluate(diagnosis.RuleContext{
+		Graph:      graph,
+		Vantage:    params.Vantage,
+		Incomplete: incomplete,
+	})
+
+	report, err := buildReport(graph, outcome.Findings(), target, params, startedAt)
+	if err != nil {
+		return Result{}, err
+	}
+	// A rule whose output was discarded means svcdoctor did not finish its own
+	// reasoning, which is what an incomplete run says and what exit 4 already
+	// means. It is never a finding: a finding is a claim about the target, and
+	// this is a claim about svcdoctor (ADR 0083 section 2.3).
+	return Result{report: report, incomplete: incomplete || outcome.Failed()}, nil
 }
 
 // incompleteRun reports that svcdoctor's own execution limit stopped this run

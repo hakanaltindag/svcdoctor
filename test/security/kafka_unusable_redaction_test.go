@@ -85,7 +85,7 @@ func unusableReport(t *testing.T, ref, host string, port int64) domain.Report {
 		t.Fatalf("freezing: %v", err)
 	}
 
-	findings := diagnosiskafka.UnusableAdvertisement(graph)
+	findings := diagnosiskafka.UnusableAdvertisement(ruleContextFor(graph))
 	if len(findings) != 1 {
 		t.Fatalf("findings = %d, want 1", len(findings))
 	}

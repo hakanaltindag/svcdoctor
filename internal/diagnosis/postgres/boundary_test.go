@@ -67,8 +67,19 @@ func parse(t *testing.T, name string) *ast.File {
 // and no behaviour, imports internal/domain and nothing else, and importing the
 // probe that produces the step is what depguard forbids and what the leaf exists
 // to make unnecessary.
+//
+// # Why internal/diagnosis is on the list from Phase 10.1a
+//
+// ADR 0080 section 2.1 widened diagnosis.Rule from a graph to a RuleContext, so
+// a rule package must name the type it accepts. ADR 0080 section 2.6 draws the
+// direction that makes that safe: a rule package imports the engine, the engine
+// imports no subpackage of its own, and a cycle is therefore impossible rather
+// than merely avoided. The allowlist keeps the sharper half honest — an import
+// of a *sibling* rule package would still fail here, which is the coupling that
+// would let one service's reasoning depend on another's.
 func TestTheRulesImportOnlyDomainAndTheVocabularyLeaves(t *testing.T) {
 	allowed := map[string]bool{
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis":        true,
 		"github.com/hakanaltindag/svcdoctor/internal/domain":           true,
 		"github.com/hakanaltindag/svcdoctor/internal/service/postgres": true,
 		"github.com/hakanaltindag/svcdoctor/internal/vocabulary":       true,
@@ -173,9 +184,18 @@ func TestNoContractStringIsRespelled(t *testing.T) {
 }
 
 // TestTheRulesSatisfyTheEngineContract is the compile-time proof that these are
-// rules, without this package importing the engine to say so.
+// rules.
+//
+// It used to add that this package proved it *without* importing the engine.
+// Phase 10.1a ended that: ADR 0080 section 2.1 widened diagnosis.Rule from a
+// graph to a RuleContext, and a rule package must now name the type it accepts.
+// The direction is the one ADR 0080 section 2.6 draws — a service rule package
+// imports the engine and never the reverse — so a cycle stays structurally
+// impossible rather than merely avoided.
 func TestTheRulesSatisfyTheEngineContract(t *testing.T) {
-	engine := diagnosis.NewEngine(SSLRequest, Startup, Authentication, Session)
+	var _ diagnosis.Rule = SSLRequest
+
+	engine := testEngine(SSLRequest, Startup, Authentication, Session)
 
 	if got := engine.RuleCount(); got != 4 {
 		t.Fatalf("RuleCount = %d, want 4", got)
@@ -183,7 +203,7 @@ func TestTheRulesSatisfyTheEngineContract(t *testing.T) {
 
 	// And an empty graph produces nothing, which is the property a report of a
 	// run that never reached PostgreSQL depends on.
-	if findings := engine.Diagnose(domain.Graph{}); len(findings) != 0 {
+	if findings := engine.Diagnose(rctx(domain.Graph{})); len(findings) != 0 {
 		t.Errorf("an empty graph produced %v", codesOf(findings))
 	}
 }

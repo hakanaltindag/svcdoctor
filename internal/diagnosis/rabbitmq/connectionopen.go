@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicerabbitmq "github.com/hakanaltindag/svcdoctor/internal/service/rabbitmq"
 )
@@ -102,7 +103,9 @@ const (
 // family, on the normalized close outcome the wire package produced from a
 // byte-equality comparison against candidates svcdoctor rendered itself. No peer
 // text reaches here, because none crossed the wire boundary.
-func ConnectionOpen(g domain.Graph) []domain.Finding {
+func ConnectionOpen(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range nodesAt(g, servicerabbitmq.StepConnectionOpen) {
 		// A passing open is not a finding. Specifically it is not a claim that

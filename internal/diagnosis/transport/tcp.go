@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
@@ -151,7 +152,9 @@ var authorizedTCPFailures = map[domain.FailureClass]bool{
 // unknownEvidenceCount already say the run was cut short; a HYPOTHESIS here would
 // be a second, weaker copy of that fact pointed at a conclusion the evidence does
 // not reach.
-func TCP(g domain.Graph) []domain.Finding {
+func TCP(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, s := range collectSweeps(g) {
 		finding, ok := evaluateTCP(s)

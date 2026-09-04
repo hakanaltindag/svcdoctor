@@ -60,7 +60,7 @@ func TestEveryUnusableShapeBuildsAValidFinding(t *testing.T) {
 			advertisement := b.unusable(exchange, 2, tc.ref, "", 0)
 			graph := b.freeze()
 
-			f := only(t, UnusableAdvertisement(graph))
+			f := only(t, UnusableAdvertisement(rctx(graph)))
 
 			if f.Code() != CodeAdvertisedEndpointUnusable {
 				t.Errorf("code = %s, want %s", f.Code(), CodeAdvertisedEndpointUnusable)
@@ -103,7 +103,7 @@ func TestTheFindingIsNotVantageDependent(t *testing.T) {
 			exchange := b.metadata(domain.StatePass)
 			b.unusable(exchange, 2, tc.ref, "", 0)
 
-			f := only(t, UnusableAdvertisement(b.freeze()))
+			f := only(t, UnusableAdvertisement(rctx(b.freeze())))
 			if f.VantageDependent() {
 				t.Error("vantageDependent = true; an unusable advertised value is the same " +
 					"from every vantage point, and saying otherwise invites a pointless retry")
@@ -122,7 +122,7 @@ func TestTheSubjectIsReusedAndNeverRepaired(t *testing.T) {
 			advertisement := b.unusable(exchange, 2, tc.ref, "", 0)
 			graph := b.freeze()
 
-			f := only(t, UnusableAdvertisement(graph))
+			f := only(t, UnusableAdvertisement(rctx(graph)))
 
 			node, ok := graph.Node(advertisement)
 			if !ok {
@@ -152,7 +152,7 @@ func TestOnlyTheExchangeAndTheAdvertisementAreCited(t *testing.T) {
 	reachable(b, exchange, 3, "broker-3.internal:9092", "broker-3.internal", "10.20.0.3")
 	graph := b.freeze()
 
-	f := only(t, UnusableAdvertisement(graph))
+	f := only(t, UnusableAdvertisement(rctx(graph)))
 	wantRefs(t, f, exchange, advertisement)
 
 	for _, ref := range f.EvidenceRefs() {
@@ -285,7 +285,7 @@ func TestWithholdingCases(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newBuilder(t)
 			tc.build(b)
-			none(t, UnusableAdvertisement(b.freeze()))
+			none(t, UnusableAdvertisement(rctx(b.freeze())))
 		})
 	}
 }
@@ -299,7 +299,7 @@ func TestOneFindingPerUnusableAdvertisement(t *testing.T) {
 	b.unusable(exchange, 2, ":9093", "", 9093)
 	b.unusable(exchange, 3, "broker-3.internal:0", "broker-3.internal", 0)
 
-	findings := UnusableAdvertisement(b.freeze())
+	findings := UnusableAdvertisement(rctx(b.freeze()))
 	if len(findings) != 2 {
 		t.Fatalf("findings = %d, want 2 (one per unusable advertisement)", len(findings))
 	}
@@ -322,7 +322,7 @@ func TestDistinctAdvertisementFactsProduceDistinctFindings(t *testing.T) {
 		b.unusable(exchange, 7, "broker-a.internal:0", "broker-a.internal", 0)
 		b.unusable(exchange, 7, "broker-b.internal:0", "broker-b.internal", 0)
 
-		if got := len(UnusableAdvertisement(b.freeze())); got != 2 {
+		if got := len(UnusableAdvertisement(rctx(b.freeze()))); got != 2 {
 			t.Fatalf("findings = %d, want 2: node identifier is not finding identity", got)
 		}
 	})
@@ -333,7 +333,7 @@ func TestDistinctAdvertisementFactsProduceDistinctFindings(t *testing.T) {
 		b.unusable(exchange, 1, ":9093", "", 9093)
 		b.unusable(exchange, 2, ":9093", "", 9093)
 
-		findings := UnusableAdvertisement(b.freeze())
+		findings := UnusableAdvertisement(rctx(b.freeze()))
 		if len(findings) != 2 {
 			t.Fatalf("findings = %d, want 2: two advertisement facts", len(findings))
 		}
@@ -364,7 +364,7 @@ func TestControllerIdentityDoesNotAffectTheFinding(t *testing.T) {
 			})
 		b.unusable(exchange, 2, ":9093", "", 9093)
 		reachable(b, exchange, 7, "broker-7.internal:9092", "broker-7.internal", "10.20.0.7")
-		return only(t, UnusableAdvertisement(b.freeze()))
+		return only(t, UnusableAdvertisement(rctx(b.freeze())))
 	}
 
 	asController, asFollower := build(t, 2), build(t, 7)
@@ -394,7 +394,7 @@ func TestUnusableProseMeetsTheQualityBar(t *testing.T) {
 			b := newBuilder(t)
 			exchange := b.metadata(domain.StatePass)
 			b.unusable(exchange, 2, tc.ref, "", 0)
-			f := only(t, UnusableAdvertisement(b.freeze()))
+			f := only(t, UnusableAdvertisement(rctx(b.freeze())))
 
 			for _, banned := range forbiddenInSummary {
 				if strings.Contains(f.Summary(), banned) {
@@ -425,7 +425,7 @@ func TestTheSummaryIsStableAcrossEverySubcase(t *testing.T) {
 		b := newBuilder(t)
 		exchange := b.metadata(domain.StatePass)
 		b.unusable(exchange, 2, tc.ref, "", 0)
-		got := only(t, UnusableAdvertisement(b.freeze())).Summary()
+		got := only(t, UnusableAdvertisement(rctx(b.freeze()))).Summary()
 
 		if i == 0 {
 			first = got
@@ -450,7 +450,7 @@ func TestAnUnusableAdvertisementWithNoNodeIDStillProducesAFinding(t *testing.T) 
 		domain.LayerTopology, "kafka.broker_advertised", domain.StateFail,
 		domain.FailureProtocolUnexpectedResponse, exchange, nil)
 
-	f := only(t, UnusableAdvertisement(b.freeze()))
+	f := only(t, UnusableAdvertisement(rctx(b.freeze())))
 	wantRefs(t, f, exchange, advertisement)
 	if strings.Contains(f.Summary(), "node") {
 		t.Errorf("summary names a broker node it does not have: %q", f.Summary())
@@ -488,7 +488,7 @@ func TestUnusableFindingsAreDeterministic(t *testing.T) {
 			b.unusable(exchange, id, "broker-"+strconv.FormatInt(id, 10)+".internal:0",
 				"broker-"+strconv.FormatInt(id, 10)+".internal", 0)
 		}
-		findings := UnusableAdvertisement(b.freeze())
+		findings := UnusableAdvertisement(rctx(b.freeze()))
 		domain.SortFindings(findings)
 
 		out := make([]string, 0, len(findings))

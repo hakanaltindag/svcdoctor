@@ -156,11 +156,24 @@ func TestTheRabbitMQCompositionWiresEveryOwnerOfWhatItCanProduce(t *testing.T) {
 		"diagnosisrabbitmq.ConnectionOpen",
 	}
 
-	got := rulesWiredIn(t, filepath.Join(repositoryRoot(t), rabbitmqCompositionFile))
+	wantIDs := []string{
+		"transport/dns",
+		"transport/tcp",
+		"transport/tls",
+		"rabbitmq/connection-start",
+		"rabbitmq/authentication",
+		"rabbitmq/connection-open",
+	}
+
+	gotIDs, got := rulesWiredIn(t, filepath.Join(repositoryRoot(t), rabbitmqCompositionFile))
 	if !slices.Equal(got, want) {
 		t.Errorf("DiagnoseRabbitMQ wires %v, want exactly %v.\n\n"+
 			"An outcome the adapter can produce with no rule to explain it reaches "+
 			"the report as silence (ADR 0054).", got, want)
+	}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Errorf("DiagnoseRabbitMQ registers %v, want exactly %v (ADR 0080 section 2.5).",
+			gotIDs, wantIDs)
 	}
 }
 

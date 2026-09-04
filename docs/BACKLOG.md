@@ -4997,6 +4997,38 @@ failure classes, **4** `Reveal`, **4** `SecretFor`, **2** external modules.
 | **The post-cancellation race window is guarded structurally, not behaviourally.** Mutations C21 and C22 survived every behavioural test; the window cannot be forced from outside | Reopens if the window becomes reachable deterministically |
 | **No filtering, no output-to-file** | ADR 0074 §10.4, §11 |
 
+## Phase 10.1A — Diagnostic intelligence core foundations: COMPLETE
+
+The first half of the split `docs/design/DIAGNOSTIC_INTELLIGENCE.md` section P recommends:
+10.1a lands the reasoning foundations with **byte-identical reports**, so that 10.1b's diff is
+the entire behavioural change.
+
+Wired and invisible: `RuleContext` in place of `domain.Graph` on `diagnosis.Rule` (ADR 0080
+§2.1, eighteen rules, one line each), an identified `RuleSet` → frozen `Registry` in place of
+`NewEngine(rules...)`, and panic recovery that discards a failed rule's output and marks the run
+incomplete.
+
+Built, tested and **called by nothing**: the four evidence relations, the confidence ladder,
+semantic identity and convergence, the shared graph queries and sibling counting, the per-subject
+failure boundary, recommendation safety, and rule-output validation.
+
+Every frozen count is unchanged — `SchemaVersion` **1**, `RunSchemaVersion` **1**, **60** finding
+codes, **42** failure classes, **4** `Reveal`, **4** `SecretFor`, **2** modules — and all 38
+committed golden artifacts are byte-for-byte identical. See
+`docs/validation/PHASE101A_DIAGNOSTIC_CORE_VALIDATION.md`.
+
+### Open items
+
+| Item | Condition |
+|---|---|
+| **`DIAG_FAILURE_BOUNDARY` is computed and not emitted.** ADR 0079 §2.3 defines the finding and ADR 0078 §3 authorizes finding codes 60 → 61 "in the phase that implements it". That phase is 10.1b, by the design document's own split | Closes in Phase 10.1b, together with the merge and the recommendation fields |
+| **`Converge` is implemented and unwired.** Merging changes the findings array, which 10.1a may not do. `TestP18DuplicateFindingsAreStillPreserved` fails the day it is wired in | Closes in Phase 10.1b |
+| **Recommendation kind and safety class live in `internal/diagnosis`, not on `domain.Recommendation`.** ADR 0082 §2.1 puts them on the report type, additively; adding a field would change the JSON of every report carrying a recommendation | Closes in Phase 10.1b. `TestDIAG036EveryProducedRecommendationIsAlreadySafe` proves all 64 shipped strings already pass, so the move needs no rewording |
+| **The action validator does not catch a bare `<service-tool> <subcommand>`.** Catching it needs the tool's name, and only the service's own rule package may know one — an earlier version of `commandWords` held two and the vocabulary guard rejected it | Not reopenable generically. A service rule package may add its own check |
+| **Duplicate-identity rejection lives on `RuleSet.Freeze`, not `NewEngine`.** ADR 0080 §2.4 says "at construction"; this is strictly earlier and names the offending call, so `NewEngine` cannot fail | Not an open question; recorded so the wording difference is not mistaken for drift |
+| **`time.Now` is banned by an AST guard rather than by `forbidigo`.** ADR 0080 §2.2 suggested the linter; its forbid list is global in golangci-lint v2, so scoping it would mean enumerating every other directory as an exclusion — which a new top-level package escapes silently | Reopens if golangci-lint gains per-path forbid rules |
+| **No rule consults `Vantage` or `Incomplete` yet.** Both were admitted for reasons that arrive with service intelligence | Closes as 10.2-10.4 write rules that need them |
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6

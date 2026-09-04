@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
@@ -60,7 +61,9 @@ const (
 // own budget expiring or its own cancellation; nothing was learned about the
 // endpoint, and a finding would dress that as the endpoint's fault. The report's
 // summary already reports unknown and skipped counts.
-func Startup(g domain.Graph) []domain.Finding {
+func Startup(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range g.Nodes() {
 		if node.Step() != servicepostgres.StepStartup {

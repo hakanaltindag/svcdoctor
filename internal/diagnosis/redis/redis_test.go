@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	serviceredis "github.com/hakanaltindag/svcdoctor/internal/service/redis"
 )
@@ -176,34 +177,34 @@ func everyFindingShape(t *testing.T) []shape {
 	}
 
 	return []shape{
-		{"sentinel", Sentinel(graphWith(t, nodeOf(t,
-			serviceredis.StepHello, domain.StatePass, domain.FailureNone, mode("sentinel"))))},
-		{"hello failed", Hello(graphWith(t, nodeOf(t,
-			serviceredis.StepHello, domain.StateFail, domain.FailureProtocolPeerClosed, nil)))},
-		{"credentials rejected", Authentication(graphWith(t, nodeOf(t,
+		{"sentinel", Sentinel(rctx(graphWith(t, nodeOf(t,
+			serviceredis.StepHello, domain.StatePass, domain.FailureNone, mode("sentinel")))))},
+		{"hello failed", Hello(rctx(graphWith(t, nodeOf(t,
+			serviceredis.StepHello, domain.StateFail, domain.FailureProtocolPeerClosed, nil))))},
+		{"credentials rejected", Authentication(rctx(graphWith(t, nodeOf(t,
 			serviceredis.StepAuthentication, domain.StateFail,
-			domain.FailureAuthCredentialsRejected, prefix("WRONGPASS"))))},
-		{"auth not completed", Authentication(graphWith(t, nodeOf(t,
+			domain.FailureAuthCredentialsRejected, prefix("WRONGPASS")))))},
+		{"auth not completed", Authentication(rctx(graphWith(t, nodeOf(t,
 			serviceredis.StepAuthentication, domain.StateFail,
-			domain.FailureProtocolMalformedResponse, nil)))},
-		{"credential withheld", Authentication(graphWith(t, nodeOf(t,
+			domain.FailureProtocolMalformedResponse, nil))))},
+		{"credential withheld", Authentication(rctx(graphWith(t, nodeOf(t,
 			serviceredis.StepAuthentication, domain.StateSkipped,
-			domain.FailureExecSkippedByPolicy, nil)))},
-		{"credential not configured", Authentication(graphWith(t, nodeOf(t,
+			domain.FailureExecSkippedByPolicy, nil))))},
+		{"credential not configured", Authentication(rctx(graphWith(t, nodeOf(t,
 			serviceredis.StepAuthentication, domain.StateSkipped,
-			domain.FailureExecRequiredInputMissing, nil)))},
-		{"noperm", Ping(graphWith(t, nodeOf(t,
+			domain.FailureExecRequiredInputMissing, nil))))},
+		{"noperm", Ping(rctx(graphWith(t, nodeOf(t,
 			serviceredis.StepPing, domain.StateUnknown,
-			domain.FailureAuthzDenied, prefix("NOPERM"))))},
-		{"loading", Ping(graphWith(t, nodeOf(t,
+			domain.FailureAuthzDenied, prefix("NOPERM")))))},
+		{"loading", Ping(rctx(graphWith(t, nodeOf(t,
 			serviceredis.StepPing, domain.StateUnknown,
-			domain.FailureProtocolUnexpectedResponse, prefix("LOADING"))))},
-		{"masterdown", Ping(graphWith(t, nodeOf(t,
+			domain.FailureProtocolUnexpectedResponse, prefix("LOADING")))))},
+		{"masterdown", Ping(rctx(graphWith(t, nodeOf(t,
 			serviceredis.StepPing, domain.StateUnknown,
-			domain.FailureProtocolUnexpectedResponse, prefix("MASTERDOWN"))))},
-		{"ping not completed", Ping(graphWith(t, nodeOf(t,
+			domain.FailureProtocolUnexpectedResponse, prefix("MASTERDOWN")))))},
+		{"ping not completed", Ping(rctx(graphWith(t, nodeOf(t,
 			serviceredis.StepPing, domain.StateFail,
-			domain.FailureProtocolPeerClosed, nil)))},
+			domain.FailureProtocolPeerClosed, nil))))},
 	}
 }
 
@@ -219,9 +220,10 @@ func TestEveryAuthorizedShapeBuildsAValidFinding(t *testing.T) {
 
 // TestWrongPassNeverBecomesWrongPassword is matrix mutation 19.
 func TestWrongPassNeverBecomesWrongPassword(t *testing.T) {
-	findings := Authentication(graphWith(t, nodeOf(t,
+	findings := Authentication(rctx(graphWith(t, nodeOf(t,
 		serviceredis.StepAuthentication, domain.StateFail,
-		domain.FailureAuthCredentialsRejected, nil)))
+		domain.FailureAuthCredentialsRejected, nil))))
+
 	if len(findings) != 1 {
 		t.Fatalf("got %d findings, want 1", len(findings))
 	}
@@ -239,8 +241,9 @@ func TestWrongPassNeverBecomesWrongPassword(t *testing.T) {
 
 // TestNoPermIsNotAServiceFailure is matrix mutation 20.
 func TestNoPermIsNotAServiceFailure(t *testing.T) {
-	findings := Ping(graphWith(t, nodeOf(t,
-		serviceredis.StepPing, domain.StateUnknown, domain.FailureAuthzDenied, nil)))
+	findings := Ping(rctx(graphWith(t, nodeOf(t,
+		serviceredis.StepPing, domain.StateUnknown, domain.FailureAuthzDenied, nil))))
+
 	if len(findings) != 1 {
 		t.Fatalf("got %d findings, want 1", len(findings))
 	}
@@ -258,8 +261,9 @@ func TestNoPermIsNotAServiceFailure(t *testing.T) {
 // looser statement of the same thing, and the looser one is the one that becomes
 // "Redis healthy".
 func TestAPassingPingProducesNoFinding(t *testing.T) {
-	findings := Ping(graphWith(t, nodeOf(t,
-		serviceredis.StepPing, domain.StatePass, domain.FailureNone, nil)))
+	findings := Ping(rctx(graphWith(t, nodeOf(t,
+		serviceredis.StepPing, domain.StatePass, domain.FailureNone, nil))))
+
 	if len(findings) != 0 {
 		t.Fatalf("a passing probe produced %d findings: %v", len(findings), findings)
 	}
@@ -273,8 +277,8 @@ func TestReplicaRoleProducesNoFinding(t *testing.T) {
 			serviceredis.AttrServer: domain.StringAttr("redis"),
 			serviceredis.AttrMode:   domain.StringAttr("standalone"),
 		}))
-	for _, rule := range []func(domain.Graph) []domain.Finding{Hello, Sentinel, Authentication, Ping} {
-		if findings := rule(graph); len(findings) != 0 {
+	for _, rule := range []diagnosis.Rule{Hello, Sentinel, Authentication, Ping} {
+		if findings := rule(rctx(graph)); len(findings) != 0 {
 			t.Fatalf("role=replica produced %d findings; without an expected-role "+
 				"contract it is an observation (ADR 0063 section 10)", len(findings))
 		}
@@ -287,8 +291,8 @@ func TestClusterModeProducesNoFinding(t *testing.T) {
 		map[domain.AttributeKey]domain.AttrValue{
 			serviceredis.AttrMode: domain.StringAttr("cluster"),
 		}))
-	for _, rule := range []func(domain.Graph) []domain.Finding{Hello, Sentinel, Authentication, Ping} {
-		if findings := rule(graph); len(findings) != 0 {
+	for _, rule := range []diagnosis.Rule{Hello, Sentinel, Authentication, Ping} {
+		if findings := rule(rctx(graph)); len(findings) != 0 {
 			t.Fatalf("mode=cluster produced %d findings; topology is not measured "+
 				"(ADR 0065 section 2)", len(findings))
 		}
@@ -297,11 +301,12 @@ func TestClusterModeProducesNoFinding(t *testing.T) {
 
 // TestSentinelIsReportedAsAnEndpointMismatch is matrix mutation 24.
 func TestSentinelIsReportedAsAnEndpointMismatch(t *testing.T) {
-	findings := Sentinel(graphWith(t, nodeOf(t,
+	findings := Sentinel(rctx(graphWith(t, nodeOf(t,
 		serviceredis.StepHello, domain.StatePass, domain.FailureNone,
 		map[domain.AttributeKey]domain.AttrValue{
 			serviceredis.AttrMode: domain.StringAttr("sentinel"),
-		})))
+		}))))
+
 	if len(findings) != 1 {
 		t.Fatalf("got %d findings, want 1", len(findings))
 	}
@@ -340,8 +345,8 @@ func TestLocalLimitsProduceNoFinding(t *testing.T) {
 			nodeOf(t, serviceredis.StepPing, domain.StateUnknown, class, nil),
 			nodeOf(t, serviceredis.StepAuthentication, domain.StateUnknown, class, nil),
 		)
-		for _, rule := range []func(domain.Graph) []domain.Finding{Hello, Sentinel, Authentication, Ping} {
-			if findings := rule(graph); len(findings) != 0 {
+		for _, rule := range []diagnosis.Rule{Hello, Sentinel, Authentication, Ping} {
+			if findings := rule(rctx(graph)); len(findings) != 0 {
 				t.Errorf("%s produced %d findings; a local limit is not a target claim",
 					class, len(findings))
 			}
@@ -356,11 +361,12 @@ func TestLocalLimitsProduceNoFinding(t *testing.T) {
 // says exactly that.
 func TestOnlyTheNormalizedPrefixReachesFindingProse(t *testing.T) {
 	const canary = "CANARY-leak"
-	findings := Ping(graphWith(t, nodeOf(t,
+	findings := Ping(rctx(graphWith(t, nodeOf(t,
 		serviceredis.StepPing, domain.StateUnknown, domain.FailureProtocolUnexpectedResponse,
 		map[domain.AttributeKey]domain.AttrValue{
 			serviceredis.AttrErrorPrefix: domain.StringAttr("UNRECOGNIZED"),
-		})))
+		}))))
+
 	if len(findings) != 1 {
 		t.Fatalf("got %d findings, want 1", len(findings))
 	}

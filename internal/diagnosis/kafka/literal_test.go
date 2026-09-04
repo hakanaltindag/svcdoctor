@@ -61,7 +61,7 @@ func TestALiteralAdvertisementIsOwned(t *testing.T) {
 			b.literalConnect(advertisement, addr, 9093,
 				domain.StateFail, domain.FailureTCPConnectionRefused)
 
-			findings := AdvertisedEndpointUnreachable(b.freeze())
+			findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 			if len(findings) != 1 {
 				t.Fatalf("findings = %d, want 1: a literal advertisement must be owned", len(findings))
 			}
@@ -91,7 +91,7 @@ func TestALiteralAdvertisementClaimsNoResolution(t *testing.T) {
 	b.literalConnect(advertisement, "10.20.30.41", 9093,
 		domain.StateFail, domain.FailureTCPConnectionRefused)
 
-	f := AdvertisedEndpointUnreachable(b.freeze())[0]
+	f := AdvertisedEndpointUnreachable(rctx(b.freeze()))[0]
 	text := f.Summary() + "\n" + f.Detail()
 	for _, forbidden := range []string{
 		"hostname did not resolve",
@@ -113,7 +113,7 @@ func TestAReachedLiteralAdvertisementProducesNoFinding(t *testing.T) {
 	advertisement := b.advertised(exchange, 2, "10.20.30.41:9093")
 	b.literalConnect(advertisement, "10.20.30.41", 9093, domain.StatePass, domain.FailureNone)
 
-	if findings := AdvertisedEndpointUnreachable(b.freeze()); len(findings) != 0 {
+	if findings := AdvertisedEndpointUnreachable(rctx(b.freeze())); len(findings) != 0 {
 		t.Fatalf("findings = %v, want none: the endpoint was reached", findings)
 	}
 }
@@ -129,7 +129,7 @@ func TestALiteralAdvertisementCarriesItsTLSOwner(t *testing.T) {
 	handshake := b.handshake(connection, "10.20.30.41", 9093,
 		domain.StateFail, domain.FailureTLSUnknownAuthority)
 
-	findings := AdvertisedEndpointUnreachable(b.freeze())
+	findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 	if len(findings) != 1 {
 		t.Fatalf("findings = %d, want 1", len(findings))
 	}
@@ -157,7 +157,7 @@ func TestALiteralAdvertisementCutShortIsNotCalledUnreachable(t *testing.T) {
 	b.literalConnect(advertisement, "10.20.30.41", 9093,
 		domain.StateUnknown, domain.FailureExecLocalTimeout)
 
-	findings := AdvertisedEndpointUnreachable(b.freeze())
+	findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 	for _, f := range findings {
 		if f.Kind() == domain.FindingKindConfirmed {
 			t.Fatalf("a locally-timed-out literal advertisement produced a confirmed claim: %v", f)
@@ -173,7 +173,7 @@ func TestANamedAdvertisementStillResolves(t *testing.T) {
 	advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 	b.lookup(advertisement, "broker-2.internal", domain.StateFail, domain.FailureDNSNoAddress)
 
-	findings := AdvertisedEndpointUnreachable(b.freeze())
+	findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 	if len(findings) != 1 {
 		t.Fatalf("findings = %d, want 1", len(findings))
 	}
@@ -199,7 +199,7 @@ func TestAMixedAdvertisedTopologyIsDiagnosedCoherently(t *testing.T) {
 	six := b.advertised(exchange, 3, "[2001:db8::42]:9093")
 	b.literalConnect(six, "2001:db8::42", 9093, domain.StateFail, domain.FailureTCPHostUnreachable)
 
-	findings := AdvertisedEndpointUnreachable(b.freeze())
+	findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 	if len(findings) != 3 {
 		t.Fatalf("findings = %d, want one per advertisement: %v", len(findings), findings)
 	}

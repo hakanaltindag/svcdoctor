@@ -21,10 +21,10 @@ func everyFinding(t *testing.T) []domain.Finding {
 	t.Helper()
 
 	var out []domain.Finding
-	out = append(out, DNS(requestedDNS(t, domain.StateFail, domain.FailureDNSNoAddress))...)
-	out = append(out, DNS(requestedDNS(t, domain.StateFail, domain.FailureDNSTimeout))...)
-	out = append(out, TCP(requestedTCP(t,
-		fail("10.0.0.1", domain.FailureTCPConnectionRefused)))...)
+	out = append(out, DNS(rctx(requestedDNS(t, domain.StateFail, domain.FailureDNSNoAddress)))...)
+	out = append(out, DNS(rctx(requestedDNS(t, domain.StateFail, domain.FailureDNSTimeout)))...)
+	out = append(out, TCP(rctx(requestedTCP(t,
+		fail("10.0.0.1", domain.FailureTCPConnectionRefused))))...)
 
 	if len(out) != 3 {
 		t.Fatalf("got %d findings, want one of each authorized code", len(out))
@@ -168,7 +168,7 @@ func TestEveryAuthorizedShapeBuildsAValidFinding(t *testing.T) {
 		domain.FailureDNSResolverFailure,
 	}
 	for _, class := range dnsClasses {
-		if got := len(DNS(requestedDNS(t, domain.StateFail, class))); got != 1 {
+		if got := len(DNS(rctx(requestedDNS(t, domain.StateFail, class)))); got != 1 {
 			t.Errorf("%s produced %d findings, want 1", class, got)
 		}
 	}
@@ -183,7 +183,7 @@ func TestEveryAuthorizedShapeBuildsAValidFinding(t *testing.T) {
 	}
 	for _, class := range tcpClasses {
 		graph := requestedTCP(t, fail("10.0.0.1", class))
-		if got := len(TCP(graph)); got != 1 {
+		if got := len(TCP(rctx(graph))); got != 1 {
 			t.Errorf("%s produced %d findings, want 1", class, got)
 		}
 	}
@@ -206,14 +206,14 @@ func TestOutputIsIndependentOfInsertionOrder(t *testing.T) {
 		fail("10.0.0.4", domain.FailureTCPConnectionReset),
 	}
 
-	baseline := TCP(requestedTCP(t, outcomes...))
+	baseline := TCP(rctx(requestedTCP(t, outcomes...)))
 	if len(baseline) != 1 {
 		t.Fatalf("got %d findings, want 1", len(baseline))
 	}
 	wantRefs := baseline[0].EvidenceRefs()
 
 	for _, permutation := range permutations(outcomes) {
-		findings := TCP(requestedTCP(t, permutation...))
+		findings := TCP(rctx(requestedTCP(t, permutation...)))
 		if len(findings) != 1 {
 			t.Fatalf("permutation %v produced %d findings", permutation, len(findings))
 		}
@@ -246,7 +246,7 @@ func TestTwoAnchorsProduceDeterministicOrder(t *testing.T) {
 		return b.freeze()
 	}
 
-	first := DNS(build())
+	first := DNS(rctx(build()))
 	if len(first) != 2 {
 		t.Fatalf("got %d findings, want one per anchor", len(first))
 	}
@@ -255,7 +255,7 @@ func TestTwoAnchorsProduceDeterministicOrder(t *testing.T) {
 			first[0].Subject().Ref())
 	}
 
-	second := DNS(build())
+	second := DNS(rctx(build()))
 	for i := range first {
 		if first[i].Subject().Ref() != second[i].Subject().Ref() {
 			t.Error("two evaluations of one graph disagreed on order")

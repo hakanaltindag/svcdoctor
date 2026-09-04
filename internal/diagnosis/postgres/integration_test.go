@@ -43,16 +43,16 @@ func failingGraph(t *testing.T) domain.Graph {
 // Repeated evaluation is what catches a rule that iterated a Go map, because map
 // order is randomized per range and a single pass would pass by luck.
 func TestDiagnosisIsByteStable(t *testing.T) {
-	engine := diagnosis.NewEngine(SSLRequest, Startup, Authentication, Session)
+	engine := testEngine(SSLRequest, Startup, Authentication, Session)
 	g := failingGraph(t)
 
-	first, err := json.Marshal(engine.Diagnose(g))
+	first, err := json.Marshal(engine.Diagnose(rctx(g)))
 	if err != nil {
 		t.Fatalf("encoding: %v", err)
 	}
 
 	for i := range 64 {
-		again, err := json.Marshal(engine.Diagnose(g))
+		again, err := json.Marshal(engine.Diagnose(rctx(g)))
 		if err != nil {
 			t.Fatalf("encoding on pass %d: %v", i, err)
 		}
@@ -67,8 +67,8 @@ func TestDiagnosisIsByteStable(t *testing.T) {
 func TestWiringOrderDoesNotReachTheOutput(t *testing.T) {
 	g := failingGraph(t)
 
-	forward := diagnosis.NewEngine(SSLRequest, Startup, Authentication, Session).Diagnose(g)
-	reverse := diagnosis.NewEngine(Session, Authentication, Startup, SSLRequest).Diagnose(g)
+	forward := testEngine(SSLRequest, Startup, Authentication, Session).Diagnose(rctx(g))
+	reverse := testEngine(Session, Authentication, Startup, SSLRequest).Diagnose(rctx(g))
 
 	a, _ := json.Marshal(forward)
 	b, _ := json.Marshal(reverse)
@@ -125,20 +125,20 @@ func multiAddressGraph(t *testing.T) domain.Graph {
 // Graph.Nodes produces a different order on some pass. Repeated because Go
 // randomizes map order per range and a single pass would pass by luck.
 func TestMultiNodeOrderIsByteStable(t *testing.T) {
-	engine := diagnosis.NewEngine(SSLRequest, Startup, Authentication, Session)
+	engine := testEngine(SSLRequest, Startup, Authentication, Session)
 	g := multiAddressGraph(t)
 
-	first, err := json.Marshal(engine.Diagnose(g))
+	first, err := json.Marshal(engine.Diagnose(rctx(g)))
 	if err != nil {
 		t.Fatalf("encoding: %v", err)
 	}
-	if len(engine.Diagnose(g)) < 8 {
+	if len(engine.Diagnose(rctx(g))) < 8 {
 		t.Fatalf("the fixture produced %d findings; too few to detect an ordering defect",
-			len(engine.Diagnose(g)))
+			len(engine.Diagnose(rctx(g))))
 	}
 
 	for i := range 128 {
-		again, err := json.Marshal(engine.Diagnose(g))
+		again, err := json.Marshal(engine.Diagnose(rctx(g)))
 		if err != nil {
 			t.Fatalf("encoding on pass %d: %v", i, err)
 		}
@@ -165,7 +165,7 @@ func TestMultiNodeOrderIsByteStable(t *testing.T) {
 func TestEachRuleIsOrderedBeforeTheEngineSortsIt(t *testing.T) {
 	g := multiAddressGraph(t)
 
-	rules := map[string]func(domain.Graph) []domain.Finding{
+	rules := map[string]diagnosis.Rule{
 		"SSLRequest":     SSLRequest,
 		"Startup":        Startup,
 		"Authentication": Authentication,
@@ -174,14 +174,14 @@ func TestEachRuleIsOrderedBeforeTheEngineSortsIt(t *testing.T) {
 
 	for name, rule := range rules {
 		t.Run(name, func(t *testing.T) {
-			first := subjectsOf(rule(g))
+			first := subjectsOf(rule(rctx(g)))
 			if name != "Session" && len(first) < 2 {
 				t.Fatalf("%s produced %d findings; too few to detect an ordering defect",
 					name, len(first))
 			}
 
 			for i := range 128 {
-				again := subjectsOf(rule(g))
+				again := subjectsOf(rule(rctx(g)))
 				if len(again) != len(first) {
 					t.Fatalf("pass %d: %s produced %d findings, want %d",
 						i, name, len(again), len(first))
@@ -387,7 +387,7 @@ func reportFrom(t *testing.T, g domain.Graph) domain.Report {
 		Target:   target,
 		Vantage:  vantage,
 		Graph:    g,
-		Findings: diagnosis.NewEngine(SSLRequest, Startup, Authentication, Session).Diagnose(g),
+		Findings: testEngine(SSLRequest, Startup, Authentication, Session).Diagnose(rctx(g)),
 		Security: security,
 	})
 	if err != nil {

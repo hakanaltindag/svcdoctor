@@ -3,6 +3,7 @@ package kafka
 import (
 	"strconv"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
@@ -85,7 +86,9 @@ const recommendUnusable = "Check how this broker's advertised host and port are 
 // the claim is about the advertisement itself, and there is nothing beneath it —
 // Phase 3.4 correctly runs no sweep for an advertisement it cannot turn into a
 // target (ADR 0033).
-func UnusableAdvertisement(g domain.Graph) []domain.Finding {
+func UnusableAdvertisement(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	// Canonical order in, deterministic order out, before the engine sorts.
 	for _, node := range g.Nodes() {

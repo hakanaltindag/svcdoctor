@@ -87,7 +87,7 @@ func TestAuthorizedTLSFailuresProduceTheirCode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.class.String(), func(t *testing.T) {
 			graph := requestedTLS(t, tlsFail("10.0.0.1:5432", tt.class))
-			finding := requireOne(t, TLS(graph), tt.want)
+			finding := requireOne(t, TLS(rctx(graph)), tt.want)
 
 			// Endpoint-scoped: the concrete peer that presented what was seen,
 			// never the logical target.
@@ -132,7 +132,7 @@ func TestAuthorizedTLSFailuresProduceTheirCode(t *testing.T) {
 
 // TestTLSPassProducesNothing is the base case.
 func TestTLSPassProducesNothing(t *testing.T) {
-	requireNone(t, TLS(requestedTLS(t, tlsPass("10.0.0.1:5432"))))
+	requireNone(t, TLS(rctx(requestedTLS(t, tlsPass("10.0.0.1:5432")))))
 }
 
 // TestLocalExecutionOutcomesProduceNoTLSClaim is the safety boundary.
@@ -168,7 +168,7 @@ func TestLocalExecutionOutcomesProduceNoTLSClaim(t *testing.T) {
 			}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			requireNone(t, TLS(requestedTLS(t, tt.outcome)))
+			requireNone(t, TLS(rctx(requestedTLS(t, tt.outcome))))
 		})
 	}
 }
@@ -189,7 +189,7 @@ func TestUnproducedAndUnknownClassesProduceNothing(t *testing.T) {
 		domain.FailureProtocolMalformedResponse,
 	} {
 		t.Run(class.String(), func(t *testing.T) {
-			requireNone(t, TLS(requestedTLS(t, tlsFail("10.0.0.1:5432", class))))
+			requireNone(t, TLS(rctx(requestedTLS(t, tlsFail("10.0.0.1:5432", class)))))
 		})
 	}
 }
@@ -209,7 +209,7 @@ func TestAPassingSiblingDoesNotSuppressAFailingEndpoint(t *testing.T) {
 		tlsFail("10.0.0.2:5432", domain.FailureTLSHostnameMismatch),
 	)
 
-	finding := requireOne(t, TLS(graph), CodeTLSIdentityMismatch)
+	finding := requireOne(t, TLS(rctx(graph)), CodeTLSIdentityMismatch)
 	if got := finding.Subject().Ref(); got != "10.0.0.2:5432" {
 		t.Errorf("subject = %q, want the failing endpoint", got)
 	}
@@ -222,7 +222,7 @@ func TestEachFailingEndpointProducesItsOwnFinding(t *testing.T) {
 		tlsFail("10.0.0.2:5432", domain.FailureTLSCertificateExpired),
 	)
 
-	findings := TLS(graph)
+	findings := TLS(rctx(graph))
 	if len(findings) != 2 {
 		t.Fatalf("got %d findings %v, want one per failing endpoint",
 			len(findings), codesOf(findings))
@@ -257,7 +257,7 @@ func TestPostgreSQLInBandTLSIsNotOwned(t *testing.T) {
 		vocabulary.StepTLSHandshake, domain.LayerTLS,
 		domain.StateFail, domain.FailureTLSHostnameMismatch)
 
-	requireNone(t, TLS(b.freeze()))
+	requireNone(t, TLS(rctx(b.freeze())))
 }
 
 // TestPostgreSQLShapeStillProducesItsTransportFindings guards the regression the
@@ -277,8 +277,8 @@ func TestPostgreSQLShapeStillProducesItsTransportFindings(t *testing.T) {
 		domain.StateSkipped, domain.FailureExecSkippedPrerequisiteFailed)
 
 	graph := b.freeze()
-	requireOne(t, TCP(graph), CodeConnectionNotEstablished)
-	requireNone(t, TLS(graph))
+	requireOne(t, TCP(rctx(graph)), CodeConnectionNotEstablished)
+	requireNone(t, TLS(rctx(graph)))
 }
 
 // TestKafkaAdvertisedTLSIsNotOwned proves the other disjointness.
@@ -310,7 +310,7 @@ func TestKafkaAdvertisedTLSIsNotOwned(t *testing.T) {
 		vocabulary.StepTLSHandshake, domain.LayerTLS,
 		domain.StateFail, domain.FailureTLSUnknownAuthority)
 
-	requireNone(t, TLS(b.freeze()))
+	requireNone(t, TLS(rctx(b.freeze())))
 }
 
 // TestMalformedShapesProduceNothing: a shape no producer makes is declined, not
@@ -328,7 +328,7 @@ func TestMalformedShapesProduceNothing(t *testing.T) {
 			vocabulary.StepTLSHandshake, domain.LayerTLS,
 			domain.StateFail, domain.FailureTLSUnknownAuthority)
 
-		requireNone(t, TLS(b.freeze()))
+		requireNone(t, TLS(rctx(b.freeze())))
 	})
 
 	t.Run("two lookups under one anchor", func(t *testing.T) {
@@ -341,7 +341,7 @@ func TestMalformedShapesProduceNothing(t *testing.T) {
 			vocabulary.StepTLSHandshake, domain.LayerTLS,
 			domain.StateFail, domain.FailureTLSUnknownAuthority)
 
-		requireNone(t, TLS(b.freeze()))
+		requireNone(t, TLS(rctx(b.freeze())))
 	})
 
 	t.Run("handshake on the wrong layer", func(t *testing.T) {
@@ -353,7 +353,7 @@ func TestMalformedShapesProduceNothing(t *testing.T) {
 			vocabulary.StepTLSHandshake, domain.LayerProtocol,
 			domain.StateFail, domain.FailureTLSUnknownAuthority)
 
-		requireNone(t, TLS(b.freeze()))
+		requireNone(t, TLS(rctx(b.freeze())))
 	})
 }
 
@@ -365,9 +365,9 @@ func TestTLSFindingsAreDeterministic(t *testing.T) {
 		tlsPass("10.0.0.3:5432"),
 	)
 
-	first := codesOf(TLS(graph))
+	first := codesOf(TLS(rctx(graph)))
 	for range 20 {
-		next := codesOf(TLS(graph))
+		next := codesOf(TLS(rctx(graph)))
 		if len(next) != len(first) {
 			t.Fatalf("finding count varies: %v then %v", first, next)
 		}

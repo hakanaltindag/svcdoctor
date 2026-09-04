@@ -37,7 +37,7 @@ func TestBootstrapTransportFailureIsNotClaimed(t *testing.T) {
 	exchange := b.metadata(domain.StatePass)
 	reachable(b, exchange, 1, "broker-1.internal:9093", "broker-1.internal", "10.20.0.1")
 
-	none(t, AdvertisedEndpointUnreachable(b.freeze()))
+	none(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 }
 
 // TestTheSameEndpointAsBootstrapAndAdvertisement is Phase 3.4's important case,
@@ -69,7 +69,7 @@ func TestTheSameEndpointAsBootstrapAndAdvertisement(t *testing.T) {
 		scopedLookup, "10.0.0.1", 9092, domain.StateFail, domain.FailureTCPConnectionRefused)
 	graph := b.freeze()
 
-	f := only(t, AdvertisedEndpointUnreachable(graph))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	confirmed(t, f)
 	wantRefs(t, f, exchange, advertisement, scopedConnect)
 
@@ -103,7 +103,7 @@ func TestFindingsAreIndependentOfGraphAssemblyOrder(t *testing.T) {
 		exchange := b.metadata(domain.StatePass)
 		add(b, exchange)
 
-		findings := AdvertisedEndpointUnreachable(b.freeze())
+		findings := AdvertisedEndpointUnreachable(rctx(b.freeze()))
 		domain.SortFindings(findings)
 
 		out := make([]string, 0, len(findings))
@@ -142,9 +142,9 @@ func TestMultipleRunsOfOneGraphAreIdentical(t *testing.T) {
 	}
 	graph := b.freeze()
 
-	want := only(t, AdvertisedEndpointUnreachable(graph))
+	want := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 	for i := 0; i < 50; i++ {
-		got := only(t, AdvertisedEndpointUnreachable(graph))
+		got := only(t, AdvertisedEndpointUnreachable(rctx(graph)))
 		if got.Summary() != want.Summary() {
 			t.Fatalf("summary drifted on run %d: %q vs %q", i, got.Summary(), want.Summary())
 		}

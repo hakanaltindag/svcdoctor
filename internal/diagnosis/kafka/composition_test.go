@@ -23,7 +23,7 @@ import (
 // other — "no path reached it" and "there was nothing to reach".
 
 func bothRules() diagnosis.Engine {
-	return diagnosis.NewEngine(AdvertisedEndpointUnreachable, UnusableAdvertisement)
+	return testEngine(AdvertisedEndpointUnreachable, UnusableAdvertisement)
 }
 
 // codesOf returns the code and subject of each finding, for comparison.
@@ -35,7 +35,7 @@ type produced struct {
 func run(t *testing.T, b *builder) []produced {
 	t.Helper()
 	out := []produced{}
-	for _, f := range bothRules().Diagnose(b.freeze()) {
+	for _, f := range bothRules().Diagnose(rctx(b.freeze())) {
 		out = append(out, produced{f.Code(), f.Subject().Ref()})
 	}
 	return out
@@ -155,7 +155,7 @@ func TestNoSubjectCarriesTwoKafkaFindings(t *testing.T) {
 	b.unusable(exchange, 4, "broker-4.internal:-1", "broker-4.internal", -1)
 
 	bySubject := map[string]map[domain.FindingCode]bool{}
-	for _, f := range bothRules().Diagnose(b.freeze()) {
+	for _, f := range bothRules().Diagnose(rctx(b.freeze())) {
 		if bySubject[f.Subject().Ref()] == nil {
 			bySubject[f.Subject().Ref()] = map[domain.FindingCode]bool{}
 		}
@@ -188,9 +188,9 @@ func TestTheEngineNeedsNoSuppression(t *testing.T) {
 
 	// Each rule alone produces exactly what the pair produces together: nothing
 	// is added, removed or altered by composition.
-	unreachableAlone := AdvertisedEndpointUnreachable(graph)
-	unusableAlone := UnusableAdvertisement(graph)
-	together := engine.Diagnose(graph)
+	unreachableAlone := AdvertisedEndpointUnreachable(rctx(graph))
+	unusableAlone := UnusableAdvertisement(rctx(graph))
+	together := engine.Diagnose(rctx(graph))
 
 	if len(unreachableAlone) != 0 {
 		t.Errorf("the reachability rule fired on an unusable advertisement: %d", len(unreachableAlone))
@@ -229,14 +229,14 @@ func TestAnUnusableAdvertisementWithATransportSweepStillYieldsOneFinding(t *test
 	b.connect(lookup, "10.20.0.2", 9093, domain.StateFail, domain.FailureTCPConnectionRefused)
 	graph := b.freeze()
 
-	findings := bothRules().Diagnose(graph)
+	findings := bothRules().Diagnose(rctx(graph))
 	if len(findings) != 1 {
 		t.Fatalf("findings = %d, want exactly 1: %v", len(findings), summaries(findings))
 	}
 	if got := findings[0].Code(); got != CodeAdvertisedEndpointUnusable {
 		t.Errorf("code = %s, want %s", got, CodeAdvertisedEndpointUnusable)
 	}
-	if got := len(AdvertisedEndpointUnreachable(graph)); got != 0 {
+	if got := len(AdvertisedEndpointUnreachable(rctx(graph))); got != 0 {
 		t.Errorf("the reachability rule produced %d findings for an advertisement that "+
 			"never named a usable endpoint", got)
 	}

@@ -224,9 +224,9 @@ func TestTheDefaultedVHostIsNamedOnARefusal(t *testing.T) {
 
 func allFindings(g domain.Graph) []domain.Finding {
 	var out []domain.Finding
-	out = append(out, ConnectionStart(g)...)
-	out = append(out, Authentication(g)...)
-	out = append(out, ConnectionOpen(g)...)
+	out = append(out, ConnectionStart(rctx(g))...)
+	out = append(out, Authentication(rctx(g))...)
+	out = append(out, ConnectionOpen(rctx(g))...)
 	return out
 }
 

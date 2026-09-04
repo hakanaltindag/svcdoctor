@@ -93,7 +93,7 @@ func TestUnexpectedSweepShapesWithholdEveryClaim(t *testing.T) {
 			exchange := b.metadata(domain.StatePass)
 			advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 			tc.build(b, advertisement)
-			none(t, AdvertisedEndpointUnreachable(b.freeze()))
+			none(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 		})
 	}
 }
@@ -116,7 +116,7 @@ func TestAMixedTerminalLayerWithholdsRatherThanClaims(t *testing.T) {
 	b.skippedHandshake(refused, "10.20.0.1", 9093)
 	b.connect(lookup, "10.20.0.2", 9093, domain.StatePass, domain.FailureNone) // no handshake node
 
-	none(t, AdvertisedEndpointUnreachable(b.freeze()))
+	none(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 }
 
 // TestAnEmptyGraphProducesNothing is the trivial guard: a rule that walks a graph
@@ -126,7 +126,7 @@ func TestAnEmptyGraphProducesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("freezing an empty graph: %v", err)
 	}
-	none(t, AdvertisedEndpointUnreachable(graph))
+	none(t, AdvertisedEndpointUnreachable(rctx(graph)))
 }
 
 // TestAnAdvertisementWithNoNodeIDStillProducesAFinding proves the broker phrase
@@ -141,7 +141,7 @@ func TestAnAdvertisementWithNoNodeIDStillProducesAFinding(t *testing.T) {
 	lookup := b.lookup(advertisement, "broker-2.internal", domain.StatePass, domain.FailureNone)
 	refused := b.connect(lookup, "10.20.0.1", 9093, domain.StateFail, domain.FailureTCPConnectionRefused)
 
-	f := only(t, AdvertisedEndpointUnreachable(b.freeze()))
+	f := only(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 	confirmed(t, f)
 	wantRefs(t, f, exchange, advertisement, refused)
 }

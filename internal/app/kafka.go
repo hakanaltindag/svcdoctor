@@ -259,20 +259,34 @@ func DiagnoseKafka(ctx context.Context, params KafkaParams) (Result, error) {
 	// unreachable from them and stay owned by the Kafka rule that claims them
 	// outright. Nothing arbitrates between the two sets, and the engine
 	// deduplicates nothing (ADR 0043 section 9, ADR 0053 section 8).
-	findings := diagnosis.NewEngine(
-		diagnosistransport.DNS,
-		diagnosistransport.TCP,
-		diagnosistransport.TLS,
-		diagnosiskafka.Protocol,
-		diagnosiskafka.AdvertisedEndpointUnreachable,
-		diagnosiskafka.UnusableAdvertisement,
-	).Diagnose(graph)
-
-	report, err := buildKafkaReport(graph, findings, target, params, startedAt)
+	//
+	// Each rule is wired in under a stable identity; see the note in
+	// diagnosePostgres for why the identity is written here rather than
+	// exported from the rule's own package.
+	registry, err := diagnosis.NewRuleSet().
+		Add("transport/dns", diagnosistransport.DNS).
+		Add("transport/tcp", diagnosistransport.TCP).
+		Add("transport/tls", diagnosistransport.TLS).
+		Add("kafka/protocol", diagnosiskafka.Protocol).
+		Add("kafka/advertised-endpoint", diagnosiskafka.AdvertisedEndpointUnreachable).
+		Add("kafka/unusable-advertisement", diagnosiskafka.UnusableAdvertisement).
+		Freeze()
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{report: report, incomplete: incomplete}, nil
+
+	outcome := diagnosis.NewEngine(registry).Evaluate(diagnosis.RuleContext{
+		Graph:      graph,
+		Vantage:    params.Vantage,
+		Incomplete: incomplete,
+	})
+
+	report, err := buildKafkaReport(graph, outcome.Findings(), target, params, startedAt)
+	if err != nil {
+		return Result{}, err
+	}
+	// A discarded rule makes the run incomplete; see diagnosePostgres.
+	return Result{report: report, incomplete: incomplete || outcome.Failed()}, nil
 }
 
 // measureKafka performs every network stage and records what happened.

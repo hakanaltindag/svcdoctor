@@ -161,6 +161,25 @@ linters:
               desc: diagnosis must be deterministic
             - pkg: math/rand/v2
               desc: diagnosis must be deterministic
+            # Added in Phase 10.1a, on ADR 0080 section 2.2's list. crypto/rand
+            # is denied for the same reason as math/rand and not for a stronger
+            # one: a rule whose output depends on a random source is a rule whose
+            # output is not a function of the evidence, and which source it draws
+            # from does not change that.
+            - pkg: crypto/rand
+              desc: diagnosis must be deterministic
+            - pkg: io/ioutil
+              desc: diagnosis must not read files
+            # Not on this list, deliberately: `time`. ADR 0080 section 2.2 bans
+            # `time.Now` rather than the package, because durations are a
+            # legitimate need and a package ban would take them too. forbidigo's
+            # forbid list is global in golangci-lint v2, so scoping the call ban
+            # to this directory would mean granting an exclusion to every other
+            # directory in the tree — an enumeration a new top-level package
+            # escapes silently. The prohibition is enforced instead by an AST
+            # scan in test/security/diagnosticcore_test.go, which is scoped
+            # exactly and is the mechanism this repository already uses for the
+            # SASL core.
 
         # A service vocabulary package is a leaf: constants and nothing else.
         # ADR 0034 section 19 authorized internal/service/kafka on exactly that

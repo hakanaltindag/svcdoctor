@@ -38,7 +38,7 @@ func TestTheClassMapping(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			graph := inBandTLS(t, domain.StateFail, c.class)
 
-			finding := only(t, TLS(graph))
+			finding := only(t, TLS(rctx(graph)))
 			if got := finding.Code(); got != c.want {
 				t.Fatalf("code = %s, want %s", got, c.want)
 			}
@@ -93,7 +93,7 @@ func TestTheSemanticFieldsArePinnedPerCode(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(string(c.code)+"/"+c.class.String(), func(t *testing.T) {
-			finding := only(t, TLS(inBandTLS(t, domain.StateFail, c.class)))
+			finding := only(t, TLS(rctx(inBandTLS(t, domain.StateFail, c.class))))
 
 			if got := finding.Kind(); got != domain.FindingKindConfirmed {
 				t.Errorf("kind = %s, want CONFIRMED", got)
@@ -143,7 +143,7 @@ func TestNonFailingHandshakesProduceNothing(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			graph := inBandTLS(t, c.state, c.class)
-			if got := TLS(graph); len(got) != 0 {
+			if got := TLS(rctx(graph)); len(got) != 0 {
 				t.Errorf("got %v, want no finding", codesOf(got))
 			}
 		})
@@ -164,7 +164,7 @@ func TestAnUnauthorizedClassProducesNothing(t *testing.T) {
 		domain.FailureAuthCredentialsRejected,
 	} {
 		t.Run(class.String(), func(t *testing.T) {
-			if got := TLS(inBandTLS(t, domain.StateFail, class)); len(got) != 0 {
+			if got := TLS(rctx(inBandTLS(t, domain.StateFail, class))); len(got) != 0 {
 				t.Errorf("got %v, want no finding", codesOf(got))
 			}
 		})
@@ -227,7 +227,7 @@ func TestAFailingEndpointIsDiagnosedEvenWhenAnotherSucceeds(t *testing.T) {
 		pathOutcome{"[2001:db8::1]:5432", domain.StatePass, domain.FailureNone},
 	)
 
-	finding := only(t, TLS(graph))
+	finding := only(t, TLS(rctx(graph)))
 	if got := finding.Code(); got != CodeTLSIdentityMismatch {
 		t.Errorf("code = %s, want %s", got, CodeTLSIdentityMismatch)
 	}
@@ -244,7 +244,7 @@ func TestAFailingEndpointIsDiagnosedEvenWhenAnotherIsUnmeasured(t *testing.T) {
 		pathOutcome{"[2001:db8::1]:5432", domain.StateUnknown, domain.FailureExecCancelled},
 	)
 
-	finding := only(t, TLS(graph))
+	finding := only(t, TLS(rctx(graph)))
 	if got := finding.Subject().Ref(); got != "10.0.0.5:5432" {
 		t.Errorf("subject = %q, want the failing endpoint", got)
 	}
@@ -256,7 +256,7 @@ func TestEveryFailingEndpointGetsItsOwnFinding(t *testing.T) {
 			pathOutcome{"10.0.0.5:5432", domain.StateFail, domain.FailureTLSUnknownAuthority},
 			pathOutcome{"10.0.0.6:5432", domain.StateFail, domain.FailureTLSUnknownAuthority},
 		)
-		findings := TLS(graph)
+		findings := TLS(rctx(graph))
 		if len(findings) != 2 {
 			t.Fatalf("got %d findings, want one per failing endpoint", len(findings))
 		}
@@ -272,7 +272,7 @@ func TestEveryFailingEndpointGetsItsOwnFinding(t *testing.T) {
 			pathOutcome{"10.0.0.5:5432", domain.StateFail, domain.FailureTLSCertificateExpired},
 			pathOutcome{"10.0.0.6:5432", domain.StateFail, domain.FailureTLSPeerNotTLS},
 		)
-		findings := TLS(graph)
+		findings := TLS(rctx(graph))
 		if len(findings) != 2 {
 			t.Fatalf("got %d findings, want one per failing endpoint", len(findings))
 		}
@@ -305,7 +305,7 @@ func TestADeclinedNegotiationOwnsItsOwnFailure(t *testing.T) {
 	})
 	graph := b.freeze()
 
-	if got := TLS(graph); len(got) != 0 {
+	if got := TLS(rctx(graph)); len(got) != 0 {
 		t.Errorf("the TLS rule produced %v; the negotiation owns this failure", codesOf(got))
 	}
 	finding := only(t, allFindings(graph))
@@ -321,7 +321,7 @@ func TestAFailedHandshakeUnderAFailedNegotiationProducesNothing(t *testing.T) {
 	b.sslNode(domain.StateFail, domain.FailureProtocolUnexpectedResponse, nil)
 	b.tlsNode(domain.StateFail, domain.FailureTLSPeerNotTLS)
 
-	if got := TLS(b.freeze()); len(got) != 0 {
+	if got := TLS(rctx(b.freeze())); len(got) != 0 {
 		t.Errorf("got %v; the negotiation did not pass, so nothing agreed to encrypt",
 			codesOf(got))
 	}
@@ -336,7 +336,7 @@ func TestMalformedShapesWithhold(t *testing.T) {
 			id: idTLS, subject: addr, layer: domain.LayerTLS,
 			step: vocabulary.StepTLSHandshake, state: domain.StateFail, class: fail,
 		})
-		if got := TLS(b.freeze()); len(got) != 0 {
+		if got := TLS(rctx(b.freeze())); len(got) != 0 {
 			t.Errorf("got %v, want none", codesOf(got))
 		}
 	})
@@ -355,7 +355,7 @@ func TestMalformedShapesWithhold(t *testing.T) {
 		if err := b.b.AddParent(id, domain.EvidenceID(idTCP)); err != nil {
 			t.Fatalf("second parent: %v", err)
 		}
-		if got := TLS(b.freeze()); len(got) != 0 {
+		if got := TLS(rctx(b.freeze())); len(got) != 0 {
 			t.Errorf("got %v; two layers cannot both own one execution", codesOf(got))
 		}
 	})
@@ -370,7 +370,7 @@ func TestMalformedShapesWithhold(t *testing.T) {
 			id: idTLS, subject: addr, layer: domain.LayerTLS,
 			step: vocabulary.StepTLSHandshake, state: domain.StateFail, class: fail, parent: idTCP,
 		})
-		if got := TLS(b.freeze()); len(got) != 0 {
+		if got := TLS(rctx(b.freeze())); len(got) != 0 {
 			t.Errorf("got %v; this is generic transport TLS and belongs elsewhere", codesOf(got))
 		}
 	})
@@ -382,7 +382,7 @@ func TestMalformedShapesWithhold(t *testing.T) {
 			id: idTLS, subject: "10.0.0.99:5432", layer: domain.LayerTLS,
 			step: vocabulary.StepTLSHandshake, state: domain.StateFail, class: fail, parent: idSSL,
 		})
-		if got := TLS(b.freeze()); len(got) != 0 {
+		if got := TLS(rctx(b.freeze())); len(got) != 0 {
 			t.Errorf("got %v; the two nodes describe different endpoints", codesOf(got))
 		}
 	})
@@ -394,7 +394,7 @@ func TestMalformedShapesWithhold(t *testing.T) {
 			id: idTLS, subject: addr, layer: domain.LayerProtocol,
 			step: vocabulary.StepTLSHandshake, state: domain.StateFail, class: fail, parent: idSSL,
 		})
-		if got := TLS(b.freeze()); len(got) != 0 {
+		if got := TLS(rctx(b.freeze())); len(got) != 0 {
 			t.Errorf("got %v; the node disagrees with itself", codesOf(got))
 		}
 	})
@@ -425,7 +425,7 @@ func TestRows27And28GenericAndDiscoveredHandshakesAreNotOwned(t *testing.T) {
 				step: vocabulary.StepTLSHandshake, state: domain.StateFail,
 				class: domain.FailureTLSUnknownAuthority, parent: c.connect,
 			})
-			if got := TLS(b.freeze()); len(got) != 0 {
+			if got := TLS(rctx(b.freeze())); len(got) != 0 {
 				t.Errorf("got %v, want none", codesOf(got))
 			}
 		})
@@ -443,7 +443,7 @@ func TestASucceedingHandshakeLeavesLaterStagesAlone(t *testing.T) {
 		b.authNode(domain.StateFail, domain.FailureAuthCredentialsRejected, "28P01", boolPtr(true), "")
 		graph := b.freeze()
 
-		if got := TLS(graph); len(got) != 0 {
+		if got := TLS(rctx(graph)); len(got) != 0 {
 			t.Errorf("the TLS rule produced %v on a passing handshake", codesOf(got))
 		}
 		if got := only(t, allFindings(graph)).Code(); got != CodeCredentialsRejected {
@@ -460,7 +460,7 @@ func TestASucceedingHandshakeLeavesLaterStagesAlone(t *testing.T) {
 		b.sessionNode(domain.StateFail, domain.FailureResourceNotFound, "3D000", boolPtr(true), idAuth)
 		graph := b.freeze()
 
-		if got := TLS(graph); len(got) != 0 {
+		if got := TLS(rctx(graph)); len(got) != 0 {
 			t.Errorf("the TLS rule produced %v", codesOf(got))
 		}
 		if got := only(t, allFindings(graph)).Code(); got != CodeDatabaseNotFound {
@@ -496,7 +496,7 @@ func TestOutputIsIndependentOfInsertionOrder(t *testing.T) {
 		pathOutcome{"10.0.0.5:5432", domain.StateFail, domain.FailureTLSPeerNotTLS},
 	)
 
-	a, b := TLS(forward), TLS(reversed)
+	a, b := TLS(rctx(forward)), TLS(rctx(reversed))
 	if len(a) != 2 || len(b) != 2 {
 		t.Fatalf("got %d and %d findings, want 2 each", len(a), len(b))
 	}
@@ -522,7 +522,7 @@ func everyTLSFinding(t *testing.T) []domain.Finding {
 		domain.FailureTLSCertificateExpired,
 		domain.FailureTLSHandshakeFailure,
 	} {
-		out = append(out, TLS(inBandTLS(t, domain.StateFail, class))...)
+		out = append(out, TLS(rctx(inBandTLS(t, domain.StateFail, class)))...)
 	}
 	if len(out) != 5 {
 		t.Fatalf("got %d findings, want one of each authorized code", len(out))

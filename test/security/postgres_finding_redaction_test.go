@@ -117,10 +117,10 @@ func postgresFailureReport(t *testing.T) domain.Report {
 	}
 
 	var findings []domain.Finding
-	findings = append(findings, diagnosispostgres.SSLRequest(graph)...)
-	findings = append(findings, diagnosispostgres.Startup(graph)...)
-	findings = append(findings, diagnosispostgres.Authentication(graph)...)
-	findings = append(findings, diagnosispostgres.Session(graph)...)
+	findings = append(findings, diagnosispostgres.SSLRequest(ruleContextFor(graph))...)
+	findings = append(findings, diagnosispostgres.Startup(ruleContextFor(graph))...)
+	findings = append(findings, diagnosispostgres.Authentication(ruleContextFor(graph))...)
+	findings = append(findings, diagnosispostgres.Session(ruleContextFor(graph))...)
 	if len(findings) == 0 {
 		t.Fatal("the fixture produced no finding; the test would prove nothing")
 	}

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
@@ -103,7 +104,9 @@ const authMethodNone = "ok"
 // That is a shape no producer emits, and a rule that guessed at one would be
 // inventing the very half of its claim it cannot cite — which is
 // internal/diagnosis/kafka's treatment of a malformed anchor, applied unchanged.
-func Session(g domain.Graph) []domain.Finding {
+func Session(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range g.Nodes() {
 		if node.Step() != servicepostgres.StepSession {

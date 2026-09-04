@@ -2,33 +2,34 @@ package diagnosis
 
 import "github.com/hakanaltindag/svcdoctor/internal/domain"
 
-// Rule derives findings from a frozen evidence graph.
+// Rule derives findings from frozen, already-collected evidence.
 //
 // It is a function type rather than an interface because a rule is a pure
 // function and nothing about it needs to be anything more. A rule that needs
 // configuration is a closure over it:
 //
 //	func certExpiringSoon(within time.Duration) Rule {
-//	    return func(g domain.Graph) []domain.Finding { ... }
+//	    return func(ctx RuleContext) []domain.Finding { ... }
 //	}
 //
-// # Why the graph is the only argument
+// A rule's identity is not part of this type. A function value cannot carry one
+// honestly — every rule has the same Go type — so identity is paired with a rule
+// at the composition root, by RuleSet.Add. See RuleID.
 //
-// Everything the contract could also carry was considered and left out because
-// nothing needs it:
+// # Why RuleContext is the only argument
 //
-//   - RunMetadata and Vantage describe the run, not the evidence. A rule that
-//     marks a finding vantage-dependent is stating that its own kind of claim
-//     depends on network position, which it knows without being shown the vantage.
-//   - ServiceID would hand the engine a service name to branch on, which is the
-//     coupling docs/ARCHITECTURE.md section 8 exists to prevent. A service rule is
-//     simply a rule that is only wired in for that service.
-//   - Report would be circular: a report contains the findings a rule produces.
-//   - A context value has nothing to cancel. Evaluation is in-memory and bounded
-//     by the size of the graph.
+// The argument was domain.Graph until Phase 10.1a. ADR 0080 section 2.1 widened
+// it to a struct carrying three frozen facts, and the widening is a contract
+// change made once so that the next admitted fact is a field rather than a
+// second rule type. See RuleContext for what those three are and for the much
+// longer list of what is deliberately absent, which is the security model.
 //
-// Adding an argument later is a contract change, so the contract starts at what
-// the first real rules actually need. See ADR 0017.
+// The rejected shapes are still rejected. A context.Context has nothing to
+// cancel and would invite I/O. A ServiceID would hand the engine a service name
+// to branch on, which is the coupling docs/ARCHITECTURE.md section 8 exists to
+// prevent: a service rule is simply a rule that is only wired in for that
+// service. A Report would be circular, because a report contains the findings a
+// rule produces.
 //
 // # No error result
 //
@@ -43,6 +44,10 @@ import "github.com/hakanaltindag/svcdoctor/internal/domain"
 // claim discipline exists to prevent. Rules are responsible for constructing
 // valid findings, and their own tests are where that is established.
 //
+// A rule that panics has its output discarded whole and marks the run
+// incomplete; see Engine.Evaluate and ADR 0083 section 2.3. That is a backstop
+// for a defect, not a way to signal one.
+//
 // # Obligations
 //
 // A rule must:
@@ -50,7 +55,14 @@ import "github.com/hakanaltindag/svcdoctor/internal/domain"
 //   - treat the graph as read-only, which the type already enforces
 //   - reference only evidence identifiers present in that graph
 //   - return findings built through domain.NewFinding, never assembled by hand
-//   - be deterministic: the same graph must produce the same findings
+//   - be deterministic: the same context must produce the same findings
+//   - tolerate the zero RuleContext, which describes a run that measured nothing
+//
+// It must not read a state it did not find, upgrade UNKNOWN or SKIPPED into
+// FAIL, treat absent evidence as contradicting evidence, or copy a peer-supplied
+// string into a finding's prose. Those are ADR 0078 section 2.3, ADR 0081
+// sections 2.4 and 2.7; the shared vocabulary in this package exists so a rule
+// can express them rather than re-derive them.
 //
 // Returning nil is normal and means the rule found nothing to report.
-type Rule func(g domain.Graph) []domain.Finding
+type Rule func(ctx RuleContext) []domain.Finding

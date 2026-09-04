@@ -68,7 +68,7 @@ func eachShape(t *testing.T, fn func(*testing.T, domain.Graph, domain.Finding)) 
 			advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 			tc.build(b, advertisement)
 			graph := b.freeze()
-			fn(t, graph, only(t, AdvertisedEndpointUnreachable(graph)))
+			fn(t, graph, only(t, AdvertisedEndpointUnreachable(rctx(graph))))
 		})
 	}
 }
@@ -230,7 +230,7 @@ func TestDetailNamesATerminalLayerOnlyWhenOneWasMeasured(t *testing.T) {
 		advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 		b.lookup(advertisement, "broker-2.internal", domain.StateFail, domain.FailureDNSNXDomain)
 
-		f := only(t, AdvertisedEndpointUnreachable(b.freeze()))
+		f := only(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 		for _, layer := range layers {
 			if strings.Contains(f.Detail(), layer) {
 				t.Errorf("detail names %s on a sweep that measured no transport path, "+
@@ -270,7 +270,7 @@ func TestDetailNamesATerminalLayerOnlyWhenOneWasMeasured(t *testing.T) {
 				advertisement := b.advertised(exchange, 2, "broker-2.internal:9093")
 				tc.add(b, advertisement)
 
-				f := only(t, AdvertisedEndpointUnreachable(b.freeze()))
+				f := only(t, AdvertisedEndpointUnreachable(rctx(b.freeze())))
 				if !strings.Contains(f.Detail(), tc.want) {
 					t.Errorf("detail = %q, want it to name %q", f.Detail(), tc.want)
 				}

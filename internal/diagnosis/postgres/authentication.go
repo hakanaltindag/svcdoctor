@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
@@ -161,7 +162,9 @@ const (
 // its own two codes — or svcdoctor's own budget expiring, which produces
 // nothing. A SKIPPED node is the policy refusal, which has its own code. Nothing
 // else reaches the floor, which is why the floor's claim can be as flat as it is.
-func Authentication(g domain.Graph) []domain.Finding {
+func Authentication(ctx diagnosis.RuleContext) []domain.Finding {
+	g := ctx.Graph
+
 	var out []domain.Finding
 	for _, node := range g.Nodes() {
 		if node.Step() != servicepostgres.StepAuthentication {

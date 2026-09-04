@@ -182,12 +182,20 @@ func run(t *testing.T, s scenario) outcome {
 		t.Fatalf("Freeze: %v", err)
 	}
 
-	findings := diagnosis.NewEngine(
-		diagnosispostgres.SSLRequest,
-		diagnosispostgres.Startup,
-		diagnosispostgres.Authentication,
-		diagnosispostgres.Session,
-	).Diagnose(graph)
+	// The identities match the ones internal/app registers these rules under, so
+	// this harness and the production path differ in nothing but the graph. See
+	// ADR 0080 sections 2.4 and 2.5.
+	registry, err := diagnosis.NewRuleSet().
+		Add("postgres/ssl-request", diagnosispostgres.SSLRequest).
+		Add("postgres/startup", diagnosispostgres.Startup).
+		Add("postgres/authentication", diagnosispostgres.Authentication).
+		Add("postgres/session", diagnosispostgres.Session).
+		Freeze()
+	if err != nil {
+		t.Fatalf("freezing the rule set: %v", err)
+	}
+
+	findings := diagnosis.NewEngine(registry).Diagnose(diagnosis.RuleContext{Graph: graph})
 
 	return outcome{graph: graph, findings: findings, report: reportOf(t, graph, findings, s)}
 }

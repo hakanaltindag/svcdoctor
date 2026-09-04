@@ -37,7 +37,7 @@ func findingsFor(
 
 	b := newBuilder(t)
 	b.protocolNode(step, state, class, nil)
-	return Protocol(b.freeze())
+	return Protocol(rctx(b.freeze()))
 }
 
 // codeFor asserts exactly one finding and returns it.
@@ -277,7 +277,7 @@ func TestAStepAtTheWrongLayerProducesNoFinding(t *testing.T) {
 		domain.LayerAuth, servicekafka.StepMetadata,
 		domain.StateFail, domain.FailureProtocolPeerClosed, "", nil)
 
-	if found := Protocol(b.freeze()); len(found) != 0 {
+	if found := Protocol(rctx(b.freeze())); len(found) != 0 {
 		t.Errorf("findings = %d, want 0: a node disagreeing with itself is not read", len(found))
 	}
 }
@@ -289,7 +289,7 @@ func TestANonKafkaStepProducesNoFinding(t *testing.T) {
 	advertisement := b.advertised(exchange, 1, "broker-1.internal:9092")
 	b.lookup(advertisement, "broker-1.internal", domain.StateFail, domain.FailureDNSNXDomain)
 
-	for _, finding := range Protocol(b.freeze()) {
+	for _, finding := range Protocol(rctx(b.freeze())) {
 		t.Errorf("claimed %s on a step this rule does not own", finding.Code())
 	}
 }
@@ -540,7 +540,7 @@ func TestFindingsReferenceOnlyTheirOwnNode(t *testing.T) {
 		id := b.protocolNode(key.step, key.state, key.failure, nil)
 		graph := b.freeze()
 
-		found := Protocol(graph)
+		found := Protocol(rctx(graph))
 		if len(found) != 1 {
 			t.Fatalf("%s %s/%s: findings = %d", key.step, key.state, key.failure, len(found))
 		}
@@ -567,7 +567,7 @@ func TestCredentialWithheldCitesItsBlocker(t *testing.T) {
 		domain.StateSkipped, domain.FailureExecSkippedByPolicy, nil)
 	b.blockedBy(skipped, channel)
 
-	found := Protocol(b.freeze())
+	found := Protocol(rctx(b.freeze()))
 	if len(found) != 1 {
 		t.Fatalf("findings = %d, want 1", len(found))
 	}
@@ -591,7 +591,7 @@ func TestOneNodeProducesAtMostOneFinding(t *testing.T) {
 	graph := b.freeze()
 
 	seen := map[domain.EvidenceID]int{}
-	for _, finding := range Protocol(graph) {
+	for _, finding := range Protocol(rctx(graph)) {
 		for _, ref := range finding.EvidenceRefs() {
 			node, ok := graph.Node(ref)
 			if !ok {
@@ -619,14 +619,14 @@ func TestTheAdvertisedRulesDoNotCompete(t *testing.T) {
 		domain.StateFail, domain.FailureProtocolPeerClosed, nil)
 	graph := b.freeze()
 
-	if found := AdvertisedEndpointUnreachable(graph); len(found) != 0 {
+	if found := AdvertisedEndpointUnreachable(rctx(graph)); len(found) != 0 {
 		t.Errorf("the advertised rule claimed %d findings on a failed Metadata exchange",
 			len(found))
 	}
-	if found := UnusableAdvertisement(graph); len(found) != 0 {
+	if found := UnusableAdvertisement(rctx(graph)); len(found) != 0 {
 		t.Errorf("the unusable-advertisement rule claimed %d findings", len(found))
 	}
-	if found := Protocol(graph); len(found) != 1 {
+	if found := Protocol(rctx(graph)); len(found) != 1 {
 		t.Errorf("the protocol rule produced %d findings, want 1", len(found))
 	}
 }
@@ -639,7 +639,7 @@ func TestProtocolIsDeterministic(t *testing.T) {
 		for _, key := range sortedOutcomes() {
 			b.protocolNode(key.step, key.state, key.failure, nil)
 		}
-		return Protocol(b.freeze())
+		return Protocol(rctx(b.freeze()))
 	}
 
 	first := build()
@@ -672,7 +672,7 @@ func TestMechanismAppearsInProse(t *testing.T) {
 			servicekafka.AttrSASLMechanism: domain.StringAttr("PLAIN"),
 		})
 
-	found := Protocol(b.freeze())
+	found := Protocol(rctx(b.freeze()))
 	if len(found) != 1 {
 		t.Fatalf("findings = %d, want 1", len(found))
 	}
@@ -870,7 +870,7 @@ func TestSummaryStatusFollowsSeverity(t *testing.T) {
 			b.protocolNode(test.step, test.state, test.class, nil)
 			graph := b.freeze()
 
-			report := assemble(t, graph, Protocol(graph))
+			report := assemble(t, graph, Protocol(rctx(graph)))
 			if got := report.Summary().Status(); got != test.want {
 				t.Errorf("status = %s, want %s", got, test.want)
 			}
