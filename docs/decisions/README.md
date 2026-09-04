@@ -95,9 +95,36 @@ immediately, because PostgreSQL SQLSTATE `53300` migrated onto it in the same ch
 `docs/validation/RABBITMQ_PHASE80_CONTRACT_STUDY.md` records what was run and against which
 brokers, and 0067 §4.1 and 0070 §3 record a Phase 8.0A prediction the measurements falsified.
 
-**0071 to 0074 are the current occupants of this list.** Phase 9.0 froze the multi-target
+**0078 to 0083 are the current occupants of this list.** Phase 10.0 froze the diagnostic
+intelligence architecture before any of it is written, and all six bind from Phase 10.1:
+**0078** (five concepts kept distinct, a hypothesis represented as a `Finding` with
+`kind: HYPOTHESIS` rather than a new type, the epistemic rules a claim must pass, and diagnosis
+staying a pure function of frozen evidence), **0079** (the failure boundary as a derived
+diagnostic property computed in the diagnosis layer, per subject, expressed as one generic
+finding, with "ruled out" left to presentation), **0080** (service-owned imperative rules over a
+generic engine, a `RuleContext` of graph, vantage and one boolean, purity enforced by the build,
+and explicit composition-root registration), **0081** (semantic identity as `(Code, Subject)`,
+convergence merging without confidence accumulation, the confidence ladder, four distinct
+evidence relations, and peer-controlled text kept out of prose), **0082** (two recommendation
+kinds in one type, seven safety classes of which three are unreachable, and the confidence gate
+on remediation), **0083** (additive schema evolution at version 1, the false-positive policy,
+fail-closed handling of a defective rule, and the six-level validation pyramid with a golden
+corpus whose *forbidden* claims are first-class expectations).
+
+They add **nothing** to the frozen counts in 10.0: `SchemaVersion` stays 1, `RunSchemaVersion`
+stays 1, finding codes stay 60, failure classes stay 42, `Reveal` and `SecretFor` stay at 4 each,
+and the module count stays 2. They authorize exactly two report-visible changes in Phase 10.1 and
+nowhere else — one generic finding code, `DIAG_FAILURE_BOUNDARY` (60 → 61), and three additive
+fields inside the existing `recommendations[]` object, which `domain.Recommendation` was made an
+object in order to accommodate. No new command, no new credential source, no configuration
+change and no dependency: the design explicitly refuses an LLM, a remote API, embeddings and any
+opaque classifier. The architecture is written out in `docs/design/DIAGNOSTIC_INTELLIGENCE.md`
+and every load-bearing contract is traced in
+`docs/validation/PHASE100_DIAGNOSTIC_TRACEABILITY.md`.
+
+**0071 to 0074 have left this list.** Phase 9.0 froze the multi-target
 configuration and execution contract before any multi-target code exists, and all four bind from
-Phase 9.1: **0071** (one strict YAML document, its own `version: 1`, a required and explicit target
+Phase 9.1, which implemented all four: **0071** (one strict YAML document, its own `version: 1`, a required and explicit target
 `id`, an envelope with a service-owned `config` node, and the parsing bounds), **0072** (`env` and
 `file` credential references, a plaintext secret refused by the decoder's type, preflight without
 retention followed by per-target resolution, and no secret cache), **0073** (independent targets, a
