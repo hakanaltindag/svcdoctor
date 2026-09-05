@@ -90,7 +90,15 @@ mutate() {
   # could not tell the two apart.
   local selected
   selected="$(go test "$pkg" -run "$regex" -count=1 -timeout 600s -v 2>/dev/null || true)"
-  if ! printf '%s' "$selected" | grep -q '^=== RUN'; then
+  # A here-string rather than a pipe. `grep -q` exits at its first match, and
+  # under `pipefail` that closes the pipe under `printf`, whose SIGPIPE then
+  # becomes the pipeline's status — so a **large** selection was reported as no
+  # selection at all. Phase 10.2 measured it: a -run regex selecting 200 KB of
+  # verbose output was called "no matching test" while the same regex matched
+  # 1026 tests when run by hand. Small outputs fit the pipe buffer and never
+  # showed it. The failure direction is loud rather than silent, but it is still
+  # wrong, and it is wrong in the check that exists to make a wrong regex loud.
+  if ! grep -q '^=== RUN' <<<"$selected"; then
     echo "  $id  NO MATCHING TEST — the -run regex selects nothing: $regex"
     FAIL=$((FAIL + 1)); SURVIVORS+=("$id (no matching test: $regex)"); return
   fi

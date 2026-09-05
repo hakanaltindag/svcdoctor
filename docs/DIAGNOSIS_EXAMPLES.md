@@ -266,3 +266,130 @@ ERROR  KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE
 
 Nothing in that view requires reading a sentence. The summary is for a human skimming a list;
 it is not the transport for any of it.
+
+---
+
+## `KAFKA_ADVERTISED_TOPOLOGY_REACHABILITY`
+
+Phase 10.2's observation: the measured **scope** of advertised-endpoint reachability, once per
+Metadata exchange. See ADR 0084 and `docs/FINDINGS.md` section 6.
+
+It fires only when at least one advertised endpoint positively failed, so a healthy run carries
+none. It is `INFO` because a count is never a cluster verdict, which means it can never move an
+exit code.
+
+### One of three unreachable, and the set is complete
+
+Taken from `TestOneBadBrokerProducesOneFinding` against the real three-broker KRaft cluster,
+with broker 2 reconfigured to advertise an address nothing listens on.
+
+```json
+{
+  "code": "KAFKA_ADVERTISED_TOPOLOGY_REACHABILITY",
+  "kind": "CONFIRMED",
+  "severity": "INFO",
+  "confidence": "HIGH",
+  "layer": "L6",
+  "subject": { "kind": "ENDPOINT", "ref": "127.0.0.1:19192" },
+  "summary": "1 of the 3 broker endpoints this cluster advertised could not be reached from this vantage point; the other 2 were reached",
+  "vantageDependent": true
+}
+```
+
+The second clause is the whole reason the finding exists. Three separate per-endpoint findings
+state nowhere that the other two *were* reached, and that is the fact ruling against this client
+having no path to the cluster's broker plane at all.
+
+The subject is the endpoint the Metadata question was asked at — never an advertised endpoint.
+That is what keeps it from colliding with `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`, whose subject
+*is* the advertised endpoint.
+
+### None of three reachable, and the set is complete
+
+```json
+{
+  "code": "KAFKA_ADVERTISED_TOPOLOGY_REACHABILITY",
+  "summary": "None of the 3 broker endpoints this cluster advertised could be reached from this vantage point",
+  "severity": "INFO"
+}
+```
+
+Still `INFO`. Three failures rather than one is not a reason to escalate a count — the impact is
+already reported at `ERROR`, once per endpoint, by the finding that has carried it since Phase
+3.6.
+
+### Anything unmeasured, and every total disappears
+
+```json
+{
+  "code": "KAFKA_ADVERTISED_TOPOLOGY_REACHABILITY",
+  "summary": "1 of the 3 broker endpoints this cluster advertised could not be reached from this vantage point; 1 was reached and 1 was not measured",
+  "recommendations": [
+    { "action": "Re-run with a larger execution budget so the advertised endpoints that were not measured are attempted" }
+  ]
+}
+```
+
+On a partial set both *"none of them"* and *"only that one"* would assert a total nobody
+established — they fail in opposite directions and need the same missing fact. The detail adds
+*"an endpoint that was not measured is not an endpoint that refused"*.
+
+---
+
+## `KAFKA_ADVERTISED_TOPOLOGY_UNSUITABLE`
+
+Phase 10.2's hypothesis, and the one the phase is most careful about.
+
+### Every advertised endpoint unreachable, after a bootstrap that worked
+
+Taken from `TestAllBadBrokersProduceOneFindingEach` against the real cluster, with all three
+brokers advertising addresses nothing listens on.
+
+```json
+{
+  "code": "KAFKA_ADVERTISED_TOPOLOGY_UNSUITABLE",
+  "kind": "HYPOTHESIS",
+  "severity": "WARN",
+  "confidence": "MEDIUM",
+  "layer": "L6",
+  "subject": { "kind": "ENDPOINT", "ref": "127.0.0.1:19192" },
+  "summary": "The broker endpoints this cluster advertised may not be usable from this client's network position",
+  "discriminator": "whether the advertised addresses are the ones a client on this network is expected to use to reach these brokers",
+  "recommendations": [
+    { "action": "Compare the addresses this cluster advertised with the addresses a client on this network is expected to use to reach its brokers" }
+  ],
+  "vantageDependent": true
+}
+```
+
+**`MEDIUM` is a ceiling, not a setting.** The rule declares `AuthorityNone`, and the ladder
+admits `HIGH` only when the peer stated the condition in its own protocol or when every
+distinguishable alternative was measured and excluded. No Kafka field says *"my advertised
+address is unreachable from where you are"*, and routing, packet filtering, a bootstrap-side
+proxy and a broker-side outage are all unexcluded. The bootstrap contrast excludes exactly one
+alternative — *this client has no path to the cluster* — and one exclusion is `MEDIUM`.
+
+The detail says the rest out loud, including *"svcdoctor read no broker setting and holds
+none"*, because the sentence a reader is most likely to write for themselves is the one about
+`advertised.listeners` and it is a claim about a value nobody observed.
+
+### The same evidence with one reachable peer — and no hypothesis at all
+
+```text
+1 of the 3 broker endpoints this cluster advertised could not be reached from this
+vantage point; the other 2 were reached
+```
+
+No `KAFKA_ADVERTISED_TOPOLOGY_UNSUITABLE`. A reachable peer is not a weaker case for the
+hypothesis; it **contradicts** it, because two advertised addresses in the same plane
+demonstrably worked from this client. Observed evidence inconsistent with a claim suppresses it
+rather than qualifying it, and that is why there is no per-endpoint version of this hypothesis.
+
+### The refusal, which is the point
+
+One advertised endpoint, unreachable, after a reachable bootstrap. svcdoctor emits the confirmed
+unreachability, the failure boundary, the topology count and this hypothesis at `MEDIUM` — and
+it does **not** choose between *a network path that is unavailable* and *an advertisement
+unsuitable for this client*. It cannot, and saying so is the honest output. Golden incident
+fixture K14 forbids "the cause", "therefore", "this proves" and "the only explanation" so that a
+future edit cannot quietly make the choice.

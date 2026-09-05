@@ -17,6 +17,11 @@ import (
 )
 
 // TestOneBadBrokerProducesOneFinding: two brokers fine, one unreachable.
+//
+// This is the flagship branch-specific scenario, against a real KRaft cluster
+// with a real broker reconfigured to advertise an address nothing listens on.
+// Phase 10.2 added the second half: the per-endpoint claim is unchanged, and a
+// topology-scoped observation now says what became of the other two.
 func TestOneBadBrokerProducesOneFinding(t *testing.T) {
 	t.Cleanup(func() { restore(t) })
 	reconfigure(t, "broker-2", "ADV_2=localhost:29999")
@@ -27,24 +32,60 @@ func TestOneBadBrokerProducesOneFinding(t *testing.T) {
 	if len(r.nodes(servicekafka.StepBrokerAdvertised)) != 3 {
 		t.Fatalf("advertisements = %d, want 3", len(r.nodes(servicekafka.StepBrokerAdvertised)))
 	}
-	if len(r.findings) != 1 {
+
+	unreachable := r.withCode(diagnosiskafka.CodeAdvertisedEndpointUnreachable)
+	if len(unreachable) != 1 {
 		t.Fatalf("findings = %v, want exactly one broker-scoped finding", r.codes())
 	}
-	if got := r.findings[0].Subject().Ref(); got != "localhost:29999" {
+	if got := unreachable[0].Subject().Ref(); got != "localhost:29999" {
 		t.Errorf("subject = %q, want the unreachable advertisement", got)
 	}
 	if got := r.report.Summary().Status(); got != domain.SummaryStatusProblemsFound {
 		t.Errorf("summary = %s, want PROBLEMS_FOUND", got)
 	}
-	t.Logf("one bad broker -> %s", r.findings[0].Summary())
+
+	// The Phase 10.2 contrast, measured rather than synthesized.
+	scope := r.withCode(diagnosiskafka.CodeAdvertisedTopologyReachability)
+	if len(scope) != 1 {
+		t.Fatalf("topology observations = %d, want 1: %v", len(scope), r.codes())
+	}
+	if got := scope[0].Severity(); got != domain.SeverityInfo {
+		t.Errorf("severity = %s, want INFO; a count is never a cluster verdict", got)
+	}
+	want := "1 of the 3 broker endpoints this cluster advertised could not be reached " +
+		"from this vantage point; the other 2 were reached"
+	if scope[0].Summary() != want {
+		t.Errorf("summary =\n  %q\nwant\n  %q", scope[0].Summary(), want)
+	}
+
+	// **No suitability hypothesis**, because two advertised endpoints really were
+	// reached from this vantage point and that contradicts the claim. This is the
+	// assertion that stops the phase's most attractive overclaim from shipping.
+	if got := r.withCode(diagnosiskafka.CodeAdvertisedTopologyUnsuitable); len(got) != 0 {
+		t.Errorf("a suitability hypothesis was emitted beside two reachable peers: %q",
+			got[0].Summary())
+	}
+
+	assertNoTopologyOverclaim(t, r)
+	t.Logf("one bad broker -> %s | %s", unreachable[0].Summary(), scope[0].Summary())
 }
 
 // TestAllBadBrokersProduceOneFindingEach is the anti-aggregate case.
 //
 // Every advertised endpoint is unreachable and the cluster is nevertheless
 // demonstrably up — it answered Metadata over a measured path in this very run.
-// A "cluster down" finding would be false, so three broker-scoped findings are
-// the only honest output.
+// A "cluster down" finding would be false, so three broker-scoped findings plus
+// one count and one hypothesis are the only honest output.
+//
+// # This is the advertised-listener scenario, and what it may say
+//
+// The fixture is exactly the shape section 46 of the phase brief describes: the
+// bootstrap address is reachable and metadata returns broker addresses that are
+// definitively unreachable from the client. What svcdoctor may conclude is a
+// CONFIRMED unreachability per endpoint, a CONFIRMED count over the complete
+// set, and a MEDIUM hypothesis that the advertised endpoints may not suit this
+// client's network. What it may not conclude is that any configuration is wrong,
+// and assertNoTopologyOverclaim holds that against the real output.
 func TestAllBadBrokersProduceOneFindingEach(t *testing.T) {
 	t.Cleanup(func() { restore(t) })
 	compose(t, []string{
@@ -56,31 +97,108 @@ func TestAllBadBrokersProduceOneFindingEach(t *testing.T) {
 	r.describe(t)
 	r.writeArtifact(t, "multi-broker-all-bad")
 
-	if len(r.findings) != 3 {
+	unreachable := r.withCode(diagnosiskafka.CodeAdvertisedEndpointUnreachable)
+	if len(unreachable) != 3 {
 		t.Fatalf("findings = %v, want one per unreachable advertisement", r.codes())
 	}
 	subjects := map[string]bool{}
-	for _, f := range r.findings {
-		if f.Code() != diagnosiskafka.CodeAdvertisedEndpointUnreachable {
-			t.Errorf("unexpected code %s", f.Code())
-		}
+	for _, f := range unreachable {
 		if f.Severity() != domain.SeverityError {
 			t.Errorf("severity = %s; it must not vary with how many brokers failed", f.Severity())
 		}
 		subjects[f.Subject().Ref()] = true
-		for _, banned := range []string{"cluster", "down", "unavailable"} {
-			if strings.Contains(strings.ToLower(f.Summary()), banned) {
-				t.Errorf("summary makes a cluster-level claim: %q", f.Summary())
-			}
-		}
 	}
 	if len(subjects) != 3 {
 		t.Errorf("subjects = %v, want three distinct advertisements", subjects)
 	}
+
+	scope := r.withCode(diagnosiskafka.CodeAdvertisedTopologyReachability)
+	if len(scope) != 1 {
+		t.Fatalf("topology observations = %d, want 1: %v", len(scope), r.codes())
+	}
+	want := "None of the 3 broker endpoints this cluster advertised could be reached " +
+		"from this vantage point"
+	if scope[0].Summary() != want {
+		t.Errorf("summary =\n  %q\nwant\n  %q", scope[0].Summary(), want)
+	}
+	if got := scope[0].Severity(); got != domain.SeverityInfo {
+		t.Errorf("severity = %s; three failures are not a reason to escalate a count", got)
+	}
+
+	suspect := r.withCode(diagnosiskafka.CodeAdvertisedTopologyUnsuitable)
+	if len(suspect) != 1 {
+		t.Fatalf("suitability hypotheses = %d, want 1: %v", len(suspect), r.codes())
+	}
+	if got := suspect[0].Kind(); got != domain.FindingKindHypothesis {
+		t.Errorf("kind = %s, want HYPOTHESIS", got)
+	}
+	if got := suspect[0].Confidence(); got != domain.ConfidenceMedium {
+		t.Errorf("confidence = %s, want MEDIUM. Routing, packet filtering and a "+
+			"broker-side outage are all unexcluded here, on a real cluster, and "+
+			"svcdoctor measured none of them.", got)
+	}
+	if suspect[0].Discriminator() == "" {
+		t.Error("the hypothesis names no observation that would settle it")
+	}
+	if len(suspect[0].Recommendations()) == 0 {
+		t.Error("the hypothesis carries no next-evidence recommendation")
+	}
+
 	// The bootstrap path is untouched: the cluster answered.
 	assertBootstrapHealthy(t, r)
-	t.Logf("three unreachable advertisements -> %d broker-scoped findings, no aggregate",
-		len(r.findings))
+	assertNoTopologyOverclaim(t, r)
+	t.Logf("three unreachable advertisements -> %d endpoint findings, 1 count, 1 hypothesis",
+		len(unreachable))
+	t.Logf("  count:      %s", scope[0].Summary())
+	t.Logf("  hypothesis: %s", suspect[0].Summary())
+	t.Logf("  next:       %s", suspect[0].Recommendations()[0].Action())
+}
+
+// assertNoTopologyOverclaim runs the phase's refusal list against real output.
+//
+// The corpus asserts these over synthetic graphs. This asserts them over prose
+// produced from a real cluster's real Metadata response, which is the only place
+// a peer-supplied value could actually have reached a claim.
+func assertNoTopologyOverclaim(t *testing.T, r *run) {
+	t.Helper()
+
+	var prose strings.Builder
+	for _, f := range r.findings {
+		prose.WriteString(f.Summary())
+		prose.WriteString("\n")
+		prose.WriteString(f.Detail())
+		prose.WriteString("\n")
+		prose.WriteString(f.Discriminator())
+		for _, rec := range f.Recommendations() {
+			prose.WriteString("\n")
+			prose.WriteString(rec.Action())
+		}
+		prose.WriteString("\n")
+	}
+	lowered := strings.ToLower(prose.String())
+
+	for _, banned := range []struct{ phrase, why string }{
+		{"the cluster is down", "the cluster answered Metadata over a measured path in this run"},
+		{"cluster is degraded", "cluster health is not observed"},
+		{"cluster is unreachable", "the bootstrap path reached it"},
+		{"advertised.listeners is", "no broker setting was read"},
+		{"is misconfigured", "a configuration verdict on a value nobody observed"},
+		{"a firewall is", "no firewall was observed and none could be"},
+		{"firewall is blocking", "the same, in the active voice"},
+		{"the broker is down", "a refused connection distinguishes neither a host nor a process"},
+		{"broker process", "no process was observed, only an endpoint"},
+		{"wrong password", "no credential was evaluated by any advertised endpoint"},
+		{"quorum", "nothing about cluster membership was observed"},
+		{"partition", "no partition state was requested"},
+		{"this proves", "the contrast excludes one alternative and proves nothing"},
+		{"the only explanation", "several alternatives remain unexcluded"},
+		{"restart", "svcdoctor recommends restarting nothing"},
+	} {
+		if strings.Contains(lowered, banned.phrase) {
+			t.Errorf("real-cluster output contains %q.\n\n%s\n\n--- prose ---\n%s",
+				banned.phrase, banned.why, prose.String())
+		}
+	}
 }
 
 // countingDialer records every TCP connection actually opened.

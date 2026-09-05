@@ -50,9 +50,16 @@ func TestMTG05TheFindingCodeCountIsUnchanged(t *testing.T) {
 	// authorized for "the phase that implements it": DIAG_FAILURE_BOUNDARY, the
 	// first member of the generic `DIAG_` namespace (ADR 0079 section 2.3). No
 	// other code was added, and none may be without its own frozen contract.
+	//
+	// 63 since Phase 10.2, which added two Kafka codes against ADR 0084:
+	// KAFKA_ADVERTISED_TOPOLOGY_REACHABILITY and
+	// KAFKA_ADVERTISED_TOPOLOGY_UNSUITABLE. Both are service-namespaced, so
+	// wantDiag is deliberately unchanged — a topology claim belongs to the
+	// service whose topology it is, and the generic namespace stays at one.
 	const (
-		wantTotal    = 61
+		wantTotal    = 63
 		wantRabbitMQ = 11
+		wantKafka    = 15
 		wantDiag     = 1
 	)
 
@@ -77,6 +84,11 @@ func TestMTG05TheFindingCodeCountIsUnchanged(t *testing.T) {
 	}
 	if got := byService["RABBITMQ"]; got != wantRabbitMQ {
 		t.Errorf("%d RabbitMQ finding codes, want %d", got, wantRabbitMQ)
+	}
+	if got := byService["KAFKA"]; got != wantKafka {
+		t.Errorf("%d Kafka finding codes, want %d.\n\n"+
+			"Phase 10.2 moved this 13 -> 15 against ADR 0084 and nothing else may "+
+			"move it silently.", got, wantKafka)
 	}
 	if got := byService["DIAG"]; got != wantDiag {
 		t.Errorf("%d generic DIAG finding codes, want %d.\n\n"+

@@ -122,6 +122,22 @@ opaque classifier. The architecture is written out in `docs/design/DIAGNOSTIC_IN
 and every load-bearing contract is traced in
 `docs/validation/PHASE100_DIAGNOSTIC_TRACEABILITY.md`.
 
+**0084 is the first service record built on them, and it is Kafka's.** Phase 10.2 turned the
+reasoning model into two topology-scoped Kafka claims and, in the process, discovered that most
+of what a reader would expect it to build already existed: thirteen Kafka codes cover every
+*per-endpoint* claim the evidence supports, so no per-endpoint rule was added and five of the
+phase's nine candidate categories were discarded as already built. What was missing was one
+level up — **completeness** and **contrast**, neither recoverable from a conjunction of
+per-endpoint findings, and neither expressible before `RuleContext` and the confidence ladder
+existed. 0084 therefore reopens **0034 §10** on the condition that record named for itself, and
+upholds everything else it refused: `KAFKA_CLUSTER_UNHEALTHY`, `KAFKA_BROKER_DOWN`,
+`KAFKA_NETWORK_BROKEN`, controller and KRaft inference, partition and replication claims, a
+per-endpoint suitability hypothesis — contradicted by its own premise whenever a peer is
+reachable — and address-shape heuristics, because a broker on the same host as the client is a
+correct deployment. Finding codes move 61 → **63**, both `KAFKA_`; the observation is `INFO`
+because severity is never a count-derived cluster verdict, and the hypothesis cannot reach
+`HIGH` because it declares `AuthorityNone` and the ladder admits `HIGH` on nothing else.
+
 **0071 to 0074 have left this list.** Phase 9.0 froze the multi-target
 configuration and execution contract before any multi-target code exists, and all four bind from
 Phase 9.1, which implemented all four: **0071** (one strict YAML document, its own `version: 1`, a required and explicit target

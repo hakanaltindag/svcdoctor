@@ -179,6 +179,11 @@ func TestTheCompositionWiresEveryOwnerOfWhatItCanProduce(t *testing.T) {
 		// Advertised topology. ADR 0034.
 		"diagnosiskafka.AdvertisedEndpointUnreachable",
 		"diagnosiskafka.UnusableAdvertisement",
+		// Phase 10.2. Both read the advertised sweeps and own an outcome the
+		// per-endpoint rules do not: the scope of the failure across the
+		// advertised set, and the suitability hypothesis that scope admits.
+		"diagnosiskafka.AdvertisedTopologyReachability",
+		"diagnosiskafka.AdvertisedTopologyUnsuitable",
 	}
 
 	wantIDs := []string{
@@ -189,6 +194,8 @@ func TestTheCompositionWiresEveryOwnerOfWhatItCanProduce(t *testing.T) {
 		"kafka/protocol",
 		"kafka/advertised-endpoint",
 		"kafka/unusable-advertisement",
+		"kafka/advertised-topology",
+		"kafka/advertised-suitability",
 	}
 
 	gotIDs, got := rulesWiredIn(t, filepath.Join(repositoryRoot(t), kafkaCompositionFile))

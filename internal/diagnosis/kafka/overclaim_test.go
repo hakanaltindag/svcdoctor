@@ -180,12 +180,14 @@ func TestEveryClaimIsSweptByTheOverclaimGuard(t *testing.T) {
 		codes[f.Code()] = true
 	}
 
-	// The eleven protocol codes, plus the two advertised-broker ones.
-	if len(codes) != 13 {
-		t.Errorf("the sweep covers %d codes, want 13: %v", len(codes), codes)
+	// The eleven protocol codes, the two advertised-broker ones, and the two
+	// topology-scoped ones Phase 10.2 added.
+	if len(codes) != 15 {
+		t.Errorf("the sweep covers %d codes, want 15: %v", len(codes), codes)
 	}
 	for _, want := range []domain.FindingCode{
 		CodeAdvertisedEndpointUnreachable, CodeAdvertisedEndpointUnusable,
+		CodeAdvertisedTopologyReachability, CodeAdvertisedTopologyUnsuitable,
 		CodeCredentialsRejected, CodePeerVerificationFailed,
 	} {
 		if !codes[want] {
@@ -218,6 +220,19 @@ func everyFindingThisPackageCanBuild(t *testing.T) []domain.Finding {
 	exchange := b.metadata(domain.StatePass)
 	b.unusableAdvertised(exchange, 3)
 	out = append(out, UnusableAdvertisement(rctx(b.freeze()))...)
+
+	// Every topology-scoped shape, both rules, at both completeness settings.
+	// Phase 10.2's two claims are the ones most exposed to this guard: they
+	// count brokers, and the vocabulary a count invites — "all brokers", "every
+	// broker", "the cluster is unreachable" — is exactly what overclaims bans.
+	for _, shapes := range topologyShapeMatrix() {
+		for _, incomplete := range []bool{false, true} {
+			g, _, _ := topologyFixture(t, shapes...)
+			ctx := rctxWith(g, incomplete)
+			out = append(out, AdvertisedTopologyReachability(ctx)...)
+			out = append(out, AdvertisedTopologyUnsuitable(ctx)...)
+		}
+	}
 
 	return out
 }

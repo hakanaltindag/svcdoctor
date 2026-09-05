@@ -187,6 +187,14 @@ does not yet support — and the second case is an ADR, not a workaround.
     no single generic catch-all, and never an executable command.
 18. **Text is deterministic.** Same graph, same bytes: sort anything collected from a map or a
     traversal.
+19. **Two rules that can reach one `(code, subject, layer)` must state one claim in two
+    wordings.** Convergence takes `summary` and `detail` from a `RuleID` tie-break (ADR 0081
+    §2.2), which is safe only under that condition — and the condition is a **rule author's
+    obligation**, not something the engine can check. Phase 10.2 found the first pair of codes
+    for which it would not hold: two topology counts over one exchange would be *"None of the
+    3"* and *"1 of the 3"*, and a tie-break would publish a number nobody measured. The
+    resolution is to make the shape unreachable rather than to merge it correctly. If a rule
+    cannot guarantee this, it must not be able to produce two findings with one identity.
 
 **The check that catches the rest:** render the finding with the hostnames removed and ask
 whether an on-call engineer who has never read this repository knows what failed, how sure we
@@ -393,6 +401,130 @@ subject reference at all — a control character, invalid UTF-8, leading whitesp
 **no evidence node**, and survives only as `kafka.metadata.unrepresentable_entry_count` on the
 exchange. A finding with nothing to reference is not expressible under ADR 0014. See ADR 0035
 section 1.
+
+---
+
+### The two Kafka topology-scoped findings
+
+**Added in Phase 10.2** and settled by **ADR 0084**, which reopens ADR 0034 §10 on the condition
+that record named for itself. They are the first *service* intelligence built on the Phase 10
+reasoning model, and they are deliberately the only two: every per-endpoint claim the evidence
+supports was already covered by the thirteen Kafka codes above, and duplicating one would add
+nothing.
+
+Both are about **the set** a Metadata response advertised rather than about a member of it, and
+both are filed against the endpoint the Metadata question was asked at — never an advertised
+endpoint. That is what keeps them from colliding with the per-endpoint findings, whose subject
+is the advertised endpoint: semantic identity is `(Code, Subject)` and both halves differ.
+
+#### `KAFKA_ADVERTISED_TOPOLOGY_REACHABILITY`
+
+| | |
+|---|---|
+| **Trigger** | The `kafka.metadata` exchange is PASS, it carried at least one advertisement, and at least one advertised endpoint was **positively** observed not to be reachable |
+| **Claim** | The measured scope of advertised-endpoint reachability: how many were reached, how many were not, and how many were not measured. Never a cause, never a verdict |
+| **Kind / severity / confidence** | `CONFIRMED` / **`INFO`** / `HIGH` |
+| **Subject** | The `kafka.metadata` node's own subject |
+| **Layer** | `L6` |
+| **Vantage** | `vantageDependent: true` |
+| **Evidence** | The exchange, every advertisement node, one reaching node per reached endpoint, and the causal failure node of each unreached one |
+
+**Why `INFO`.** ADR 0034 §13 fixed the rule and Phase 10.2 had to re-apply it: severity is the
+impact of this finding's own claim about its own subject, and never a count-derived cluster
+verdict. Escalating because three endpoints failed rather than one *is* that verdict. The impact
+of an unreachable broker endpoint is already reported at `ERROR`, once per endpoint, by
+`KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`. A useful consequence: Phase 10.2 cannot change any exit
+code.
+
+**Three sentences, and the third is the one that matters.**
+
+| Condition | Sentence |
+|---|---|
+| complete, none reached | *None of the N broker endpoints this cluster advertised could be reached from this vantage point* |
+| complete, some reached | *K of the N … could not be reached …; the other M were reached* |
+| **not complete** | *K of the N … could not be reached …; M were reached and P were not measured* |
+
+On a set with anything unmeasured, both "none of them" and "only that one" assert a total nobody
+established — they fail in opposite directions and need the same missing fact. Completeness has
+two halves and needs both: no advertised endpoint unmeasured, **and** `RuleContext.Incomplete`
+false. Neither implies the other.
+
+**Nothing is emitted for a healthy run.** Every endpoint reached produces no finding; the
+terminal already prints `topology  3 of 3 advertised broker endpoints reached`. The two counts
+are proven to agree, over all 512 three-endpoint shapes, because `internal/app`,
+`internal/render/terminal` and `internal/diagnosis/kafka` each hold ADR 0051's classification and
+depguard forbids any two of them sharing an implementation.
+
+#### `KAFKA_ADVERTISED_TOPOLOGY_UNSUITABLE`
+
+| | |
+|---|---|
+| **Trigger** | Metadata PASS; **every** advertised endpoint measured and the run not cut short; at least one positively failed; and **none** was reached |
+| **Claim** | The endpoints this cluster advertised **may not be usable** from this client's network position |
+| **Kind / severity / confidence** | `HYPOTHESIS` / `WARN` / **`MEDIUM`, and `HIGH` is unreachable** |
+| **Subject** | The exchange's subject — the same as the observation's, and a different code |
+| **Vantage** | `vantageDependent: true` |
+| **Discriminator** | *whether the advertised addresses are the ones a client on this network is expected to use to reach these brokers* |
+| **Recommendation** | One `NEXT_EVIDENCE` / `COMPARE`, not self-collectable |
+
+**Why `HIGH` is impossible rather than merely unused.** The rule declares
+`diagnosis.AuthorityNone`, and ADR 0081 §2.3 admits `HIGH` only on direct peer authority or
+complete contrast. No Kafka field says "my advertised address is unreachable from where you
+are", and routing, packet filtering, a bootstrap-side proxy and a broker-side outage are all
+unexcluded. Raising the ceiling would mean declaring an authority the rule does not have — a
+source change a reviewer sees, rather than a threshold that drifts. **Commonness is not
+evidence**: the advertised-listener misconfiguration being the best-known Kafka failure in the
+field is a fact about the population of incidents, not about this one.
+
+**Why it is topology-scoped and there is no per-endpoint version.** *"broker-3 failed and its
+peers succeeded, so broker-3's advertisement may be unsuitable"* is not a weaker form of this
+claim — it is **contradicted by its own premise**. Two advertised addresses in the same plane
+were reached from this client, so the advertised addresses demonstrably work here. A reachable
+peer is observed evidence inconsistent with the claim, and a rule holding contradicting evidence
+emits nothing (ADR 0081 §2.4).
+
+**Distinguished from `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE` by vantage, and the names are close on
+purpose.** UNUSABLE is `vantageDependent: false` — the cluster reported a pair no client anywhere
+could act on. This is `vantageDependent: true` — the pair is well formed and may serve other
+clients perfectly, and what is in question is whether it serves one *here*. That is the same
+contrast ADR 0035 drew between UNUSABLE and UNREACHABLE, reused rather than reinvented.
+
+#### What the prose may not say, and why it is a test
+
+svcdoctor knows the endpoint a Metadata response reported. It does **not** know any broker's
+configuration, and it never will in BASIC.
+
+| Admissible | Inadmissible |
+|---|---|
+| *cluster metadata advertised this endpoint* | *`advertised.listeners` is set to X* |
+| *these endpoints may not be usable from this client's network position* | *`advertised.listeners` is misconfigured* |
+| *no measured path reached them* | *a firewall is blocking them* |
+| *the bootstrap endpoint was reached* | *the cluster is up but the brokers are down* |
+
+No value a peer chose is interpolated into any of this prose — only integers counted off the
+graph's own structure. The advertised hostname, port and node identifier travel on the subject
+and on the evidence, where redaction transforms them. The property is asserted as **byte equality
+of the prose across different advertised names**, which is stronger than a substring search: the
+first version of that check was a substring search, and a fuzzer refuted it in under a second
+with the hostname `Brok`, which is a substring of the word "broker" that every one of these
+sentences contains and none of them copied.
+
+#### What stays refused
+
+`KAFKA_CLUSTER_UNHEALTHY`, `KAFKA_BROKER_DOWN` and `KAFKA_NETWORK_BROKEN` remain unauthorized. So
+do controller and KRaft inference, partition, replication, ISR and consumer-group claims, a
+per-endpoint suitability hypothesis, partial multi-address reachability within one advertisement
+(ADR 0034 §6, untouched), and **address-shape heuristics** — a reachable loopback, RFC 1918 or
+`.internal` advertisement produces nothing at all, because a broker on the same host as the
+client is a correct deployment. See ADR 0084 §7.
+
+#### The refusal that is a feature
+
+One advertised endpoint, unreachable, after a reachable bootstrap: svcdoctor emits the confirmed
+unreachability, the boundary, the topology observation and the hypothesis at `MEDIUM` — and it
+does **not** choose between *a network path that is unavailable* and *an advertisement unsuitable
+for this client*. Golden incident fixture K14 forbids "the cause", "therefore", "this proves" and
+"the only explanation" for exactly that reason.
 
 ---
 

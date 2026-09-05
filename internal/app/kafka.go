@@ -274,6 +274,18 @@ func DiagnoseKafka(ctx context.Context, params KafkaParams) (Result, error) {
 		Add("kafka/protocol", diagnosiskafka.Protocol).
 		Add("kafka/advertised-endpoint", diagnosiskafka.AdvertisedEndpointUnreachable).
 		Add("kafka/unusable-advertisement", diagnosiskafka.UnusableAdvertisement).
+		// The two topology-scoped rules, added in Phase 10.2. They read the same
+		// advertised sweeps the rule above does and claim something different
+		// about them: the scope of the failure across the advertised set, and —
+		// only when that scope is total and the set is complete — the hypothesis
+		// that the addresses the cluster named may not be usable from here.
+		//
+		// They cannot collide with the per-endpoint findings. Identity is
+		// (Code, Subject) and both the codes and the subjects differ: these are
+		// filed against the endpoint the Metadata question was asked at, and the
+		// per-endpoint findings against the advertised endpoints (ADR 0084).
+		Add("kafka/advertised-topology", diagnosiskafka.AdvertisedTopologyReachability).
+		Add("kafka/advertised-suitability", diagnosiskafka.AdvertisedTopologyUnsuitable).
 		Freeze()
 	if err != nil {
 		return Result{}, err

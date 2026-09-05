@@ -203,12 +203,28 @@ func pass(t *testing.T, o options) *run {
 
 // engine wires both Kafka rules, the way a composition root would.
 func engine() diagnosis.Engine {
-	// The identities match the ones internal/app registers these rules under, so
-	// this harness and the production path differ in nothing but the graph. See
-	// ADR 0080 sections 2.4 and 2.5.
+	// **Every rule internal/diagnosis/kafka exports**, under the identities
+	// internal/app registers them with (ADR 0080 sections 2.4 and 2.5).
+	//
+	// This list said "the two advertised-broker rules" until Phase 10.2, and the
+	// comment beside it claimed the harness and the production path "differ in
+	// nothing but the graph". That was true when it was written and stopped
+	// being true the moment a third Kafka rule existed: the suite went on
+	// passing while the new rules were never evaluated against a real cluster at
+	// all. The gap is the kind a phase finds only by looking, so the honest
+	// statement replaces the convenient one.
+	//
+	// What it still does **not** wire is the generic set — the failure boundary
+	// and the three transport rules — because those own evidence beneath the
+	// requested-target anchor rather than beneath an advertisement, and this
+	// harness exists to exercise Kafka claims. `composition_test.go` calls
+	// `app.DiagnoseKafka` and therefore runs all nine.
 	registry, err := diagnosis.NewRuleSet().
+		Add("kafka/protocol", diagnosiskafka.Protocol).
 		Add("kafka/advertised-endpoint", diagnosiskafka.AdvertisedEndpointUnreachable).
 		Add("kafka/unusable-advertisement", diagnosiskafka.UnusableAdvertisement).
+		Add("kafka/advertised-topology", diagnosiskafka.AdvertisedTopologyReachability).
+		Add("kafka/advertised-suitability", diagnosiskafka.AdvertisedTopologyUnsuitable).
 		Freeze()
 	if err != nil {
 		panic("integration harness: freezing the rule set: " + err.Error())
@@ -269,6 +285,23 @@ func (r *run) byLayer(layer domain.Layer) []domain.Evidence {
 	for _, n := range r.graph.Nodes() {
 		if n.Layer() == layer {
 			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// withCode returns the findings carrying one code.
+//
+// It arrived in Phase 10.2, when the harness began wiring every Kafka rule and
+// assertions that had counted *all* findings had to be scoped to the claim they
+// were about. Scoping them was the correct move rather than raising the
+// expected totals: a test asserting "exactly one finding" was asserting
+// something about the reachability claim, not about how many rules exist.
+func (r *run) withCode(code domain.FindingCode) []domain.Finding {
+	var out []domain.Finding
+	for _, f := range r.findings {
+		if f.Code() == code {
+			out = append(out, f)
 		}
 	}
 	return out

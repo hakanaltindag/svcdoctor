@@ -5063,6 +5063,32 @@ merge-compatibility matrix.
 | **Canonical ordering is applied twice** — in `Converge` and again in `Evaluate` — which made one Phase 10.1A mutation equivalent until its plant was widened to remove both | Reopens if the redundancy is removed; the mutation plants document why it exists |
 | **A boundary is emitted per failing subject, including on single-path runs** where the stage list already shows the same shape | Not reopenable without a conditional-emission rule nobody froze. ADR 0079 §2.3 makes it unconditional |
 
+## Phase 10.2 — Kafka diagnostic intelligence: COMPLETE
+
+Two rules, two codes, and ADR **0084**. Finding codes 61 → **63**, both `KAFKA_`;
+`SchemaVersion` **1**, `RunSchemaVersion` **1**, failure classes **42**, `Reveal` **4**,
+`SecretFor` **4**, modules **2**, renderer files changed **0**. Mutation closure is **25
+planted, 25 caught, 0 survivors**. See
+`docs/validation/PHASE102_KAFKA_DIAGNOSTIC_VALIDATION.md`.
+
+Two of the previous section's open items are closed by it and one is not:
+
+| Previous item | Outcome |
+|---|---|
+| no generic hypothesis is emitted | **Still true, and now correct rather than pending.** The hypothesis Phase 10.2 added is a *service* hypothesis. A generic one would need a causal claim that generic evidence cannot support |
+| `NEXT_EVIDENCE` has no production instance | **Half closed.** Two production `NEXT_EVIDENCE` recommendations now exist and both are constructed through `diagnosis.NewAdvice`, so every ADR 0082 guardrail runs. The three additive `recommendations[]` fields **still did not move onto `domain.Recommendation`** — see below |
+| `Summary`/`Detail` come from the tie-break winner | **Re-validated and qualified.** Safe, and the safety condition is now a written obligation rather than an observation: `docs/FINDINGS.md` §3.1 rule **19** |
+
+### Open items
+
+| Item | Condition |
+|---|---|
+| **ADR 0082's three `recommendations[]` fields are still not on `domain.Recommendation`.** Kind, safety class, rationale and self-collectability are enforced at construction and then discarded; only the action text reaches a report | Closes in the phase that touches the renderers — moving them changes every service's golden output, which is not a Kafka-reasoning change. ADR 0084 §9 |
+| **ADR 0034 §6 stays closed.** Partial *multi-address* reachability within one advertisement is still withheld, because svcdoctor does not observe which address a real client would select | Unchanged by Phase 10.2, which is about several advertisements rather than several addresses under one |
+| **`kafka.metadata.controller_id` is recorded and read by nothing** | Stays that way. The adapter measured it returning 1, 1, 2, 1, 1, 3, 2, 3 across eight exchanges on a cluster whose quorum leader never moved. Reopening needs a controller-specific operation svcdoctor does not perform |
+| **No Kafka DEEP surface exists.** Partition, replica, ISR, leader and consumer-group state are a different diagnostic surface and BASIC requests none of it | Its own phase and its own ADR, if ever |
+| **The topology observation and the per-endpoint findings restate the same failure at two scopes.** Three unreachable brokers produce three `ERROR` findings and one `INFO` count | Deliberate: the impact is per endpoint and the scope is per exchange. Reopens only if a renderer study shows the pair reads as duplication |
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6
