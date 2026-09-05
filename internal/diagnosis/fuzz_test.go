@@ -492,3 +492,98 @@ func slicesContainsID(ids []domain.EvidenceID, want domain.EvidenceID) bool {
 	}
 	return false
 }
+
+// FuzzActivatedPipeline drives the Phase 10.1B production path against graphs
+// assembled from arbitrary bytes.
+//
+// Phase 10.1A's FuzzBoundaryTraversal covered the queries. This covers what
+// activation added: a boundary that becomes a *finding*, and convergence that
+// decides whether two findings are one. The invariants are the ones a report
+// consumer depends on — every citation resolves, no state was promoted, and two
+// findings never share an identity.
+func FuzzActivatedPipeline(f *testing.F) {
+	f.Add([]byte{1, 2, 3, 4})
+	f.Add([]byte{})
+	f.Add([]byte{0, 0, 0, 0, 0, 0, 0, 0})
+	f.Add([]byte{4, 4, 2, 2, 1, 1, 3, 3, 0, 0, 2, 4})
+
+	f.Fuzz(func(t *testing.T, shape []byte) {
+		g := graphFromBytes(t, shape)
+
+		registry, err := NewRuleSet().Add("diag/failure-boundary", FailureBoundary).Freeze()
+		if err != nil {
+			t.Fatalf("Freeze: %v", err)
+		}
+		out := NewEngine(registry).Evaluate(RuleContext{Graph: g})
+
+		if out.Failed() {
+			t.Fatalf("the boundary rule failed on a well-formed graph: %v", out.Failures())
+		}
+
+		seen := map[SemanticIdentity]int{}
+		for _, finding := range out.Findings() {
+			// Two findings may never share an identity: that is what convergence
+			// exists to prevent, and a consumer keying on (code, subject) would
+			// silently lose one.
+			id := IdentityOf(finding)
+			seen[id]++
+			if seen[id] > 1 {
+				t.Fatalf("identity %s appears %d times after convergence", id, seen[id])
+			}
+
+			if finding.Code() != CodeFailureBoundary {
+				t.Fatalf("an unexpected code %s reached the output", finding.Code())
+			}
+			if finding.Subject().IsZero() {
+				t.Fatal("a boundary was emitted with no subject")
+			}
+			if finding.Severity() != domain.SeverityInfo {
+				t.Fatalf("a boundary is %s, want INFO", finding.Severity())
+			}
+			if finding.Discriminator() != "" {
+				t.Fatalf("a CONFIRMED boundary carries the discriminator %q",
+					finding.Discriminator())
+			}
+
+			refs := finding.EvidenceRefs()
+			if len(refs) == 0 || len(refs) > 2 {
+				t.Fatalf("a boundary cites %d nodes, want one or two", len(refs))
+			}
+			var failing, good int
+			for _, ref := range refs {
+				node, ok := g.Node(ref)
+				if !ok {
+					t.Fatalf("a boundary cites %q, which is not in the graph", ref)
+				}
+				if node.Subject() != finding.Subject() {
+					t.Fatalf("a boundary cites evidence about another subject")
+				}
+				switch node.State() {
+				case domain.StateFail, domain.StateDegraded:
+					failing++
+					if node.Layer() != finding.Layer() {
+						t.Fatalf("the boundary is filed at %s and its failure is at %s",
+							finding.Layer(), node.Layer())
+					}
+				case domain.StatePass:
+					good++
+				default:
+					t.Fatalf("a boundary cites a %s node; not measured is neither half",
+						node.State())
+				}
+			}
+			if failing != 1 {
+				t.Fatalf("a boundary cites %d failing nodes, want exactly 1", failing)
+			}
+			if good > 1 {
+				t.Fatalf("a boundary cites %d confirmed-good nodes, want at most 1", good)
+			}
+		}
+
+		// Repeating the evaluation cannot change it.
+		again := NewEngine(registry).Evaluate(RuleContext{Graph: g})
+		if a, b := len(out.Findings()), len(again.Findings()); a != b {
+			t.Fatalf("repeated evaluation produced %d then %d findings", a, b)
+		}
+	})
+}

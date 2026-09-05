@@ -3,6 +3,7 @@ package diagnosis
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -428,29 +429,32 @@ func TestGraphIsUnchangedByDiagnosis(t *testing.T) {
 
 // --- duplicates --------------------------------------------------------------
 
-// TestP18DuplicateFindingsAreStillPreserved is the property that makes Phase
-// 10.1a a phase that changes no report.
+// TestDuplicateFindingsConverge closes ADR 0017's deferral.
 //
-// ADR 0017 declined to deduplicate for want of a definition of when two findings
-// are the same conclusion. ADR 0081 section 2.1 supplies it, and Converge
-// implements the merge — but nothing wires it in, deliberately: merging changes
-// the findings array, and 10.1a is the half of the split that changes nothing
-// (docs/design/DIAGNOSTIC_INTELLIGENCE.md section P).
+// That record declined to deduplicate for want of a definition of when two
+// findings are the same conclusion, and named the missing definition as the
+// blocker. ADR 0081 section 2.1 supplies it and section 2.2 the merge; Phase
+// 10.1a implemented both and wired neither, so that activating them would be one
+// reviewable change. This is that change's assertion.
 //
-// So the engine still concatenates and sorts. This test fails the day merging is
-// wired in, which is the day 10.1b starts and the day a golden report is
-// expected to move.
-func TestP18DuplicateFindingsAreStillPreserved(t *testing.T) {
+// It read "want 2 (no deduplication)" in Phase 10.1a, and its doc comment said
+// it would fail the day merging was wired in. That day was Phase 10.1b.
+func TestDuplicateFindingsConverge(t *testing.T) {
 	duplicate := testFinding(t, "TCP_CONNECTION_REFUSED", domain.SeverityError, "bad")
 
 	e := engineOf(t, ruleReturning(duplicate), ruleReturning(duplicate))
 
 	got := e.Diagnose(rctx(testGraph(t)))
-	if len(got) != 2 {
-		t.Fatalf("got %d findings, want 2 (no deduplication)", len(got))
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1: two rules stating one conclusion is one "+
+			"conclusion (ADR 0081 section 2.2)", len(got))
 	}
-	if got[0].Code() != got[1].Code() {
-		t.Error("both findings should be the duplicate")
+	if got[0].Code() != duplicate.Code() {
+		t.Errorf("Code = %s, want %s", got[0].Code(), duplicate.Code())
+	}
+	// The claim rests on what both routes cited, which here is the same node.
+	if want := []domain.EvidenceID{"bad"}; !slices.Equal(got[0].EvidenceRefs(), want) {
+		t.Errorf("EvidenceRefs = %v, want %v", got[0].EvidenceRefs(), want)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/app"
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/security/redaction"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
@@ -293,12 +294,13 @@ func TestTheAnchorSurvivesRedactionAsANode(t *testing.T) {
 func TestAGenericFindingRedactsWithItsSubject(t *testing.T) {
 	local := anchorRun(t)
 
-	findings := local.Findings()
+	// Phase 10.1b added the generic failure boundary to every composition, so
+	// the run now carries one boundary per failing subject alongside the claim
+	// this test is about. Selecting by code keeps the test about what it says it
+	// is about; TestTheFailureBoundaryRedactsWithItsSubject covers the others.
+	findings := findingsWithCode(t, local.Findings(), "TCP_CONNECTION_NOT_ESTABLISHED")
 	if len(findings) != 1 {
-		t.Fatalf("got %d findings, want the one generic TCP finding: %v", len(findings), findings)
-	}
-	if got := findings[0].Code(); got != "TCP_CONNECTION_NOT_ESTABLISHED" {
-		t.Fatalf("code = %s, want TCP_CONNECTION_NOT_ESTABLISHED", got)
+		t.Fatalf("got %d generic TCP findings, want 1: %v", len(findings), findings)
 	}
 
 	// Non-vacuity: locally, all three carry the real endpoint.
@@ -318,7 +320,7 @@ func TestAGenericFindingRedactsWithItsSubject(t *testing.T) {
 		t.Fatalf("Redact: %v", err)
 	}
 
-	shared := shareable.Findings()
+	shared := findingsWithCode(t, shareable.Findings(), "TCP_CONNECTION_NOT_ESTABLISHED")
 	if len(shared) != 1 {
 		t.Fatalf("redaction changed the finding count to %d", len(shared))
 	}
@@ -437,15 +439,12 @@ func TestAPostgresTLSFindingRedactsWithItsEndpoint(t *testing.T) {
 	// endpoint scope working: a PostgreSQL finding claims something about the
 	// address that presented the certificate, so a second failing address is a
 	// second claim rather than the same one restated.
-	findings := local.Findings()
+	findings := findingsWithCode(t, local.Findings(), "POSTGRES_TLS_UPGRADE_NOT_HONORED")
 	if len(findings) != 2 {
 		t.Fatalf("got %d findings, want one per failing endpoint: %v", len(findings), findings)
 	}
 	localSubjects := map[string]bool{}
 	for _, f := range findings {
-		if got := f.Code(); got != "POSTGRES_TLS_UPGRADE_NOT_HONORED" {
-			t.Fatalf("code = %s, want POSTGRES_TLS_UPGRADE_NOT_HONORED", got)
-		}
 		localSubjects[f.Subject().Ref()] = true
 	}
 	if len(localSubjects) != 2 {
@@ -463,7 +462,7 @@ func TestAPostgresTLSFindingRedactsWithItsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Redact: %v", err)
 	}
-	shared := shareable.Findings()
+	shared := findingsWithCode(t, shareable.Findings(), "POSTGRES_TLS_UPGRADE_NOT_HONORED")
 	if len(shared) != len(findings) {
 		t.Fatalf("redaction changed the finding count to %d", len(shared))
 	}
@@ -709,5 +708,123 @@ func TestAMissingCredentialLeaksNothing(t *testing.T) {
 	}
 	if strings.Contains(string(shareableJSON), "tenantrolecanary") {
 		t.Error("the role survived redaction")
+	}
+}
+
+// findingsWithCode selects the findings this file's assertions are about.
+//
+// Phase 10.1b activated the generic failure boundary, which fires on every
+// failing subject in every composition. These tests are about one service claim
+// each, and a count over the whole array would now be counting the boundary too.
+func findingsWithCode(
+	t *testing.T, findings []domain.Finding, code domain.FindingCode,
+) []domain.Finding {
+	t.Helper()
+
+	var out []domain.Finding
+	for _, f := range findings {
+		if f.Code() == code {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no %s finding was produced at all; the assertion below would be vacuous", code)
+	}
+	return out
+}
+
+// TestTheFailureBoundaryRedactsWithItsSubject is the Phase 10.1B addition to the
+// shareable corpus.
+//
+// The boundary became public in Phase 10.1B and it carries a subject, which for
+// a transport failure is a resolved address. That is exactly the identity the
+// shareable projection exists to remove, and it must be removed by the existing
+// structural redaction rather than by anything the new finding brought with it.
+//
+// The pseudonym must also be the *same* one every other reference to that
+// endpoint got: one endpoint, one pseudonym, or correlation is lost and the
+// shareable report stops being readable.
+func TestTheFailureBoundaryRedactsWithItsSubject(t *testing.T) {
+	local := anchorRun(t)
+
+	boundaries := findingsWithCode(t, local.Findings(), diagnosis.CodeFailureBoundary)
+	if len(boundaries) == 0 {
+		t.Fatal("the run produced no boundary; this assertion would be vacuous")
+	}
+
+	// Non-vacuity: locally every boundary names the real endpoint.
+	for _, b := range boundaries {
+		if !strings.Contains(b.Subject().Ref(), anchorCanaryHost) &&
+			!strings.Contains(b.Subject().Ref(), anchorCanaryV4) &&
+			!strings.Contains(b.Subject().Ref(), anchorCanaryV6) {
+			t.Fatalf("the local boundary subject %q names no canary, so redacting it "+
+				"would prove nothing", b.Subject().Ref())
+		}
+	}
+
+	shareable, err := redaction.Redact(local)
+	if err != nil {
+		t.Fatalf("Redact: %v", err)
+	}
+
+	shared := findingsWithCode(t, shareable.Findings(), diagnosis.CodeFailureBoundary)
+	if len(shared) != len(boundaries) {
+		t.Fatalf("redaction changed the boundary count from %d to %d",
+			len(boundaries), len(shared))
+	}
+
+	for _, b := range shared {
+		subject := b.Subject().Ref()
+		for _, canary := range []string{anchorCanaryHost, anchorCanaryV4, anchorCanaryV6} {
+			if strings.Contains(subject, canary) {
+				t.Errorf("the shareable boundary subject %q still names %q", subject, canary)
+			}
+		}
+
+		// The prose is rule-owned and carries no identity of its own, so it must
+		// survive redaction unchanged and must name nothing.
+		for _, text := range []string{b.Summary(), b.Detail()} {
+			for _, canary := range []string{anchorCanaryHost, anchorCanaryV4, anchorCanaryV6} {
+				if strings.Contains(text, canary) {
+					t.Errorf("the boundary prose names %q: %q", canary, text)
+				}
+			}
+		}
+
+		// Every citation still resolves after identifiers were remapped wholesale.
+		for _, ref := range b.EvidenceRefs() {
+			if _, ok := shareable.Graph().Node(ref); !ok {
+				t.Errorf("the shareable boundary cites %q, which no longer resolves", ref)
+			}
+		}
+	}
+
+	// Correlation survives: the mapping from a real subject to its pseudonym is a
+	// bijection across the whole findings array.
+	//
+	// This run legitimately has three subjects — the logical target the generic
+	// TCP finding is about, and one resolved address per boundary, because a
+	// boundary is per subject (ADR 0079 section 2.2). What must hold is that each
+	// one keeps exactly one pseudonym and no two share one, or a reader of the
+	// shareable report can no longer tell the endpoints apart.
+	localToShared := map[string]string{}
+	sharedToLocal := map[string]string{}
+	for i, f := range local.Findings() {
+		realRef := f.Subject().Ref()
+		sharedRef := shareable.Findings()[i].Subject().Ref()
+
+		if existing, seen := localToShared[realRef]; seen && existing != sharedRef {
+			t.Errorf("subject %q got two pseudonyms: %q and %q", realRef, existing, sharedRef)
+		}
+		if existing, seen := sharedToLocal[sharedRef]; seen && existing != realRef {
+			t.Errorf("pseudonym %q covers two subjects: %q and %q",
+				sharedRef, existing, realRef)
+		}
+		localToShared[realRef] = sharedRef
+		sharedToLocal[sharedRef] = realRef
+	}
+	if len(localToShared) < 2 {
+		t.Errorf("only %d distinct subject was mapped; the bijection above would be "+
+			"vacuous", len(localToShared))
 	}
 }

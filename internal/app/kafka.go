@@ -264,6 +264,10 @@ func DiagnoseKafka(ctx context.Context, params KafkaParams) (Result, error) {
 	// diagnosePostgres for why the identity is written here rather than
 	// exported from the rule's own package.
 	registry, err := diagnosis.NewRuleSet().
+		// The generic failure boundary, wired first because it is the only rule
+		// here that is about the shape of the whole graph rather than about one
+		// stage. It restates measured states and infers nothing (ADR 0079).
+		Add("diag/failure-boundary", diagnosis.FailureBoundary).
 		Add("transport/dns", diagnosistransport.DNS).
 		Add("transport/tcp", diagnosistransport.TCP).
 		Add("transport/tls", diagnosistransport.TLS).

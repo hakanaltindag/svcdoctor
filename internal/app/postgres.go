@@ -220,6 +220,10 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 	// so a spelling cannot drift between the four roots that share the generic
 	// transport rules.
 	registry, err := diagnosis.NewRuleSet().
+		// The generic failure boundary, wired first because it is the only rule
+		// here that is about the shape of the whole graph rather than about one
+		// stage. It restates measured states and infers nothing (ADR 0079).
+		Add("diag/failure-boundary", diagnosis.FailureBoundary).
 		Add("transport/dns", diagnosistransport.DNS).
 		Add("transport/tcp", diagnosistransport.TCP).
 		Add("postgres/ssl-request", diagnosispostgres.SSLRequest).

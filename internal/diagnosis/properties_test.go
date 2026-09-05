@@ -370,8 +370,39 @@ func TestPerformanceStaysLinear(t *testing.T) {
 		t.Errorf("SiblingOutcome saw %d child subjects, want %d", counts.Total(), branches)
 	}
 
+	// One finding per distinct (state, subject), not one per node: stateRule
+	// emits a finding per node and convergence reduces the ones that state the
+	// same thing about the same subject. Counting the expectation from the graph
+	// rather than hard-coding it keeps this a property rather than a snapshot.
+	want := map[string]bool{}
+	for _, node := range g.Nodes() {
+		want[node.State().String()+"@"+node.Subject().Ref()] = true
+	}
+
 	findings := engineOf(t, stateRule(t)).Diagnose(RuleContext{Graph: g})
-	if len(findings) != g.Len() {
-		t.Errorf("got %d findings over %d nodes", len(findings), g.Len())
+	if len(findings) != len(want) {
+		t.Errorf("got %d findings over %d nodes, want %d distinct (state, subject) claims",
+			len(findings), g.Len(), len(want))
+	}
+	if len(findings) >= g.Len() {
+		t.Errorf("convergence reduced nothing: %d findings over %d nodes",
+			len(findings), g.Len())
+	}
+
+	// Every node is still cited by exactly one finding: merging unions evidence
+	// and loses none of it.
+	cited := map[domain.EvidenceID]int{}
+	for _, f := range findings {
+		for _, ref := range f.EvidenceRefs() {
+			cited[ref]++
+		}
+	}
+	if len(cited) != g.Len() {
+		t.Errorf("%d of %d nodes are cited after convergence", len(cited), g.Len())
+	}
+	for ref, times := range cited {
+		if times != 1 {
+			t.Errorf("evidence %s is cited by %d findings", ref, times)
+		}
 	}
 }

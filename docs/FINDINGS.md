@@ -250,6 +250,46 @@ Layer order is defined in `docs/ARCHITECTURE.md` section 2:
 L0 config -> L1 DNS -> L2 TCP -> L3 TLS -> L4 protocol -> L5 auth -> L6 topology
 ```
 
+### 5.1 The failure boundary states it positively
+
+Section 5 forbids the worst mistake — a DNS failure followed by three fabricated
+downstream failures. What it does not give an operator is the *positive*
+statement, which is the one that narrows an investigation.
+
+`DIAG_FAILURE_BOUNDARY` is that statement, activated in Phase 10.1B (ADR 0079).
+For each **subject**, it names the deepest stage that positively succeeded and
+the shallowest that positively failed, and cites both.
+
+```text
+DNS       PASS   <- last confirmed-good
+TCP       FAIL   <- first evidenced failure
+TLS       SKIPPED
+```
+
+Four properties make it honest, and each is a test:
+
+1. **It is per subject, never per run.** A healthy bootstrap and one unreachable
+   discovered endpoint produce two boundaries. Merging them would say "the
+   service is unreachable", which is true of neither.
+2. **`SKIPPED` and `UNKNOWN` are neither half.** A stage that did not run is not
+   a confirmed-good boundary and is not a failure. A subject whose only
+   non-passing stage is unmeasured has **no boundary at all**.
+3. **It is not a cause.** It states where observation stopped succeeding. "TLS
+   configuration caused the incident" is a hypothesis and this rule produces
+   none.
+4. **A missing half is reported as missing.** When the first stage measured is
+   the one that failed, the finding cites one node and says so, rather than
+   promoting some earlier success into a contrast that did not happen.
+
+It is `CONFIRMED` at `INFO`: it restates measured states and infers nothing, and
+it describes *where* rather than *how bad*. `INFO` never affects an exit code
+(`docs/CI.md`), so a boundary cannot turn an otherwise clean run into exit 1.
+
+It is the first member of the generic `DIAG_` namespace — produced by generic
+machinery over any service's graph, alongside the existing `DNS_`, `TCP_` and
+`TLS_` codes. A second `DIAG_` code needs the same kind of frozen contract ADR
+0079 gave this one.
+
 ## 6. Known findings
 
 ### `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`

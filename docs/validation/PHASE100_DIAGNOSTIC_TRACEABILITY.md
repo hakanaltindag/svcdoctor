@@ -33,6 +33,33 @@ per-rule form when rules exist to test.
 See `docs/validation/PHASE101A_DIAGNOSTIC_CORE_VALIDATION.md`, which also records three
 deviations from the frozen records and why each was taken.
 
+## Phase 10.1B status
+
+Activation. Three concepts became live in production, and every remaining
+Phase 10.1 row is now implemented and enforced:
+
+`DIAG-013` the boundary is emitted as `DIAG_FAILURE_BOUNDARY`, `CONFIRMED`,
+`INFO`, citing both halves — finding codes **60 → 61**, the one increase ADR
+0078 §3 authorized · `DIAG-014` "ruled out" is rendered and no ruled-out finding
+exists; a renderer guard proves it computes no boundary · `DIAG-025`, `DIAG-026`,
+`DIAG-031` convergence merges, does not accumulate, and no canonical field is
+chosen by rule order · `DIAG-005`, `DIAG-006`, `DIAG-007`, `DIAG-008` the
+claim-discipline properties now have a production rule to hold them against ·
+`DIAG-040` the false-positive policy as `FP01`-`FP05` · `DIAG-043`, `DIAG-044`,
+`DIAG-045` the golden incident corpus, with `forbidden` first-class and a
+synthetic-identity guard.
+
+Still belonging to later phases: `DIAG-004` and `DIAG-030` (renderer presentation
+of competing hypotheses, Phase 10.5), `DIAG-027`, `DIAG-033`, `DIAG-035`,
+`DIAG-037`, `DIAG-038` — the recommendation and next-evidence rows, which stay
+internal because Phase 10.1B emits no hypothesis and therefore no next-evidence.
+
+**ADR 0081 §2.2a** was added as a clarification: semantic identity is a candidacy
+test rather than a licence, and `Layer` and `Discriminator` are merge
+preconditions. It changes no decision in §2.1 or §2.2. See
+`docs/validation/PHASE101B_DIAGNOSTIC_ACTIVATION_VALIDATION.md` §3 for the
+measured defect that prompted it and the full merge-compatibility matrix.
+
 **Scope note.** Thirty-four requirements, not three hundred. A row earns its place by being a
 contract someone could plausibly break; restating a type definition is not one.
 
@@ -110,3 +137,10 @@ Authorized to change in 10.1, and nowhere else: finding codes **60 → 61**
 
 **Re-proven unchanged at the end of Phase 10.1A.** Both authorized changes belong to 10.1b,
 which is the half of the split that changes reports; 10.1a took neither.
+
+**Phase 10.1B took the first and not the second.** Finding codes are **61**
+(`DIAG_FAILURE_BOUNDARY`). The three additive `recommendations[]` fields were not
+taken, because 10.1B emits no new recommendation and a field nothing populates is
+a schema change with no consumer. Everything else is unchanged: `SchemaVersion`
+**1** · `RunSchemaVersion` **1** · RabbitMQ codes **11** · failure classes **42** ·
+`Reveal` **4** · `SecretFor` **4** · external modules **2**.

@@ -499,3 +499,112 @@ func typeName(expr ast.Expr) string {
 		return "<unrecognized>"
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 10.1B: the renderer stays explanation-only
+// ---------------------------------------------------------------------------
+
+// TestDIAG014ARendererComputesNoBoundary is ADR 0079 sections 2.1 and 2.4, and
+// adversarial-review attack 5.
+//
+// The failure boundary became public in Phase 10.1B, and the tempting shortcut
+// arrives with it: a renderer already holds the graph, so it could work the
+// boundary out for itself and skip the finding. Two renderers would then hold
+// two implementations of one conclusion, free to disagree — and a shareable
+// report would be reasoned about after redaction.
+//
+// depguard already denies `internal/diagnosis` to `internal/render`, so a
+// renderer cannot *call* diagnosis.Boundaries. What that cannot catch is a
+// renderer reimplementing it, which is what this reads the source for.
+func TestDIAG014ARendererComputesNoBoundary(t *testing.T) {
+	forbidden := map[string]string{
+		"Boundaries":            "computing a boundary is reasoning (ADR 0077 section 2.7)",
+		"BoundaryFor":           "the same",
+		"LastConfirmedGood":     "a renderer prints the finding's evidence, it does not find it",
+		"FirstEvidencedFailure": "the same",
+		"BlockedChain":          "walking the blocked relation to draw a conclusion is reasoning",
+		"SiblingOutcome":        "counting siblings to say what it means is reasoning",
+		"AdmitConfidence":       "confidence arrives on the finding; a renderer never derives one",
+		"Converge":              "merging two conclusions is diagnosis",
+	}
+
+	scanned := 0
+	for _, pkg := range allProductionPackages(t) {
+		if !strings.HasPrefix(pkg, "internal/render") {
+			continue
+		}
+		for _, path := range productionFilesIn(t, pkg) {
+			scanned++
+			ast.Inspect(parseFile(t, path), func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name := ""
+				switch fn := call.Fun.(type) {
+				case *ast.Ident:
+					name = fn.Name
+				case *ast.SelectorExpr:
+					name = fn.Sel.Name
+				}
+				if why, banned := forbidden[name]; banned {
+					t.Errorf("%s calls %s: %s", relative(t, path), name, why)
+				}
+				return true
+			})
+		}
+	}
+	if scanned == 0 {
+		t.Fatal("no renderer file was scanned; this guard would pass vacuously")
+	}
+	t.Logf("scanned %d renderer files against %d forbidden reasoning calls",
+		scanned, len(forbidden))
+}
+
+// TestDIAG013TheBoundaryCodeIsDeclaredOnceInTheGenericCore pins where the new
+// public code lives.
+//
+// A `DIAG_` code declared inside a service rule package would be a generic claim
+// with a service owner, which is the ownership confusion ADR 0080 section 2.3
+// exists to prevent — and it would make the generic namespace a place to put a
+// code that could not find a service to belong to.
+func TestDIAG013TheBoundaryCodeIsDeclaredOnceInTheGenericCore(t *testing.T) {
+	declared := map[string]string{}
+	for _, pkg := range allProductionPackages(t) {
+		if !strings.HasPrefix(pkg, genericDiagnosisPackage) {
+			continue
+		}
+		for _, path := range productionFilesIn(t, pkg) {
+			ast.Inspect(parseFile(t, path), func(node ast.Node) bool {
+				spec, ok := node.(*ast.ValueSpec)
+				if !ok || spec.Type == nil || !isDomainSelector(spec.Type, "FindingCode") {
+					return true
+				}
+				for _, value := range spec.Values {
+					literal, ok := value.(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					code := strings.Trim(literal.Value, `"`)
+					if strings.HasPrefix(code, "DIAG_") {
+						declared[code] = relative(t, path)
+					}
+				}
+				return true
+			})
+		}
+	}
+
+	if len(declared) != 1 {
+		t.Fatalf("%d DIAG_ codes are declared: %v, want exactly DIAG_FAILURE_BOUNDARY",
+			len(declared), declared)
+	}
+	where, present := declared["DIAG_FAILURE_BOUNDARY"]
+	if !present {
+		t.Fatalf("DIAG_FAILURE_BOUNDARY is not declared; got %v", declared)
+	}
+	if where != "internal/diagnosis/failureboundary.go" {
+		t.Errorf("DIAG_FAILURE_BOUNDARY is declared in %s; a generic code belongs to the "+
+			"generic core, not to a service rule package", where)
+	}
+}

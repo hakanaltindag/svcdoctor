@@ -165,6 +165,8 @@ func TestExactlyOneKafkaCompositionEntryPointExists(t *testing.T) {
 // not listed here is an unreviewed claim reaching a report.
 func TestTheCompositionWiresEveryOwnerOfWhatItCanProduce(t *testing.T) {
 	want := []string{
+		// The generic failure boundary, activated in Phase 10.1b (ADR 0079).
+		"diagnosis.FailureBoundary",
 		// Generic requested-target transport. ADR 0043 owns DNS and TCP;
 		// ADR 0053 owns the TLS handshake that Kafka bootstrap composition is
 		// the first production producer of.
@@ -180,6 +182,7 @@ func TestTheCompositionWiresEveryOwnerOfWhatItCanProduce(t *testing.T) {
 	}
 
 	wantIDs := []string{
+		"diag/failure-boundary",
 		"transport/dns",
 		"transport/tcp",
 		"transport/tls",

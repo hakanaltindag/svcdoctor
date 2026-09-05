@@ -5029,6 +5029,40 @@ committed golden artifacts are byte-for-byte identical. See
 | **`time.Now` is banned by an AST guard rather than by `forbidigo`.** ADR 0080 §2.2 suggested the linter; its forbid list is global in golangci-lint v2, so scoping it would mean enumerating every other directory as an exclusion — which a new top-level package escapes silently | Reopens if golangci-lint gains per-path forbid rules |
 | **No rule consults `Vantage` or `Incomplete` yet.** Both were admitted for reasons that arrive with service intelligence | Closes as 10.2-10.4 write rules that need them |
 
+## Phase 10.1B — Diagnostic intelligence activation: COMPLETE
+
+The second half of the 10.1a/10.1b split: the reasoning machinery Phase 10.1A landed
+unwired is now live in production, and this is the phase allowed to change reports.
+
+**Activated:** convergence by semantic identity, the failure boundary as
+`DIAG_FAILURE_BOUNDARY` (finding codes **60 → 61**, the one increase ADR 0078 §3
+authorized), and the confidence ladder for new results.
+
+**Deliberately not activated:** any generic hypothesis, any next-evidence or remediation,
+and any service intelligence. Generic evidence does not justify a causal claim without
+service knowledge, and manufacturing one to demonstrate the engine is the failure mode the
+phase exists to prevent.
+
+**ADR 0081 §2.2a** records the one clarification: semantic identity is a *candidacy* test,
+not a licence. `POSTGRES_CONNECTION_NOT_PERMITTED` is produced by two rules at two layers
+by design, and merging under a tie-break published L5 while citing the L4 node. `Layer` and
+`Discriminator` are now merge preconditions; where they differ, both findings are kept.
+
+`SchemaVersion` **1**, `RunSchemaVersion` **1**, **42** failure classes, **4** `Reveal`,
+**4** `SecretFor`, **2** modules — all unchanged. See
+`docs/validation/PHASE101B_DIAGNOSTIC_ACTIVATION_VALIDATION.md`, which carries the full
+merge-compatibility matrix.
+
+### Open items
+
+| Item | Condition |
+|---|---|
+| **No generic hypothesis is emitted.** The engine is live and produces exactly one kind of finding | Closes as Phases 10.2-10.4 add service rules that have something to hypothesize about |
+| **`NEXT_EVIDENCE` and `REMEDIATION` have no production instance**, so ADR 0082's three additive `recommendations[]` fields are not on `domain.Recommendation` yet. A field nothing populates is a schema change with no consumer | Closes with the first hypothesis that needs a discriminator, in Phase 10.2 |
+| **`Summary` and `Detail` still come from the merge tie-break winner.** ADR 0081 §2.2 decides this explicitly, and it is safe because `Code`, `Subject` and `Layer` must all match first | Not an open question; recorded so the one remaining tie-break is visible |
+| **Canonical ordering is applied twice** — in `Converge` and again in `Evaluate` — which made one Phase 10.1A mutation equivalent until its plant was widened to remove both | Reopens if the redundancy is removed; the mutation plants document why it exists |
+| **A boundary is emitted per failing subject, including on single-path runs** where the stage list already shows the same shape | Not reopenable without a conditional-emission rule nobody froze. ADR 0079 §2.3 makes it unconditional |
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6

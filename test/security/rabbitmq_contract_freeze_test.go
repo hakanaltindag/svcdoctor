@@ -148,6 +148,8 @@ func TestExactlyOneRabbitMQCompositionEntryPointExists(t *testing.T) {
 // claim reaching a report.
 func TestTheRabbitMQCompositionWiresEveryOwnerOfWhatItCanProduce(t *testing.T) {
 	want := []string{
+		// The generic failure boundary, activated in Phase 10.1b (ADR 0079).
+		"diagnosis.FailureBoundary",
 		"diagnosistransport.DNS",
 		"diagnosistransport.TCP",
 		"diagnosistransport.TLS",
@@ -157,6 +159,7 @@ func TestTheRabbitMQCompositionWiresEveryOwnerOfWhatItCanProduce(t *testing.T) {
 	}
 
 	wantIDs := []string{
+		"diag/failure-boundary",
 		"transport/dns",
 		"transport/tcp",
 		"transport/tls",

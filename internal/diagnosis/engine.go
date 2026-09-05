@@ -52,14 +52,19 @@ func (e Engine) Registry() Registry { return e.registry }
 // same findings in the same sequence, so how the engine was assembled cannot
 // change what a report looks like.
 //
-// # What the engine does not do, in this phase
+// # Convergence
 //
-// Findings are returned exactly as the rules produced them. The engine does not
-// yet merge two rules that reached one conclusion; ADR 0081 section 2.1 supplies
-// the identity definition that makes merging possible, and Converge implements
-// it, but nothing wires it in. Landing the merge changes reports, and Phase
-// 10.1a is the half of the split that does not (docs/design/DIAGNOSTIC_INTELLIGENCE.md
-// section P).
+// Two rules reaching one conclusion produce one finding carrying both routes'
+// evidence. ADR 0081 section 2.1 supplies the identity that makes that
+// definable, section 2.2 the merge, and Phase 10.1b clarified the part section
+// 2.2 left open: identity is a candidacy test, not a licence. Findings that
+// share an identity but disagree about a field a consumer parses stay separate.
+// See Converge and mergeable.
+//
+// Merging is why Evaluate needs identities at all. A finding carries no rule
+// name — nothing in the report does (ADR 0080 section 2.5) — so the attribution
+// exists only inside this function, long enough to break a tie deterministically
+// and then be discarded.
 //
 // # Rule failure
 //
@@ -79,22 +84,48 @@ func (e Engine) Registry() Registry { return e.registry }
 // read, so this is a property of the type rather than a promise made here.
 func (e Engine) Evaluate(ctx RuleContext) Outcome {
 	var out Outcome
+	var produced []AttributedFinding
+
 	for _, rule := range e.registry.rules {
 		findings, ok := evaluateOne(rule, ctx)
 		if !ok {
 			out.failures = append(out.failures, RuleFailure{rule: rule.id})
 			continue
 		}
-		out.findings = append(out.findings, findings...)
+		for _, f := range findings {
+			produced = append(produced, AttributedFinding{Rule: rule.id, Finding: f})
+		}
 	}
-	if len(out.findings) == 0 {
-		out.findings = nil
+	if len(produced) == 0 {
 		return out
 	}
 
+	merged, err := Converge(produced)
+	if err != nil {
+		// Convergence refuses only on rule output it cannot reconcile — a zero
+		// finding, an unattributed one, or a group whose partitioning left a
+		// field it must not choose. Every one is a defect in svcdoctor, so the
+		// response is ADR 0083 section 2.3's: discard rather than repair, and
+		// let the run be incomplete. Discarding *everything* is deliberate,
+		// because the failure is in the reconciliation across rules and there is
+		// no principled subset to keep.
+		out.findings = nil
+		out.failures = append(out.failures, RuleFailure{rule: convergenceFailure})
+		return out
+	}
+
+	out.findings = merged
 	domain.SortFindings(out.findings)
 	return out
 }
+
+// convergenceFailure names the engine itself in a RuleFailure.
+//
+// A convergence defect belongs to no single rule — it is a disagreement between
+// them — so attributing it to one would name a rule that may be blameless. The
+// identity is well formed so that every consumer of RuleFailure keeps working,
+// and it is owned by "diag", the namespace generic machinery already uses.
+const convergenceFailure RuleID = "diag/convergence"
 
 // Diagnose runs every rule against ctx and returns the findings alone.
 //

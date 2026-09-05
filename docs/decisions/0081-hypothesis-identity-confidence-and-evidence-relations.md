@@ -62,6 +62,65 @@ merged finding may reach `HIGH` only if one of the merged inputs independently q
 This overturns nothing in ADR 0017: that record declined to deduplicate *because no definition
 existed*, and it named the missing definition as the blocker. §2.1 supplies it.
 
+### 2.2a Clarification (Phase 10.1B): identity is candidacy, not a licence
+
+**Status of this section:** a clarification recorded during implementation. It
+changes no decision in §2.1 or §2.2 — semantic identity is still `(Code, Subject)`
+and the merge table above is unchanged — and it answers a question the table did
+not: *which fields must already agree before the table is applied.*
+
+The table assigns `Summary` and `Detail` to the tie-break winner and says nothing
+about `Layer`. Phase 10.1A filled that silence with "the winner's" and Phase
+10.1B measured what that does.
+
+`POSTGRES_CONNECTION_NOT_PERMITTED` is produced by two rules about one endpoint
+at two layers, deliberately: `postgres/startup` anchors it at L4 and
+`postgres/authentication` at L5, and `internal/diagnosis/postgres/shared.go`
+records the reason — "the claim's layer is the anchor's own and the two anchors
+sit at different ones". Merged under a tie-break, the published finding claimed
+**L5 while citing the startup node**, because `postgres/a…` sorts before
+`postgres/s…`. A refusal observed at the protocol stage would have been published
+as an authentication-stage claim, decided by an alphabet.
+
+**The rule.** Two findings that share a semantic identity may converge only when
+every field a consumer *parses* already agrees. Where they differ, both are kept.
+
+Concretely, the merge preconditions are:
+
+| Field | Precondition |
+|---|---|
+| `Layer` | must be equal |
+| `Discriminator` | at most one distinct non-empty value; an unset one joins a set one |
+
+`Layer` qualifies because it is structured metadata a consumer reads and one of
+the keys `domain.SortFindings` orders by. `Discriminator` qualifies because two
+hypotheses naming different observations are asking different questions, and
+reducing them to one silently discards a question.
+
+`Summary` and `Detail` are **not** preconditions and keep the winner's value,
+which §2.2 decided explicitly. That is safe precisely because everything a
+consumer parses now has to match: once `Code`, `Subject` and `Layer` agree, the
+two routes state one claim at one layer, and which wording survives changes
+nothing machine-readable. Prose is explicitly not identity (§4) and is explicitly
+free to be reworded (`docs/FINDINGS.md` §3.1 rule 13).
+
+**Why this is not an identity change.** Adding `Layer` to `(Code, Subject)` would
+produce the same output and would rewrite §2.1. Expressing it as a merge
+precondition leaves the identity definition alone and fills the gap §2.2 left,
+which is the smaller of the two changes for the same behaviour.
+
+**Why it is not the alternative that discards.** Refusing to *emit* on a
+mismatch, or picking the shallowest layer, would each drop or invent something.
+Keeping both findings loses no evidence and states no layer nobody measured; it
+is weaker than merging, and weaker is the safe direction.
+
+Measured at the time of writing: across all 61 finding codes, `Layer` varies for
+exactly one, and `Severity`, `Kind`, `Confidence` and `Discriminator` are constant
+at every construction site. `VantageDependent` varies for three codes and is
+reconciled by logical OR, which is order-independent and is what OR is for. The
+full matrix is in
+`docs/validation/PHASE101B_DIAGNOSTIC_ACTIVATION_VALIDATION.md`.
+
 ### 2.3 The confidence ladder
 
 Confidence is **epistemic strength only** and stays ordinal — `LOW`, `MEDIUM`, `HIGH`, no
@@ -219,6 +278,9 @@ is unaffected because severity is merged by maximum.
   about the subject's health.
 - Property: no finding's prose contains any string that appears only in a peer-supplied
   evidence attribute — a fuzz target with adversarial server strings.
+- Unit: §2.2a's preconditions — same identity and same layer converges, same
+  identity and different layer does not, and no canonical field is chosen by rule
+  order (`internal/diagnosis/mergecompat_test.go`).
 - Mutation: accumulate confidence on convergence; treat missing evidence as contradiction;
   allow `HIGH` for a hypothesis without direct authority; break merge ties by wiring order;
   deduplicate by summary text.

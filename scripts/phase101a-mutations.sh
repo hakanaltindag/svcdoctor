@@ -204,11 +204,23 @@ assert "in.Confidence++" in s' \
 echo
 echo "--- determinism and identity ---"
 
+# Canonical ordering is applied twice as of Phase 10.1b: once at the end of
+# Converge, which Evaluate now calls, and once by Evaluate itself. Removing
+# either alone became an equivalent mutant the day convergence was activated, and
+# this suite caught the regression by leaving M07 standing. The plant removes
+# both, because "canonical ordering is dropped" is one semantic change expressed
+# at two call sites.
 mutate M07 "the canonical sort is removed, so wiring order reaches the report" \
   internal/diagnosis/engine.go \
   's = s.replace("""	domain.SortFindings(out.findings)
 	return out""", """	return out""", 1)
-assert "domain.SortFindings(out.findings)" not in s' \
+assert "domain.SortFindings(out.findings)" not in s
+other = "internal/diagnosis/converge.go"
+c = open(other).read()
+c = c.replace("""	domain.SortFindings(out)
+	return out, nil""", """	return out, nil""", 1)
+assert "domain.SortFindings(out)" not in c
+open(other, "w").write(c)' \
   ./internal/diagnosis 'TestFindingOrderIsCanonicalNotRuleOrder|TestP02RuleRegistrationPermutationDoesNotChangeResult'
 
 mutate M08 "a duplicate rule identity is accepted, so one rule shadows another" \

@@ -20,6 +20,12 @@ Findings
     → Check that this endpoint is the PostgreSQL service this run was meant to reach, and read the referenced evidence for what the exchange observed
     evidence: 1
 
+  · INFO  DIAG_FAILURE_BOUNDARY  ip-001:<port>
+    Observation of this subject last succeeded at the tcp stage and first failed at the tls stage
+    This states where observation stopped succeeding and nothing about why. It does not claim that this stage caused the failure, and it is not a statement about any other stage.
+    Some stages for this subject were not measured. A stage that did not run was neither proven to work nor proven to fail, and none of them is cited here.
+    evidence: 2
+
 Result
   status  PROBLEMS FOUND
   outcome  session NOT established

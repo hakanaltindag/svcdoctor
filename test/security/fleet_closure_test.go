@@ -46,9 +46,14 @@ import (
 // test could contradict. This counts them the same way the Phase 9.0 start-state
 // gate did, by reading the declarations.
 func TestMTG05TheFindingCodeCountIsUnchanged(t *testing.T) {
+	// 60 until Phase 10.1b, which activated the one code ADR 0078 section 3
+	// authorized for "the phase that implements it": DIAG_FAILURE_BOUNDARY, the
+	// first member of the generic `DIAG_` namespace (ADR 0079 section 2.3). No
+	// other code was added, and none may be without its own frozen contract.
 	const (
-		wantTotal    = 60
+		wantTotal    = 61
 		wantRabbitMQ = 11
+		wantDiag     = 1
 	)
 
 	codes := declaredFindingCodes(t)
@@ -72,6 +77,12 @@ func TestMTG05TheFindingCodeCountIsUnchanged(t *testing.T) {
 	}
 	if got := byService["RABBITMQ"]; got != wantRabbitMQ {
 		t.Errorf("%d RabbitMQ finding codes, want %d", got, wantRabbitMQ)
+	}
+	if got := byService["DIAG"]; got != wantDiag {
+		t.Errorf("%d generic DIAG finding codes, want %d.\n\n"+
+			"The generic namespace is not a place to put a code that could not find a "+
+			"service to belong to. A second one needs the same kind of frozen contract "+
+			"ADR 0079 gave the first.", got, wantDiag)
 	}
 	t.Logf("finding codes by namespace: %v", byService)
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	diagnosispostgres "github.com/hakanaltindag/svcdoctor/internal/diagnosis/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
@@ -581,7 +582,9 @@ func TestCLIWrongCredentialIsRejected(t *testing.T) {
 			}
 
 			decoded := inv.canonical(t)
-			codes := findingCodes(t, decoded)
+			// The generic failure boundary joins every failing run as of Phase
+			// 10.1b; this assertion is about the service claim.
+			codes := serviceCodes(findingCodes(t, decoded))
 			want := string(diagnosispostgres.CodeCredentialsRejected)
 			if len(codes) != 1 || codes[0] != want {
 				t.Fatalf("findings = %v, want exactly [%s]", codes, want)
@@ -1032,4 +1035,19 @@ func TestCLIJSONStillCanonical(t *testing.T) {
 	if inv.code != 0 {
 		t.Errorf("exit = %d, want 0", inv.code)
 	}
+}
+
+// serviceCodes drops the generic failure boundary from a decoded code list.
+//
+// Phase 10.1b activated DIAG_FAILURE_BOUNDARY in every composition root. A
+// black-box CLI assertion about "which service claim did this run make" is still
+// about that, and the boundary is covered on its own in test/diagnosis.
+func serviceCodes(codes []string) []string {
+	var out []string
+	for _, code := range codes {
+		if code != string(diagnosis.CodeFailureBoundary) {
+			out = append(out, code)
+		}
+	}
+	return out
 }

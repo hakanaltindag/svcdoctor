@@ -14,6 +14,7 @@ import (
 
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/app"
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	diagnosispostgres "github.com/hakanaltindag/svcdoctor/internal/diagnosis/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/probe/dns"
@@ -107,10 +108,21 @@ func codesIn(report domain.Report) []domain.FindingCode {
 // requireSingleFinding asserts the run concluded exactly one thing.
 func requireSingleFinding(t *testing.T, report domain.Report, code domain.FindingCode) domain.Finding {
 	t.Helper()
-	if got := report.Findings(); len(got) != 1 {
-		t.Fatalf("got %d findings, want 1: %v", len(got), codesIn(report))
+
+	// Phase 10.1b activated the generic failure boundary in every composition
+	// root, so a failing run now also carries one boundary per failing subject.
+	// These tests are each about one service claim, and they still are; the
+	// boundary has its own coverage in test/diagnosis.
+	var service []domain.Finding
+	for _, f := range report.Findings() {
+		if f.Code() != diagnosis.CodeFailureBoundary {
+			service = append(service, f)
+		}
 	}
-	f := report.Findings()[0]
+	if len(service) != 1 {
+		t.Fatalf("got %d non-boundary findings, want 1: %v", len(service), codesIn(report))
+	}
+	f := service[0]
 	if f.Code() != code {
 		t.Fatalf("finding = %s, want %s", f.Code(), code)
 	}

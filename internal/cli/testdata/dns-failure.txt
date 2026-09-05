@@ -11,6 +11,12 @@ Findings
     → Check that the hostname is spelled as intended and that it has an address record visible to the resolver this host is configured to use
     evidence: 1
 
+  · INFO  DIAG_FAILURE_BOUNDARY  db.internal
+    The first stage measured for this subject, dns, failed
+    This states where observation stopped succeeding and nothing about why. It does not claim that this stage caused the failure, and it is not a statement about any other stage.
+    Nothing for this subject succeeded before it, so there is no confirmed-good stage to contrast it against; the absence is reported rather than filled in.
+    evidence: 1
+
 Result
   status  PROBLEMS FOUND
   outcome  session NOT established

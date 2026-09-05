@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/postgres"
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 	"github.com/hakanaltindag/svcdoctor/internal/vocabulary"
@@ -427,9 +428,13 @@ func TestTheRunReportsWhatItCouldNotReach(t *testing.T) {
 			result := runWith(t, "db.example.com", 5432, c.resolver, c.dialer)
 			report := result.Report()
 
-			findings := report.Findings()
+			// Phase 10.1b added the generic failure boundary to every composition,
+			// so a failing run now also carries one boundary per failing subject.
+			// This test is about the service claim; TestTheFailureBoundaryIsEmitted
+			// and the S-series in boundaryactivation_test.go cover the boundary.
+			findings := serviceFindings(t, report.Findings())
 			if len(findings) != 1 {
-				t.Fatalf("got %d findings, want exactly 1: %v", len(findings), findings)
+				t.Fatalf("got %d non-boundary findings, want exactly 1: %v", len(findings), findings)
 			}
 			finding := findings[0]
 
@@ -543,9 +548,9 @@ func TestTheRunReportsAFailedInBandHandshake(t *testing.T) {
 		stubResolver{addrs: addrs(t, "10.0.0.1")}, sslThenGarbageDialer{})
 	report := result.Report()
 
-	findings := report.Findings()
+	findings := serviceFindings(t, report.Findings())
 	if len(findings) != 1 {
-		t.Fatalf("got %d findings, want exactly 1: %v", len(findings), findings)
+		t.Fatalf("got %d non-boundary findings, want exactly 1: %v", len(findings), findings)
 	}
 	finding := findings[0]
 
@@ -895,9 +900,9 @@ func TestARunWithNoCredentialSaysSo(t *testing.T) {
 		t.Errorf("class = %s, want EXEC_REQUIRED_INPUT_MISSING", got)
 	}
 
-	findings := report.Findings()
+	findings := serviceFindings(t, report.Findings())
 	if len(findings) != 1 {
-		t.Fatalf("got %d findings, want 1: %v", len(findings), findings)
+		t.Fatalf("got %d non-boundary findings, want 1: %v", len(findings), findings)
 	}
 	if got := findings[0].Code(); got != "POSTGRES_CREDENTIAL_NOT_CONFIGURED" {
 		t.Errorf("code = %s, want POSTGRES_CREDENTIAL_NOT_CONFIGURED", got)
@@ -1007,9 +1012,9 @@ func TestTheRunReportsAFailedNegotiation(t *testing.T) {
 		stubResolver{addrs: addrs(t, "10.0.0.1")}, httpDialer{})
 	report := result.Report()
 
-	findings := report.Findings()
+	findings := serviceFindings(t, report.Findings())
 	if len(findings) != 1 {
-		t.Fatalf("got %d findings, want 1: %v", len(findings), findings)
+		t.Fatalf("got %d non-boundary findings, want 1: %v", len(findings), findings)
 	}
 	if got := findings[0].Code(); got != "POSTGRES_SSL_NEGOTIATION_FAILED" {
 		t.Errorf("code = %s, want POSTGRES_SSL_NEGOTIATION_FAILED", got)
@@ -1037,4 +1042,28 @@ func (httpDialer) DialTCP(context.Context, netip.AddrPort) (net.Conn, error) {
 		_, _ = server.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 	}()
 	return client, nil
+}
+
+// serviceFindings drops the generic failure boundary.
+//
+// Phase 10.1b activated DIAG_FAILURE_BOUNDARY in every composition root, so a
+// failing run carries one boundary per failing subject in addition to whatever
+// the service rules concluded. Tests that assert "exactly one finding" were
+// asserting something about the service claim, and they still are.
+//
+// It fails rather than filters when nothing is left, so a filter can never be
+// the reason an assertion passes.
+func serviceFindings(t *testing.T, findings []domain.Finding) []domain.Finding {
+	t.Helper()
+
+	var out []domain.Finding
+	for _, f := range findings {
+		if f.Code() != diagnosis.CodeFailureBoundary {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 && len(findings) > 0 {
+		t.Fatalf("every finding was a failure boundary: %v", findings)
+	}
+	return out
 }
