@@ -304,7 +304,7 @@ subject
 summary
 detail
 evidenceRefs
-recommendations
+recommendations   (action, and optionally kind/safety/rationale/selfCollectable)
 vantageDependent
 ```
 
@@ -393,6 +393,44 @@ Two consequences follow, and both are intended:
   nodes that are not. Both are available structurally, on the nodes themselves.
 
 ---
+
+### 7.4a recommendations
+
+Each entry is an object. `action` is the only required member and is the only one that existed
+before Phase 10.4B; the other four are additive and are present **only on a classified
+recommendation**.
+
+```jsonc
+{
+  "action": "Identify the connection limits applicable to this attempted session and …",
+  "kind": "NEXT_EVIDENCE",        // NEXT_EVIDENCE | REMEDIATION
+  "safety": "COMPARE",            // OBSERVE | VERIFY | COMPARE | CONFIG_CHANGE
+  "rationale": "The endpoint stated that a connection limit applying to …",
+  "selfCollectable": false
+}
+```
+
+| Member | Meaning |
+|---|---|
+| `action` | one line of human-readable text. **Never a command to execute** |
+| `kind` | an observation to take, or a change to make. Absent when the producer did not classify the advice |
+| `safety` | what taking it would cost, ordered by blast radius. A `NEXT_EVIDENCE` recommendation is always one of the three read-only classes. `RESTART`, `DISRUPTIVE` and `SECURITY_WEAKENING` exist in the vocabulary and **no producer may emit them** (ADR 0082 §2.3) |
+| `rationale` | why this observation discriminates, or why this change follows from the evidence |
+| `selfCollectable` | whether a differently configured svcdoctor run *could* take this observation. Emitted only for `NEXT_EVIDENCE`, where `false` is meaningful and frequent |
+
+**`selfCollectable` is metadata and never authorization.** It does not mean svcdoctor will
+collect it, may collect it, or has collected it: diagnosis performs no I/O (ADR 0078 §2.6) and
+there is no automatic collection. A future iterative mode is deferred to its own ADR
+(ADR 0086 §2.7).
+
+**Unclassified recommendations are normal and are not a defect.** Most of the tree's advice
+predates the vocabulary and encodes as `{"action": "…"}` exactly as it did before — the absence of
+`kind` says *nobody classified this*, which is truthful, where defaulting it to `NEXT_EVIDENCE`
+would assert a review that never happened. A consumer must therefore treat an absent `kind` as
+unknown and never as a default.
+
+The addition is **additive** under the versioning policy of section 1 — no field was removed and
+no existing field changed meaning — so `schemaVersion` stays `1` (ADR 0083 §2.1, ADR 0086 §2.8).
 
 ### 7.5 layer
 

@@ -3,7 +3,6 @@ package postgres
 import (
 	"strings"
 
-	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
@@ -270,45 +269,4 @@ func floorDetail(base string, node domain.Evidence) string {
 	}
 
 	return strings.Join(parts, "\n")
-}
-
-// projectAdvice runs one suggestion through the Phase 10.1a guardrails and
-// returns what a report can carry today.
-//
-// It is the same helper internal/diagnosis/kafka holds, deliberately copied
-// rather than shared. The two are four lines of composition over exported
-// generic functions, and the alternative — an exported helper on
-// internal/diagnosis — would put a *findings* constructor in the package whose
-// whole contract is that it knows no service's claims. ADR 0084 section 9 made
-// the same call for Kafka; nothing has changed to make one shared copy the
-// smaller thing.
-//
-// # Why the classification does not reach the report
-//
-// ADR 0082 section 2.1 puts kind, safety, rationale and self-collectability on
-// domain.Recommendation, additively, and Phase 10.3 does not move them: that is
-// a generic change touching every service's renderer and every golden report.
-// What it does do is refuse to write advice the classification would have
-// rejected — the producible-class check, the read-only requirement on next
-// evidence, the confidence gate and the no-executable-command validator all run
-// here, at construction.
-//
-// A rejected suggestion yields no recommendation at all. Emitting an
-// unclassified string because the classified one was refused would be the
-// guardrail deleting itself.
-func projectAdvice(
-	in diagnosis.AdviceInput, kind domain.FindingKind, confidence domain.Confidence,
-) []domain.Recommendation {
-	advice, err := diagnosis.NewAdvice(in)
-	if err != nil {
-		return nil
-	}
-	if err := diagnosis.AdmitAdvice(kind, confidence, advice); err != nil {
-		return nil
-	}
-	recommendation, err := domain.NewRecommendation(advice.Action())
-	if err != nil {
-		return nil
-	}
-	return []domain.Recommendation{recommendation}
 }

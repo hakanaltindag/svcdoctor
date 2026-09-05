@@ -482,7 +482,21 @@ func mergeGroup(group []AttributedFinding) (domain.Finding, error) {
 
 	refs := make([]domain.EvidenceID, 0, len(group)*2)
 	recommendations := make([]domain.Recommendation, 0, len(group))
-	seenActions := make(map[string]struct{}, len(group))
+	// Keyed on the **whole recommendation**, not on its action.
+	//
+	// Until Phase 10.4B a recommendation was its action, so deduplicating on the
+	// action deduplicated the value. It is now five fields, and two of them —
+	// kind and safety — are the difference between "look at this" and "change
+	// this". Keying on the action alone would silently keep whichever copy
+	// arrived first and drop a differently classified one, publishing a safety
+	// class no rule attached to that sentence. That is the Phase 10.2A defect
+	// exactly: a merged field with a value nobody stated.
+	//
+	// domain.Recommendation is comparable — five comparable fields, no slices,
+	// no pointers — so the value is its own key and equality is total. Two
+	// recommendations that differ in any field now coexist, and a reader sees
+	// both classifications rather than one of them chosen by arrival order.
+	seen := make(map[domain.Recommendation]struct{}, len(group))
 
 	// The members are visited in an order derived from their own content, never
 	// from a rule's name. Only the recommendation union can see this order at
@@ -505,10 +519,10 @@ func mergeGroup(group []AttributedFinding) (domain.Finding, error) {
 			in.Kind = domain.FindingKindConfirmed
 		}
 		for _, r := range f.Recommendations() {
-			if _, dup := seenActions[r.Action()]; dup {
+			if _, dup := seen[r]; dup {
 				continue
 			}
-			seenActions[r.Action()] = struct{}{}
+			seen[r] = struct{}{}
 			recommendations = append(recommendations, r)
 		}
 	}
@@ -562,7 +576,7 @@ func compareByContent(a, b domain.Finding) int {
 		}
 		return -1
 	}
-	return cmp.Compare(joinActions(a), joinActions(b))
+	return cmp.Compare(joinAdvice(a), joinAdvice(b))
 }
 
 // joinRefs renders a finding's evidence references as one comparable string.
@@ -576,12 +590,36 @@ func joinRefs(f domain.Finding) string {
 	return b.String()
 }
 
-// joinActions renders a finding's advice as one comparable string, in the order
+// joinAdvice renders a finding's advice as one comparable string, in the order
 // the rule wrote it.
-func joinActions(f domain.Finding) string {
+//
+// **Every field, not just the action.** This string is the last tie-break in
+// compareByContent, which orders the members of a merge group so that the
+// recommendation union is built in an order derived from content rather than
+// from a rule's name (ADR 0081 section 2.6a). Since Phase 10.4B a recommendation
+// carries five fields, and two findings differing only in a recommendation's
+// kind would compare equal here — leaving their relative order to the sort's
+// stability and therefore to input order. Including every field keeps the
+// comparison total over the values it is comparing.
+//
+// The NUL separators keep the concatenation unambiguous: no field may contain
+// one, because validateIdentifier rejects control characters.
+func joinAdvice(f domain.Finding) string {
 	var b strings.Builder
 	for _, r := range f.Recommendations() {
 		b.WriteString(r.Action())
+		b.WriteByte(0)
+		b.WriteString(r.Kind().String())
+		b.WriteByte(0)
+		b.WriteString(r.Safety().String())
+		b.WriteByte(0)
+		b.WriteString(r.Rationale())
+		b.WriteByte(0)
+		if r.SelfCollectable() {
+			b.WriteByte('1')
+		} else {
+			b.WriteByte('0')
+		}
 		b.WriteByte(0)
 	}
 	return b.String()

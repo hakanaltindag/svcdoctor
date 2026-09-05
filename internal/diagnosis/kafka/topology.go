@@ -620,7 +620,7 @@ func (t advertisedTopology) reachabilityRecommendations() []domain.Recommendatio
 	if t.complete {
 		return nil
 	}
-	return projectAdvice(diagnosis.AdviceInput{
+	return diagnosis.Recommend(diagnosis.AdviceInput{
 		Kind:            diagnosis.AdviceKindNextEvidence,
 		Safety:          diagnosis.SafetyObserve,
 		Action:          recommendUnmeasured,
@@ -666,7 +666,7 @@ func (t advertisedTopology) suitabilityFinding() (domain.Finding, bool) {
 		EvidenceRefs:     basis.Supporting(),
 		VantageDependent: true,
 		Discriminator:    discriminatorUnsuitable,
-		Recommendations: projectAdvice(diagnosis.AdviceInput{
+		Recommendations: diagnosis.Recommend(diagnosis.AdviceInput{
 			Kind:      diagnosis.AdviceKindNextEvidence,
 			Safety:    diagnosis.SafetyCompare,
 			Action:    recommendUnsuitable,
@@ -703,39 +703,4 @@ func (t advertisedTopology) suitabilityBasis() (diagnosis.EvidenceBasis, error) 
 	}
 	b.Support(t.failureRefs()...)
 	return b.Freeze(t.graph)
-}
-
-// projectAdvice runs one suggestion through the Phase 10.1a guardrails and
-// returns what a report can carry today.
-//
-// # Why the classification does not reach the report
-//
-// ADR 0082 section 2.1 puts kind, safety, rationale and self-collectability on
-// domain.Recommendation, additively. Phase 10.2 does not move them: that is a
-// generic change touching every service's renderer and every golden report, and
-// this phase's contract is Kafka reasoning (ADR 0084 section 9). What it does do
-// is refuse to write advice the classification would have rejected — the
-// producible-class check, the read-only requirement on next evidence, and the
-// no-executable-command validator all run here, at construction, so the
-// discipline is enforced now and the field arrives later carrying values that
-// already passed it.
-//
-// A rejected suggestion yields no recommendation at all. Emitting an unclassified
-// string because the classified one was refused would be the guardrail deleting
-// itself.
-func projectAdvice(
-	in diagnosis.AdviceInput, kind domain.FindingKind, confidence domain.Confidence,
-) []domain.Recommendation {
-	advice, err := diagnosis.NewAdvice(in)
-	if err != nil {
-		return nil
-	}
-	if err := diagnosis.AdmitAdvice(kind, confidence, advice); err != nil {
-		return nil
-	}
-	recommendation, err := domain.NewRecommendation(advice.Action())
-	if err != nil {
-		return nil
-	}
-	return []domain.Recommendation{recommendation}
 }

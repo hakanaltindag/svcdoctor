@@ -105,10 +105,21 @@ const (
 		"addresses that refused the connection with the rules for the addresses that " +
 		"accepted it, for the role this run used"
 
-	rationaleAdmissionContrast = "The role and the database were the same on every address, " +
-		"so what differed is something only the endpoint's own admission rules and the " +
-		"addresses themselves can account for; which of the two it is decides whether this " +
-		"is one endpoint with a gap in its rules or two endpoints with different ones."
+	// **No universal quantifier over the address set**, deliberately, and the
+	// constraint is stricter here than the sentence needs.
+	//
+	// This rationale is only emitted on the contrast branch, where the whole
+	// point is that the addresses did *not* answer alike — so a phrase like "on
+	// every address" is true of the role and the database and still reads, in a
+	// report about a disagreement, as a claim about the disagreement. The corpus
+	// forbids the phrase in P09 for exactly that reason, and Phase 10.4B found
+	// it here the moment the rationale became report-visible: until then the
+	// field was computed and discarded, so no forbidden-claim scan could see it.
+	rationaleAdmissionContrast = "The role and the database this run used did not change " +
+		"between the addresses, so what differed is something only the endpoint's own " +
+		"admission rules and the addresses themselves can account for; which of the two it " +
+		"is decides whether this is one endpoint with a gap in its rules or two endpoints " +
+		"with different ones."
 
 	// The next observation when the set is partial. Self-collectable in the
 	// sense ADR 0082 section 2.4 defines: a differently configured run could take
@@ -116,9 +127,18 @@ const (
 	recommendAdmissionUnmeasured = "Re-run with a larger execution budget so the addresses " +
 		"that reached no admission decision are attempted"
 
+	// Stated **positively**, and that is a rule this repository already made.
+	//
+	// The sentence used to quote the very claim it exists to forbid — the
+	// universal one about the address set — in order to deny it. Phase 10.3 ruled
+	// on that shape for `53300`: "naming one to deny it puts the word in the
+	// report", and a substring scan cannot tell a quotation from an assertion,
+	// which is precisely why the report must not contain either. Phase 10.4B
+	// found it the moment the rationale became report-visible; until then the
+	// field was computed and thrown away, so no corpus assertion could see it.
 	rationaleAdmissionUnmeasured = "The counts above are partial while any address is " +
-		"undetermined, and a complete set is what separates \"one address was refused\" from " +
-		"\"every address was refused\"."
+		"undetermined, and a complete set is what would show how far the refusals reach " +
+		"across the addresses this target resolved to."
 )
 
 // admissionVerdict is what a run learned about admission at one address.
@@ -392,7 +412,7 @@ func (s admissionScope) recommendations() []domain.Recommendation {
 	var out []domain.Recommendation
 
 	if len(s.accepted) > 0 {
-		out = append(out, projectAdvice(diagnosis.AdviceInput{
+		out = append(out, diagnosis.Recommend(diagnosis.AdviceInput{
 			Kind:      diagnosis.AdviceKindNextEvidence,
 			Safety:    diagnosis.SafetyCompare,
 			Action:    recommendAdmissionContrast,
@@ -404,7 +424,7 @@ func (s admissionScope) recommendations() []domain.Recommendation {
 		}, domain.FindingKindConfirmed, domain.ConfidenceHigh)...)
 	}
 	if !s.complete {
-		out = append(out, projectAdvice(diagnosis.AdviceInput{
+		out = append(out, diagnosis.Recommend(diagnosis.AdviceInput{
 			Kind:            diagnosis.AdviceKindNextEvidence,
 			Safety:          diagnosis.SafetyObserve,
 			Action:          recommendAdmissionUnmeasured,

@@ -106,6 +106,13 @@ func claimProse(findings []domain.Finding) string {
 		for _, rec := range f.Recommendations() {
 			out.WriteString(rec.Action())
 			out.WriteString("\n")
+			// Since Phase 10.4B a recommendation carries a rationale, which is
+			// report-visible prose and therefore a surface a forbidden claim
+			// can hide in. Every corpus and false-positive assertion in this
+			// package reads this function, so adding it here covers all of them
+			// at once.
+			out.WriteString(rec.Rationale())
+			out.WriteString("\n")
 		}
 	}
 	return out.String()

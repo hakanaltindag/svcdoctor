@@ -58,6 +58,27 @@ Five states appear:
 **Findings** are the conclusions. Each carries a code, a severity, the subject it is about, a
 one-line summary, the detail, what the finding does *not* establish, and a `→` recommendation.
 
+A recommendation may carry a classification, shown in brackets after the action:
+
+```text
+    → Identify the connection limits applicable to this attempted session …  [NEXT_EVIDENCE / COMPARE / you must collect]
+      The endpoint stated that a connection limit applying to this session had been reached …
+```
+
+| Part | Meaning |
+|---|---|
+| `NEXT_EVIDENCE` | an **observation** that would separate the remaining explanations. It changes nothing |
+| `REMEDIATION` | a **change** to make. svcdoctor emits one only from a CONFIRMED finding at HIGH confidence |
+| `OBSERVE` / `VERIFY` / `COMPARE` / `CONFIG_CHANGE` | what taking it would cost, by blast radius |
+| `svcdoctor can collect` | a differently configured run — a larger budget, for instance — could take this observation. **It does not mean svcdoctor took it, or will** |
+| `you must collect` | svcdoctor cannot take it from where it stands. This is the common case and is said plainly rather than implied away |
+
+The indented line beneath is the **rationale**: why that observation discriminates.
+
+A recommendation with no brackets is one svcdoctor has not classified. That is normal — most of
+the advice in the product predates the classification — and it means *nobody said*, never *this is
+safe*.
+
 **The `Result` block** is the summary. `status` is the whole report's verdict, `outcome` is the
 service's terminal question — a session, Kafka metadata, a PING, a virtual host — and `execution`
 says whether svcdoctor's own run finished.

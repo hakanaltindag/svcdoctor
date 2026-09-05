@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -159,7 +160,31 @@ func buildLocalReport(t *testing.T, nodeOrder, findingOrder []int) domain.Report
 			Summary:      "connection to " + canaryHostBroker + ":9092 was refused",
 			Detail:       "The bootstrap host " + canaryHostBootstrap + " resolved to " + canaryIP + ".",
 			EvidenceRefs: []domain.EvidenceID{tcpID},
+			// One classified and one unclassified recommendation, deliberately.
+			//
+			// Phase 10.4B added four fields to domain.Recommendation, and the
+			// redactor rebuilt the old shape — so a shareable report would have
+			// silently lost the classification and, worse, would have carried an
+			// unredacted rationale had one existed. Both shapes are in the
+			// fixture so that every assertion in this file covers both.
 			Recommendations: []domain.Recommendation{
+				mustClassifiedRecommendation(t, domain.RecommendationInput{
+					Action: "Compare what " + canaryHostBroker + " accepts with what " +
+						canaryIP + " advertises.",
+					Kind:   domain.RecommendationKindNextEvidence,
+					Safety: domain.SafetyCompare,
+					// Identity-bearing, and deliberately **not** secret-bearing.
+					// TestCanariesArePresentBeforeRedaction requires that a
+					// report never carry a credential even *before* redaction:
+					// secrets are kept out of the model entirely rather than
+					// scrubbed on the way out. So the rationale plants the three
+					// identity canaries a real one could plausibly contain and
+					// stops there.
+					Rationale: "The endpoint " + canaryHostBootstrap + " answered from " +
+						canaryIP + " while the run was launched from " +
+						canaryVantageHost + ".",
+					SelfCollectable: false,
+				}),
 				mustRecommendation(t, "Check whether "+canaryHostBroker+" accepts connections."),
 			},
 			VantageDependent: true,
@@ -222,6 +247,17 @@ func mustRecommendation(t *testing.T, action string) domain.Recommendation {
 	r, err := domain.NewRecommendation(action)
 	if err != nil {
 		t.Fatalf("NewRecommendation: %v", err)
+	}
+	return r
+}
+
+func mustClassifiedRecommendation(
+	t *testing.T, in domain.RecommendationInput,
+) domain.Recommendation {
+	t.Helper()
+	r, err := domain.NewClassifiedRecommendation(in)
+	if err != nil {
+		t.Fatalf("NewClassifiedRecommendation: %v", err)
 	}
 	return r
 }
@@ -541,8 +577,9 @@ func TestFindingProseIsRedacted(t *testing.T) {
 			"detail":        f.Detail(),
 			"discriminator": f.Discriminator(),
 		}
-		for _, r := range f.Recommendations() {
-			fields["recommendation"] = r.Action()
+		for i, r := range f.Recommendations() {
+			fields["recommendation "+strconv.Itoa(i)+" action"] = r.Action()
+			fields["recommendation "+strconv.Itoa(i)+" rationale"] = r.Rationale()
 		}
 		for name, value := range fields {
 			for _, canary := range allCanaries {

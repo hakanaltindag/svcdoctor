@@ -31,6 +31,7 @@ cd "$(dirname "$0")/.."
 
 BACKUP="$(mktemp -d)"
 FILES=(
+  internal/domain/recommendationkind.go
   internal/diagnosis/engine.go
   internal/diagnosis/outcome.go
   internal/diagnosis/registry.go
@@ -348,7 +349,7 @@ assert "\tif false {" in s' \
   ./internal/diagnosis 'TestDIAG035RemediationRequiresConfirmedAndHigh'
 
 mutate M14b "an unreachable safety class becomes producible" \
-  internal/diagnosis/advice.go \
+  internal/domain/recommendationkind.go \
   's = s.replace("""	case SafetyUnspecified, SafetyRestart, SafetyDisruptive, SafetySecurityWeakening:
 		return false""",
 """	case SafetyRestart, SafetyDisruptive, SafetySecurityWeakening:

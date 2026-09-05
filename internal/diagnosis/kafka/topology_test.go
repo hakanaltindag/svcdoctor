@@ -358,7 +358,7 @@ func TestTheUnsafeSafetyClassesAreUnreachableFromThisPackage(t *testing.T) {
 	for _, class := range []diagnosis.SafetyClass{
 		diagnosis.SafetyRestart, diagnosis.SafetyDisruptive, diagnosis.SafetySecurityWeakening,
 	} {
-		got := projectAdvice(diagnosis.AdviceInput{
+		got := diagnosis.Recommend(diagnosis.AdviceInput{
 			Kind:      diagnosis.AdviceKindNextEvidence,
 			Safety:    class,
 			Action:    "Look at something",
@@ -372,7 +372,7 @@ func TestTheUnsafeSafetyClassesAreUnreachableFromThisPackage(t *testing.T) {
 
 	// A remediation below the confidence gate is refused too, and refused
 	// entirely rather than downgraded into an unclassified string.
-	got := projectAdvice(diagnosis.AdviceInput{
+	got := diagnosis.Recommend(diagnosis.AdviceInput{
 		Kind:      diagnosis.AdviceKindRemediation,
 		Safety:    diagnosis.SafetyConfigChange,
 		Action:    "Change the advertised address",

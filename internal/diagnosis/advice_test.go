@@ -9,39 +9,73 @@ import (
 
 // Phase 10.1a, ADR 0082: recommendation safety.
 //
-// None of this reaches a report yet. What it buys now is that the guardrails
-// exist before the first rule that would be tempted by them — a diagnostic tool
+// It reaches a report since Phase 10.4B. What the guardrails bought before that
+// is that they existed before the first rule tempted by them — a diagnostic tool
 // that says "restart the broker" on weak evidence is worse than one that says
 // nothing, and the pressure to emit remediation grows exactly as the reasoning
 // improves.
 
-func TestAdviceVocabularyIsComplete(t *testing.T) {
-	for k := AdviceKind(0); int(k) < len(adviceKindNames); k++ {
-		if adviceKindNames[k] == "" {
-			t.Errorf("AdviceKind(%d) has no name", k)
+// TestAdviceVocabularyIsTheDomainVocabulary is what replaced the old name-table
+// walk, and it is a stronger property than the one it replaced.
+//
+// Phase 10.4B moved AdviceKind and SafetyClass into internal/domain and left
+// **aliases** behind. The completeness of the name tables is now domain's test;
+// what matters here is that no second vocabulary exists — because a distinct
+// diagnosis-side enum plus a mapping is exactly the thing that drifts, and an
+// alias makes "every AdviceKind maps exactly" true by identity.
+//
+// A Go type alias is transparent, so assigning across the two directions in both
+// directions compiles only if they are one type. If someone reintroduces a
+// distinct type with a conversion, this file stops compiling, which is the
+// loudest available failure.
+func TestAdviceVocabularyIsTheDomainVocabulary(t *testing.T) {
+	var (
+		kind    AdviceKind                = domain.RecommendationKindNextEvidence
+		domKind domain.RecommendationKind = AdviceKindNextEvidence
+		class   SafetyClass               = domain.SafetyCompare
+		domCls  domain.SafetyClass        = SafetyCompare
+	)
+	if kind != domKind || class != domCls {
+		t.Fatal("the alias does not round-trip; a mapping has appeared where identity was")
+	}
+
+	// The paired values, asserted rather than assumed, so a renumbering of one
+	// side is caught here as well as in domain.
+	for _, tc := range []struct {
+		got  AdviceKind
+		want domain.RecommendationKind
+	}{
+		{AdviceKindUnspecified, domain.RecommendationKindUnspecified},
+		{AdviceKindNextEvidence, domain.RecommendationKindNextEvidence},
+		{AdviceKindRemediation, domain.RecommendationKindRemediation},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("AdviceKind %s is not %s", tc.got, tc.want)
 		}
 	}
-	if len(adviceKindNames) != 3 {
-		t.Errorf("%d advice kinds, want 2 plus the zero value", len(adviceKindNames)-1)
+	for _, tc := range []struct {
+		got  SafetyClass
+		want domain.SafetyClass
+	}{
+		{SafetyUnspecified, domain.SafetyUnspecified},
+		{SafetyObserve, domain.SafetyObserve},
+		{SafetyVerify, domain.SafetyVerify},
+		{SafetyCompare, domain.SafetyCompare},
+		{SafetyConfigChange, domain.SafetyConfigChange},
+		{SafetyRestart, domain.SafetyRestart},
+		{SafetyDisruptive, domain.SafetyDisruptive},
+		{SafetySecurityWeakening, domain.SafetySecurityWeakening},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("SafetyClass %s is not %s", tc.got, tc.want)
+		}
 	}
+
 	if AdviceKindUnspecified.Valid() {
 		t.Error("the zero AdviceKind reports valid")
 	}
-
-	for c := SafetyClass(0); int(c) < len(safetyClassNames); c++ {
-		if safetyClassNames[c] == "" {
-			t.Errorf("SafetyClass(%d) has no name", c)
-		}
-	}
-	// Seven classes, frozen by ADR 0082 section 2.2, plus the zero value.
-	if len(safetyClassNames) != 8 {
-		t.Errorf("%d safety classes, want 7 plus the zero value", len(safetyClassNames)-1)
-	}
-	if got := SafetyClass(99).String(); got != "SafetyClass(99)" {
-		t.Errorf("out-of-range String() = %q", got)
-	}
-	if got := AdviceKind(99).String(); got != "AdviceKind(99)" {
-		t.Errorf("out-of-range String() = %q", got)
+	if SafetyUnspecified.Valid() {
+		t.Error("the zero SafetyClass reports valid")
 	}
 }
 

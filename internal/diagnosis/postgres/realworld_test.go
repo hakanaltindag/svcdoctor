@@ -78,7 +78,10 @@ func TestSQLState53300NamesTheConditionAndInventsNoCause(t *testing.T) {
 	// overclaim wearing a different field.
 	surfaces := []string{f.Summary(), detail}
 	for _, r := range f.Recommendations() {
-		surfaces = append(surfaces, r.Action())
+		// Both prose fields. The rationale reaches the report since Phase
+		// 10.4B, so a cause or a scope overclaim hidden there is as public as
+		// one in the summary.
+		surfaces = append(surfaces, r.Action(), r.Rationale())
 	}
 	for _, invented := range []string{
 		"max_connections", "too low", "leak", "leaking", "pool", "pooler",

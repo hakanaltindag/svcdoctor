@@ -15,16 +15,22 @@ var ErrUnsafeAdvice = errors.New("unsafe advice")
 
 // AdviceKind distinguishes an observation to take from a change to make.
 //
-// ADR 0082 section 2.1 puts both in one type because they share every field and
-// a reader tells them apart by this discriminator. Two types would duplicate
-// validation, marshalling and redaction, and would hand a consumer two arrays.
+// **It is an alias for domain.RecommendationKind, not a parallel vocabulary.**
+// Phase 10.4B moved the enumeration down to internal/domain, because it is
+// serialized into the canonical report and the package that owns the report
+// model owns its wire spelling. An alias rather than a distinct type is the
+// whole point: there is no mapping between the two, so there is nothing that can
+// drift, and "every AdviceKind maps exactly" is true by identity rather than by
+// a table somebody has to keep aligned.
+//
+// The names below are kept so that no rule and no test had to change.
 //
 // The zero AdviceKind is AdviceKindUnspecified.
-type AdviceKind uint8
+type AdviceKind = domain.RecommendationKind
 
 const (
 	// AdviceKindUnspecified is the zero value and is not a kind.
-	AdviceKindUnspecified AdviceKind = iota
+	AdviceKindUnspecified = domain.RecommendationKindUnspecified
 
 	// AdviceKindNextEvidence is an observation that would discriminate between
 	// the explanations that remain.
@@ -32,142 +38,72 @@ const (
 	// It is the output a good diagnosis usually has. When two hypotheses remain,
 	// the useful sentence is the one that separates them, not a remediation for
 	// whichever happens to be listed first.
-	AdviceKindNextEvidence
+	AdviceKindNextEvidence = domain.RecommendationKindNextEvidence
 
 	// AdviceKindRemediation is a change to make, and it requires much stronger
 	// evidence: CONFIRMED and HIGH, and nothing less (section 2.3 rule 1).
-	AdviceKindRemediation
+	AdviceKindRemediation = domain.RecommendationKindRemediation
 )
-
-var adviceKindNames = [...]string{
-	AdviceKindUnspecified:  "UNSPECIFIED",
-	AdviceKindNextEvidence: "NEXT_EVIDENCE",
-	AdviceKindRemediation:  "REMEDIATION",
-}
-
-// Valid reports whether k is a defined kind. AdviceKindUnspecified is not.
-func (k AdviceKind) Valid() bool {
-	return k != AdviceKindUnspecified && int(k) < len(adviceKindNames)
-}
-
-// String returns the symbolic name. It never fails.
-func (k AdviceKind) String() string {
-	if int(k) >= len(adviceKindNames) {
-		return fmt.Sprintf("AdviceKind(%d)", uint8(k))
-	}
-	return adviceKindNames[k]
-}
 
 // SafetyClass is what taking the advice would cost, ordered by blast radius.
 //
-// The seven are frozen by ADR 0082 section 2.2. The first three change nothing
-// and are the classes a diagnostic tool should overwhelmingly produce; the last
-// three are **unreachable by any rule** and exist so that the prohibition is
-// nameable and testable rather than merely absent.
+// **An alias for domain.SafetyClass**, for the reason AdviceKind is one. The
+// seven values, Producible and ChangesNothing all moved down with the type, and
+// the move strengthened them: Producible now runs at the report boundary in
+// domain.NewClassifiedRecommendation, so the three unreachable classes are
+// unreachable on every construction path rather than only on this one.
 //
 // The zero SafetyClass is SafetyUnspecified.
-type SafetyClass uint8
+type SafetyClass = domain.SafetyClass
 
 const (
 	// SafetyUnspecified is the zero value and is not a class.
-	SafetyUnspecified SafetyClass = iota
+	SafetyUnspecified = domain.SafetyUnspecified
 
 	// SafetyObserve means reading something that already exists.
-	SafetyObserve
+	SafetyObserve = domain.SafetyObserve
 
 	// SafetyVerify means checking a claim, changing nothing.
-	SafetyVerify
+	SafetyVerify = domain.SafetyVerify
 
 	// SafetyCompare means contrasting two observations.
-	SafetyCompare
+	SafetyCompare = domain.SafetyCompare
 
 	// SafetyConfigChange means changing configuration, taking effect on reload
 	// or reconnect.
-	SafetyConfigChange
+	SafetyConfigChange = domain.SafetyConfigChange
 
 	// SafetyRestart means restarting a component. Unreachable: svcdoctor does
 	// not tell anyone to restart anything.
-	SafetyRestart
+	SafetyRestart = domain.SafetyRestart
 
 	// SafetyDisruptive means interrupting service or risking data. Unreachable.
-	SafetyDisruptive
+	SafetyDisruptive = domain.SafetyDisruptive
 
 	// SafetySecurityWeakening means reducing a security property. Unreachable,
 	// and the sharpest of the three: svcdoctor must never recommend disabling
 	// the verification it exists to perform.
-	SafetySecurityWeakening
+	SafetySecurityWeakening = domain.SafetySecurityWeakening
 )
-
-var safetyClassNames = [...]string{
-	SafetyUnspecified:       "UNSPECIFIED",
-	SafetyObserve:           "OBSERVE",
-	SafetyVerify:            "VERIFY",
-	SafetyCompare:           "COMPARE",
-	SafetyConfigChange:      "CONFIG_CHANGE",
-	SafetyRestart:           "RESTART",
-	SafetyDisruptive:        "DISRUPTIVE",
-	SafetySecurityWeakening: "SECURITY_WEAKENING",
-}
-
-// Valid reports whether c is a defined class. SafetyUnspecified is not.
-func (c SafetyClass) Valid() bool {
-	return c != SafetyUnspecified && int(c) < len(safetyClassNames)
-}
-
-// String returns the symbolic name. It never fails.
-func (c SafetyClass) String() string {
-	if int(c) >= len(safetyClassNames) {
-		return fmt.Sprintf("SafetyClass(%d)", uint8(c))
-	}
-	return safetyClassNames[c]
-}
-
-// Producible reports whether any rule may construct advice in this class.
-//
-// Three classes are false, permanently until an ADR says otherwise. They are in
-// the vocabulary so that the report model can *classify* advice and so that a
-// future phase which genuinely needs one has to add it deliberately, against a
-// record. That friction is the point (ADR 0082 section 2.3 rule 2).
-func (c SafetyClass) Producible() bool {
-	switch c {
-	case SafetyObserve, SafetyVerify, SafetyCompare, SafetyConfigChange:
-		return true
-	case SafetyUnspecified, SafetyRestart, SafetyDisruptive, SafetySecurityWeakening:
-		return false
-	}
-	return false
-}
-
-// ChangesNothing reports whether taking the advice alters the target.
-//
-// The three read-only classes are the ceiling for anything below HIGH-confidence
-// proof, which is what NewAdvice enforces.
-func (c SafetyClass) ChangesNothing() bool {
-	switch c {
-	case SafetyObserve, SafetyVerify, SafetyCompare:
-		return true
-	default:
-		return false
-	}
-}
 
 // Advice is one suggested next action, with its kind and its cost.
 //
-// # Why it is here and not on domain.Recommendation
+// # Its relationship to domain.Recommendation, since Phase 10.4B
 //
-// ADR 0082 section 2.1 puts these fields on domain.Recommendation, which was
-// built for it: its own doc comment says it is "a struct rather than a bare
-// string so that the encoded form is an object from the outset, which lets
-// fields such as a reference link or a remediation risk be added later". Adding
-// them there is additive and needs no schema bump.
+// ADR 0082 section 2.1 put these fields on domain.Recommendation. Phase 10.1a
+// deferred the move because it changes the canonical JSON of every report that
+// carries a recommendation, and 10.1a's contract was that no report changes;
+// 10.1b, 10.2 and 10.3 each deferred it again, and the four fields were computed,
+// validated and then discarded at the report boundary the whole time.
 //
-// It is still not what Phase 10.1a does, because adding a field to
-// domain.Recommendation changes the canonical JSON of every report that carries
-// one, and 10.1a's whole contract is that no report changes. So the vocabulary
-// and the guardrails land here, unwired and tested, and 10.1b moves them onto
-// the report type as ADR 0082 specifies. The guardrails are the part worth
-// having early: they are what a rule author would otherwise be trusted to
-// remember.
+// **Phase 10.4B completed the move.** Advice remains the *construction* type —
+// it is where an input is validated and where AdmitAdvice's confidence gate is
+// applied — and domain.Recommendation is the *report* type it projects into,
+// through the single path Advice.Recommendation. Nothing is lost between them,
+// which TestAdviceProjectionPreservesEveryField pins field by field.
+//
+// The two are not redundant. Advice can be refused; a Recommendation that exists
+// has already survived every refusal.
 //
 // The zero Advice is invalid. Use NewAdvice.
 type Advice struct {
@@ -465,4 +401,66 @@ func looksLikeSQL(first, lowered, action string) bool {
 		return true
 	}
 	return lowered == "select" && strings.Contains(strings.ToLower(action), " from ")
+}
+
+// Recommendation projects the advice into the canonical report type.
+//
+// **This is the one production conversion from Advice to domain.Recommendation.**
+// Before Phase 10.4B there were two, one copied into each service package that
+// had classified advice, and both dropped four of the five fields on the way —
+// which is the defect this phase exists to close. Two independent mappings can
+// drift; one cannot, and TestExactlyOneAdviceProjectionPathExists fails the build
+// if a second appears.
+//
+// It preserves all five fields exactly. The domain constructor re-validates
+// rather than trusting this one, which is deliberate: the guardrails belong at
+// the boundary they protect, not at the last place that happened to touch the
+// value.
+func (a Advice) Recommendation() (domain.Recommendation, error) {
+	if a.IsZero() {
+		return domain.Recommendation{}, fmt.Errorf("%w: the zero Advice", domain.ErrInvalidValue)
+	}
+	return domain.NewClassifiedRecommendation(domain.RecommendationInput{
+		Action:          a.action,
+		Kind:            a.kind,
+		Safety:          a.safety,
+		Rationale:       a.rationale,
+		SelfCollectable: a.selfCollectable,
+	})
+}
+
+// Recommend validates one suggestion and returns what a report may carry.
+//
+// It is the whole guarded path in one call: construct, admit against the
+// finding's strength, project. A rejected suggestion yields **no recommendation
+// at all** — emitting an unclassified string because the classified one was
+// refused would be the guardrail deleting itself.
+//
+// # Why this is generic and not per service
+//
+// Until Phase 10.4B each service package held its own `projectAdvice` copy, and
+// ADR 0084 section 9 defended the duplication on the ground that an exported
+// helper here "would put a *findings* constructor in the package whose whole
+// contract is that it knows no service's claims". That reasoning does not reach
+// this function: it constructs no finding, names no service, and returns a
+// generic report type from generic inputs. What the duplication actually bought
+// was two places for the same projection to lose the same four fields.
+//
+// The caller supplies the finding's kind and confidence because AdmitAdvice
+// needs them and a rule knows them; nothing here reads a graph.
+func Recommend(
+	in AdviceInput, kind domain.FindingKind, confidence domain.Confidence,
+) []domain.Recommendation {
+	advice, err := NewAdvice(in)
+	if err != nil {
+		return nil
+	}
+	if err := AdmitAdvice(kind, confidence, advice); err != nil {
+		return nil
+	}
+	recommendation, err := advice.Recommendation()
+	if err != nil {
+		return nil
+	}
+	return []domain.Recommendation{recommendation}
 }

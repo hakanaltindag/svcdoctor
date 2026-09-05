@@ -427,10 +427,43 @@ func redactFindings(t *table, findings []domain.Finding) ([]domain.Finding, erro
 			refs[i] = mapped
 		}
 
+		// Both prose fields are transformed and the three structured fields are
+		// carried across unchanged.
+		//
+		// **Action and rationale are prose and get the same treatment**: ADR 0018
+		// requires a new report field that can carry a hostname, an address or an
+		// identity to have a matching transformation, and a rationale explaining
+		// why an observation discriminates is exactly the field an author would
+		// name an endpoint in. Missing it would have been the classic redaction
+		// hole — a new prose field added while the redactor kept rebuilding the
+		// old shape.
+		//
+		// Kind, safety and self-collectability are a closed enumeration, a closed
+		// enumeration and a boolean. None can carry an identity, so transforming
+		// them would be noise that destroys meaning; they are preserved exactly,
+		// which is what keeps a shareable report as *useful* as a local one.
+		//
+		// The classified and unclassified shapes are rebuilt through their own
+		// constructors, so a redacted recommendation is re-validated rather than
+		// assembled: redaction may not manufacture a value the model refuses.
 		recommendations := f.Recommendations()
 		rebuilt := make([]domain.Recommendation, 0, len(recommendations))
 		for _, r := range recommendations {
-			nr, err := domain.NewRecommendation(t.text(r.Action()))
+			var (
+				nr  domain.Recommendation
+				err error
+			)
+			if r.Classified() {
+				nr, err = domain.NewClassifiedRecommendation(domain.RecommendationInput{
+					Action:          t.text(r.Action()),
+					Kind:            r.Kind(),
+					Safety:          r.Safety(),
+					Rationale:       t.text(r.Rationale()),
+					SelfCollectable: r.SelfCollectable(),
+				})
+			} else {
+				nr, err = domain.NewRecommendation(t.text(r.Action()))
+			}
 			if err != nil {
 				return nil, fmt.Errorf("%w: rebuilding recommendation: %w", ErrRedaction, err)
 			}

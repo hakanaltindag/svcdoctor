@@ -35,6 +35,7 @@ cd "$(dirname "$0")/.."
 
 BACKUP="$(mktemp -d)"
 FILES=(
+  internal/domain/recommendationkind.go
   internal/diagnosis/engine.go
   internal/diagnosis/basis.go
   internal/diagnosis/confidence.go
@@ -277,7 +278,7 @@ assert "\tif false {" in s' \
   ./test/diagnosis 'TestRecommendationMonotonicity'
 
 mutate B13 "security-weakening advice becomes producible" \
-  internal/diagnosis/advice.go \
+  internal/domain/recommendationkind.go \
   's = s.replace("""	case SafetyUnspecified, SafetyRestart, SafetyDisruptive, SafetySecurityWeakening:
 		return false""",
 """	case SafetyRestart, SafetyDisruptive, SafetySecurityWeakening:

@@ -1,0 +1,28 @@
+svcdoctor · postgres · db.internal:5432
+
+  ✓ PASS  DNS  2.0ms
+
+  Path 10.0.0.10:5432 · continued
+    ✓ PASS  TCP             1.0ms
+    ✓ PASS  SSLRequest      800µs
+    ✓ PASS  TLS             3.0ms
+    ✓ PASS  Startup         700µs
+    ✓ PASS  Authentication  1.5ms
+    ✓ PASS  Session         200µs
+
+Findings
+  ✗ ERROR  POSTGRES_CONNECTION_LIMIT_REACHED  10.0.0.10:5432
+    A one-line summary
+    A detail line.
+    → Compare the addresses this network routes with the advertised ones  [NEXT_EVIDENCE / COMPARE / you must collect]
+      The advertised address and the routable set are the two halves of the question.
+    → Re-run with a larger execution budget  [NEXT_EVIDENCE / OBSERVE / svcdoctor can collect]
+      The unmeasured paths were never attempted, so their outcome is unknown.
+    → Review this endpoint's log for the session it refused
+    evidence: 1
+
+Result
+  status     PROBLEMS FOUND
+  outcome    session established
+  execution  complete
+  duration   12.0ms

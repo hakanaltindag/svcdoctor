@@ -489,6 +489,12 @@ func findingProse(report domain.Report) string {
 		for _, r := range f.Recommendations() {
 			b.WriteString(r.Action())
 			b.WriteString("\n")
+			// The rationale is report-visible prose since Phase 10.4B, so it
+			// is scanned like every other prose field. A forbidden cause
+			// smuggled into a rationale is the same overclaim wearing the
+			// newest field.
+			b.WriteString(r.Rationale())
+			b.WriteString("\n")
 		}
 	}
 	return b.String()

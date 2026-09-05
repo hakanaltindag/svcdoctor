@@ -302,7 +302,7 @@ func evaluateSession(g domain.Graph, node domain.Evidence) (domain.Finding, bool
 			// `false` on the same ground (ADR 0040 section 6.1).
 			VantageDependent: false,
 			EvidenceRefs:     refs,
-			Recommendations: projectAdvice(diagnosis.AdviceInput{
+			Recommendations: diagnosis.Recommend(diagnosis.AdviceInput{
 				Kind:      diagnosis.AdviceKindNextEvidence,
 				Safety:    diagnosis.SafetyCompare,
 				Action:    recommendConnectionLimitReached,

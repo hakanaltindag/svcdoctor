@@ -52,7 +52,10 @@ func writeFindings(out *bytes.Buffer, report domain.Report) {
 		}
 		for _, recommendation := range finding.Recommendations() {
 			if action := recommendation.Action(); action != "" {
-				_, _ = fmt.Fprintf(out, "    → %s\n", action)
+				_, _ = fmt.Fprintf(out, "    → %s%s\n", action, adviceTag(recommendation))
+			}
+			if rationale := recommendation.Rationale(); rationale != "" {
+				_, _ = fmt.Fprintln(out, indent(rationale, "      "))
 			}
 		}
 
@@ -65,4 +68,39 @@ func writeFindings(out *bytes.Buffer, report domain.Report) {
 		}
 		_, _ = fmt.Fprintln(out)
 	}
+}
+
+// adviceTag renders a recommendation's classification, or nothing at all.
+//
+// It is a **closed map over closed enumerations**, which is the property that
+// keeps it presentation rather than diagnosis: every branch is a value the
+// domain defines, nothing is derived from prose, and an unclassified
+// recommendation gets no tag because there is nothing to report about it. A
+// renderer inventing "NEXT_EVIDENCE" for an unclassified string would be
+// diagnosing, which docs/ARCHITECTURE.md forbids.
+//
+// # What it deliberately does not do
+//
+// It does not reorder, rank, group or hide anything. In particular a
+// recommendation is **never** hidden because SelfCollectable is false — that is
+// the common and useful case (ADR 0082 section 2.4), and suppressing it would
+// leave an operator with the impression that svcdoctor had nothing to suggest.
+// The flag is shown, not obeyed.
+//
+// The two words are chosen to be read at a glance and to survive a monochrome
+// terminal: "svcdoctor can collect" says a differently configured run could take
+// the observation, and "you must collect" says it cannot.
+func adviceTag(r domain.Recommendation) string {
+	if !r.Classified() {
+		return ""
+	}
+	tag := "  [" + r.Kind().String() + " / " + r.Safety().String()
+	if r.Kind() == domain.RecommendationKindNextEvidence {
+		if r.SelfCollectable() {
+			tag += " / svcdoctor can collect"
+		} else {
+			tag += " / you must collect"
+		}
+	}
+	return tag + "]"
 }
