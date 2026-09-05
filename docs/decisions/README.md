@@ -251,6 +251,74 @@ a `SKIPPED` node is upheld as the answer to *"should a TLS finding carry a BLOCK
 downstream claim is fabricated in order to populate a relation.** `docs/FINDINGS.md` §3.1 gains
 rule 20, the rule-author form of the citation-surface distinction. No Go file changed.
 
+**0088 asked whether Redis/Valkey or RabbitMQ/LavinMQ is ready for a diagnostic-intelligence
+phase, and the answer is that one of them has no gap and the other has no producer.** Phase 10.6A
+audited both families against their own code rather than against protocol knowledge, and every
+candidate came back already built, already forbidden by an Accepted record, or never once
+observed. **Zero admitted. There is no Phase 10.6B.**
+
+The framing was wrong before the audit started, and correcting it is the record's main
+contribution. `docs/design/DIAGNOSTIC_INTELLIGENCE.md` §P still carries a **10.4** row reading
+*"Redis/Valkey + RabbitMQ/LavinMQ: authn vs authz, vhost, protocol identity under timeout"* — and
+all three of those shipped in Phases 7.5–7.7 and 8.2. Twenty of the tree's 65 codes are already
+these two services'. **The 10.4 slot is closed by delivery, not by deferral**, and reading it as
+an open opportunity is what this record exists to stop.
+
+RabbitMQ has **no gap**. The vhost claim the brief singled out as potentially high-value — *auth
+succeeded, and the virtual host was authoritatively refused* — is already two codes, split into
+the two causes the protocol distinguishes, beside a residual and a never-settled case. What
+remains measured is frozen *"may not be said"* by 0069 §8, and every item on that list needs the
+one thing 0083 §2.6 froze out of the whole of Phase 10: **an operator-supplied expectation.**
+`heartbeat`/`frame_max`/`channel_max` need a "good" value svcdoctor has no basis for — LavinMQ
+legitimately offers 2048/300 where RabbitMQ offers 2047/60, so any threshold is a policy
+invention — and `ANONYMOUS` offered is posture rather than reachability, refused permanently.
+
+Redis has exactly **one** real candidate and **no producer** for it: lifting `LOADING`,
+`MASTERDOWN` and `BUSY` out of `REDIS_ENDPOINT_NOT_SERVING`'s one appended prose sentence into
+machine-readable form. It needs no probe, its authority is direct, and Phase 10.3 set the
+precedent by doing exactly this for `53300`. **No svcdoctor fixture has ever observed any of the
+three** — they are source-derived from 0066's reachability table — so 0069 §8's own bar applies:
+*membership requires having watched a real endpoint produce it.* Deferred on a measurement, not
+on an argument. Its role and mode facts, meanwhile, have been **terminal observation lines since
+Phase 7** — the mechanism Phase 10.3 later reused for `in_hot_standby` — and a finding over
+either fails the build by design.
+
+The **aggregate** shape both intelligence phases actually used is the interesting near-miss. Both
+composition roots do run the credential-free protocol stage on every resolved address, so a
+completeness-and-contrast finding is expressible; but every Redis, Valkey, RabbitMQ and LavinMQ
+fixture targets `127.0.0.1`, which under 0059 resolves nothing and yields one path. Building it
+would be an engine over an empty input — 0054's *owner before producer* and 0086 §2.11's
+*producer before engine* pointing at one thing.
+
+Two records the tree disagrees with were found on the way, and they are closed differently
+because they are different kinds of defect.
+
+**0069 §9 condition 3 was a real normative conflict, and 0088 §6.1 supersedes its second sentence.**
+It invited migrating Redis's client-limit exhaustion onto `RESOURCE_LIMIT_REACHED` as *"a separate,
+allowed correctness fix"* — permission language, in a numbered *Reopen conditions* list, with no
+gate, where the condition beside it is explicitly gated. 0066 had measured that the reply carries a
+**bare `ERR`** and forbids reading the text that would distinguish it, but 0066 predates 0069, never
+names `RESOURCE_LIMIT_REACHED` — the class did not exist yet — and carries no forward marker, so
+nothing had superseded it. The clause's factual premise was wrong too: an `ERR` at the `HELLO` step
+is `Unsupported()` → `UNKNOWN`, and `diagnosis/redis.Hello` fires only on `FAIL`, so it yields **no
+finding**, where `REDIS_ENDPOINT_NOT_SERVING` needs an error at `PING`. The rule is now that
+**`RESOURCE_LIMIT_REACHED` may be emitted only when the wire evidence structurally and
+authoritatively identifies a resource limit** — a generic `ERR` plus server prose is not enough — and
+the reopen condition is **re-gated rather than withdrawn**: a future prefix, which 0066 already calls
+*"additive and testable"*, or a probe expansion in its own record, reopens it. Never text matching.
+0069 carries a forward marker at the clause and in its header, with the original sentence quoted
+beneath it.
+
+**The second is a test-only defect and is recorded, not resolved.**
+`internal/service/rabbitmq/vocabulary.go` says of the six negotiation attributes that *"no rule reads
+them and a guard fails the build if one does"*. The first half is true and was verified against every
+rule; the second is false, and the same overstatement covers `anonymous_offered`. The invariant is
+maintained by **review**, not by the build. 0088 §6.2 records it with **two** legitimate closures —
+add the AST scan, or correct the comment — and deliberately chooses neither, because that is a
+maintenance decision and 10.6A changes no Go and no test. `RRI-016` and `RRI-017`/`RRI-017a` carry
+both. 10.4C's gate stayed closed (both services emit zero hypotheses and hold zero discriminators)
+and 10.5B was not reopened.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

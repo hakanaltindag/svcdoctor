@@ -2,7 +2,10 @@
 
 ## Status
 
-**Accepted in Phase 8.1.** The RabbitMQ half is **not implemented**; the one
+**Accepted in Phase 8.1.** **Amended in Phase 10.6A — ADR 0088 §6.1 supersedes the
+second sentence of §9 condition 3, and nothing else in this record.** The superseded text is
+left standing below with a marker, so the reasoning that was wrong stays legible; this is the
+same practice ADR 0081's header records. The RabbitMQ half is **not implemented**; the one
 service-neutral half — the `RESOURCE_LIMIT_REACHED` failure class and the migration of
 PostgreSQL SQLSTATE `53300` onto it — **is implemented in this phase**.
 
@@ -314,10 +317,22 @@ maps a PLAIN authentication outcome to `AUTH_PEER_VERIFICATION_FAILED`.
    new measurement, never a source reading.
 2. **`541` is measured.** Then T7 may gain a detail sentence, and only then may a
    dedicated class be argued for.
-3. **A third service produces a capacity ceiling.** Redis answers `-ERR max number of
-   clients reached` and currently folds it into `REDIS_ENDPOINT_NOT_SERVING`; migrating it
-   onto `RESOURCE_LIMIT_REACHED` is a separate, allowed correctness fix and is not done
-   here.
+3. **A third service produces a capacity ceiling.**
+
+   > **Superseded in part by ADR 0088 §6.1 (Phase 10.6A): the migration is not authorized,
+   > because the evidence to perform it does not exist.** Redis answers `-ERR max number of
+   > clients reached` with a **bare `ERR` prefix**, and ADR 0066 both records that v1
+   > classifies it generically and forbids reading the message text that would distinguish
+   > it. The condition's own factual premise is also imprecise: an `ERR` at the `HELLO`
+   > step is classified `Unsupported()` → `UNKNOWN` / `PROTOCOL_UNSUPPORTED_CAPABILITY`,
+   > and `diagnosis/redis.Hello` fires only on `FAIL`, so it produces **no finding at all**
+   > — `REDIS_ENDPOINT_NOT_SERVING` requires an error at the `PING` step. The reopen
+   > condition is **not withdrawn**; it is re-gated on a structurally authoritative signal.
+   > See ADR 0088 §6.1 for the authoritative rule.
+
+   Originally: *"Redis answers `-ERR max number of clients reached` and currently folds it
+   into `REDIS_ENDPOINT_NOT_SERVING`; migrating it onto `RESOURCE_LIMIT_REACHED` is a
+   separate, allowed correctness fix and is not done here."*
 4. **Text classification is rejected on review.** The fallback is `AUTHZ_NOT_PERMITTED`
    for every 530 with the distinction carried only by `FindingCode` — which preserves the
    operator-visible difference and costs only class precision. It is recorded so that
