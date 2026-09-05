@@ -319,6 +319,46 @@ maintenance decision and 10.6A changes no Go and no test. `RRI-016` and `RRI-017
 both. 10.4C's gate stayed closed (both services emit zero hypotheses and hold zero discriminators)
 and 10.5B was not reopened.
 
+**0089 went looking for the next observation to acquire and found that svcdoctor's frontier is not
+acquisition at all.** Phase 10.7A's first act was to inventory every evidence attribute the four
+adapters record and ask, mechanically, which any rule or renderer reads. **Fifty-nine recorded,
+twenty-four consumed by nothing** — Kafka 10 of 14, PostgreSQL 9 of 17, RabbitMQ 4 of 21, Redis 1
+of 7. No candidate's acquisition cost survives that number.
+
+The most attractive hypothesis died on one line of code. Kafka's `Metadata` request sets
+`Topics = []` — **empty, not nil** — and the doc comment states the consequence: *"the difference
+between describing a cluster and downloading its entire partition map is one field being empty
+rather than absent."* No partition, leader or ISR byte arrives, so partition availability is
+Class 3, and its minimum acquisition is *every topic*: unbounded response, fan-out multiplier, and
+topic names — tenant identifiers — entering a shareable report.
+
+**The winner is Class 1 and acquires nothing.** PostgreSQL retains four `ParameterStatus` values
+and puts all four in evidence on every successful session. `in_hot_standby` became the `recovery`
+observation line in Phase 10.3; **`default_transaction_read_only` is read by nothing.** The
+repository already measured that the two are independent — on a real standby `in_hot_standby` was
+"on" while the GUC was "off" — so *"neither alone answers 'can I write here'."* The consequence is
+the finding: a session on a primary whose **role or database** carries
+`ALTER ROLE … SET default_transaction_read_only = on` — invisible in `postgresql.conf`, and a
+classic *"the app connects but writes fail"* — renders `recovery: not in recovery` and nothing
+else. **The operator is shown the half of the answer that says fine.**
+
+**0040 §20 is upheld, not reopened**, and the record says so explicitly rather than reading around
+it: that section forbids a *rule* from touching these facts, gives three reopen conditions, and
+**none has fired** — no SQL, no run intent, and `default_transaction_read_only` is not a new fact,
+since §20's own first sentence names it. What 0089 authorizes is at the layer 0085 §4 already
+built for the sibling attribute: **the finding layer refuses and the presentation layer shows the
+fact.** The two rule-scoped guards stay unweakened, no `FindingCode` is added, and `SchemaVersion`
+stays 1.
+
+Two constraints are frozen because they are what keep it truthful. The subject is **the session,
+never the server** — a pooler forwards a cached value, so this is 0040 §18's *"endpoint, never
+server"* applied to two more values — and the two facts have **different strengths** and may never
+merge into one verdict: recovery is not session-overridable, the GUC is. Redis's
+`LOADING`/`MASTERDOWN`/`BUSY` activation stays deferred on merit, losing only on fixture
+determinism, finding-inflation cost and question frequency. The one admitted weakness is stated
+rather than hidden: **the `on` value has never been produced by a fixture**, and 10.7B may not land
+without one — a single `-c` flag on a compose service, the mechanism that file already uses.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:
