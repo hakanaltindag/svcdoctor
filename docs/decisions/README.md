@@ -359,6 +359,85 @@ determinism, finding-inflation cost and question frequency. The one admitted wea
 rather than hidden: **the `on` value has never been produced by a fixture**, and 10.7B may not land
 without one — a single `-c` flag on a compose service, the mechanism that file already uses.
 
+**0090 exhausted the pool 0089 had opened, and the exhaustion is the finding.** 0089 §1.2 framed
+the unconsumed attributes as *"the pool the next several candidates should be drawn from"*, which
+invites a phase per attribute until it empties. Phase 10.8A emptied it in one pass instead: every
+attribute with no rule and no renderer consumer was put on trial individually — **38 case files,
+no sampling, no residual "the rest are bookkeeping" paragraph** — and the result is **one winner,
+six deferrals and thirty-one rejections, most of them permanent.**
+
+**0089's own figures are corrected**, and not in the direction 10.8A was told to expect. Its
+recorded count of 59 reproduces exactly; its unconsumed count does not, and its two statements of
+it disagree — the table says **24** while the prose in the same paragraph names **27**. Re-measured
+at `0043139`: 10.7B removed `default_transaction_read_only`, and **`postgres.role` and
+`postgres.server_version` were never in the list at all**, giving 28 service-scoped and **38** once
+the ten generic DNS/TLS attributes 10.7A never scoped are included. "24 became 23" is not what
+happened.
+
+**The winner is RabbitMQ's `close_outcome`, and it is a presentation fix rather than a new
+diagnosis.** svcdoctor already diagnoses this correctly — the adapter classifies the refusal as
+`RESOURCE_LIMIT_REACHED` and publishes `RABBITMQ_CONNECTION_NOT_PERMITTED`, and **none of that
+changes or weakens.** The defect is downstream: the canonical evidence knows *which* ceiling was
+named and the operator-facing prose discards it. 0090 is explicit that *"activate diagnosis"*
+would be the wrong words, because the phase adds no rule, no inference, no claim and no confidence
+admission; it preserves already-known bounded specificity on the way out.
+RabbitMQ enforces three separate connection ceilings, Phase 8.0C reproduced all three live on
+4.2.0, and svcdoctor classifies each by reconstructing its own expected reply sentence and
+comparing **byte for byte** — then collapses all three into one `FailureResourceLimitReached` that
+shares `RABBITMQ_CONNECTION_NOT_PERMITTED` with an unrelated authorization refusal. The published
+detail hedges — *"**Where** the endpoint named a capacity ceiling…"* — and the recommendation tells
+the operator to *"review any **node, virtual host or user** connection limits"*, while the evidence
+node cited three lines above holds a constant naming exactly which of the three it was. Those three
+have three different owners and three different next actions; a user ceiling is most often the
+caller's own leak. **0069 §6 says this attribute is supposed to be doing this** — *"the
+`FindingCode` and the sentinel attribute explain which ceiling"* — and §9.4 assumed throughout that
+*"the operator-visible difference"* was preserved. **§8 permits the fix by exclusion**: it forbids
+`VHOST_DOWN` a restating detail sentence *for want of a live measurement*, under `namedConditions`'
+membership rule, and all three ceilings satisfy it.
+
+It wins on being the only candidate that is simultaneously valuable and **structurally** safe. The
+value is one of **seven svcdoctor-owned literals** — *"none is ever a slice of a peer's buffer"* —
+so no sanitization question arises; LavinMQ, which was never measured producing a limit text,
+degrades to `UNSPECIFIED` and gets **no sentence and byte-identical output**; and all three
+ceilings are deterministically fixturable at **limit 0**, the trick 10.3 used for PostgreSQL
+`CONNECTION LIMIT 0`. **No diagnostic rule, no `FindingCode`, no inference, no confidence, no
+severity, no exit code and no count moves** — `connectionOpenFinding` keeps selecting the same code
+from the same `FailureClass`, and an unmapped outcome renders today's text byte for byte.
+
+**Two better-scoring candidates lost on single gates, and both losses are the record's real
+roadmap contribution.** `kafka.sasl.offered_mechanisms` is the **highest-value** attribute in the
+audit — `KAFKA_AUTH_MECHANISM_NOT_OFFERED` tells the operator to go read `sasl.enabled.mechanisms`
+while the answer sits on the node it cites — and it loses because mechanism names are copied
+verbatim off the wire with no allowlist and svcdoctor has no renderer sanitization boundary. That
+same gate blocks `postgres.sasl_mechanisms` and `postgres.server_version`, so **one outstanding
+decision now blocks three candidates across two services**, while Redis and RabbitMQ already render
+verbatim peer versions — not a defensible steady state, and it must be decided once for all four.
+`postgres.scram_iterations` is the strongest **C1-B**: 0038 §16 recorded it as *"the only fact that
+can state a weak server configuration"*, `internal/sasl/scram/parse.go:293` says *"a rule can say so
+later"*, Phase 4.6 never built one, and 0040 §5 explicitly does **not** foreclose security-posture
+findings. It is deferred anyway, because it answers **no incident question** and would reopen
+0040 §22's four-key allowlist and the PostgreSQL BASIC freeze for a claim whose remedy is a
+scheduled password rotation.
+
+**The clause with the longest reach is §7: unconsumed is not debt.** An attribute earns canonical
+evidence for auditability, protocol legibility, machine consumption or a future tripwire — and that
+earns it no terminal line, no finding and no roadmap item. Of the 38, fourteen are duplicates of a
+subject reference or of operator input echoed back, six are bookkeeping, four are unsafe, and seven
+have no operator value; `kafka.metadata.controller_id` carries in its own doc comment the
+experiment that disqualifies it — **1, 1, 2, 1, 1, 3, 2, 3 across eight reads of a stable KRaft
+cluster whose quorum leader never moved** — which makes presenting it as unsafe as diagnosing it.
+Redis's single unconsumed attribute got a full case file and was rejected; **no candidate was
+manufactured for symmetry.**
+
+**One new conflict is recorded and deliberately not fixed.** 0084 §4 computes topology completeness
+over an exchange's *children*, and an unrepresentable advertisement produces no child — so
+`detailTopologyComplete` can claim the counts *"account for the whole advertised set"* when they do
+not. 0035 §1 anticipated the missing *finding*, not this later *overclaim* built on top of it. It
+is deferred because no supported fixture produces the condition and no real run ever has. Two
+comment-versus-code defects are also recorded rather than patched: Redis's `auth_required` claims a
+renderer reads it and none ever has, and RabbitMQ's `close_outcome` claims rules read it when they
+read the derived class.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:
