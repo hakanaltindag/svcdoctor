@@ -902,3 +902,94 @@ func TestPGStructuralSingleSessionPerRun(t *testing.T) {
 		}
 	}
 }
+
+// PG-P21 -------------------------------------------------------------------
+
+// TestPGP21TheTwoSessionObservationsAreIndependent is Phase 10.7B's property,
+// driven through the whole pipeline rather than through the renderer alone.
+//
+// `default_transaction_read_only` has been recorded on every passing session
+// since Phase 4.5 and was read by nothing until ADR 0089 activated it as a
+// presentation-layer observation. Activating it must not have made it a claim:
+// the four combinations all reach the result block, none of them reaches a
+// finding, and the pair a naive reader would call contradictory —
+// `in_hot_standby=off` beside a read-only default — is the ordinary shape of
+// `ALTER ROLE … SET default_transaction_read_only = on`.
+func TestPGP21TheTwoSessionObservationsAreIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		recovery, mode         string
+		wantRecovery, wantMode string
+	}{
+		{"off", "on", "not in recovery", "default transaction read-only"},
+		{"on", "off", "in recovery", "default transaction read-only"},
+		{"on", "on", "in recovery", "default transaction read-only"},
+		{"off", "off", "not in recovery", "default transaction read-only"},
+	} {
+		t.Run(tc.recovery+"/"+tc.mode, func(t *testing.T) {
+			g := pgSessionOutcomeWithMode(t, tc.recovery, tc.mode)
+			r := diagnosePostgres(t, g, false)
+
+			if len(r.report.Findings()) != 0 {
+				t.Errorf("the session observations produced %v; both are facts and "+
+					"neither is a problem without an expectation (ADR 0040 section 20)",
+					codesIn(r))
+			}
+			if got := r.report.Summary().Status(); got != domain.SummaryStatusOK {
+				t.Errorf("status = %s, want OK", got)
+			}
+
+			terminal := pgTerminal(t, r)
+			// Collapsed, because the Result block is tabwriter-aligned and the
+			// padding depends on how many observation lines a case happens to
+			// have. The wording is the assertion; the column arithmetic is not.
+			collapsed := strings.Join(strings.Fields(terminal), " ")
+			for _, want := range []string{
+				tc.wantRecovery,
+				tc.wantMode + " " + tc.mode,
+			} {
+				if !strings.Contains(collapsed, want) {
+					t.Errorf("the result block does not report %q.\n\n%s", want, terminal)
+				}
+			}
+			// And it never reconciles them into one mode, one identity, or one
+			// verdict about writing.
+			for _, forbidden := range []string{
+				"contradict", "inconsistent", "misconfigur", "writable",
+				"writes will", "cannot write", "read-only server", "is a replica",
+				// `off` is not "read write". Phase 10.7B's revision: the
+				// parameter says one default is not set, and every positive
+				// rendering of that is a claim about what the session can do.
+				"read write", "read-write",
+			} {
+				if strings.Contains(strings.ToLower(terminal), forbidden) {
+					t.Errorf("the observations were reconciled into %q.\n\n%s",
+						forbidden, terminal)
+				}
+			}
+		})
+	}
+}
+
+// pgSessionOutcomeWithMode is pgSessionOutcome with the transaction-mode
+// parameter set explicitly.
+//
+// pgSessionOutcome hard-codes "off" through pgSession, which is right for every
+// fixture that predates Phase 10.7B and useless for proving the pair.
+func pgSessionOutcomeWithMode(t *testing.T, recovery, mode string) domain.Graph {
+	t.Helper()
+
+	session := pgSession(domain.StatePass, domain.FailureNone, "", recovery, yes())
+	session.attrs[servicepostgres.AttrDefaultTransactionReadOnly] = domain.StringAttr(mode)
+
+	h := newPGHarness(t, "db.example:5432")
+	h.lookup(domain.StatePass, domain.FailureNone)
+	h.path(pgAddrA,
+		pgTCP(domain.StatePass, domain.FailureNone),
+		pgSSLRequest(domain.StatePass, domain.FailureNone, yes()),
+		pgTLS(domain.StatePass, domain.FailureNone),
+		pgStartup(domain.StatePass, domain.FailureNone, "", "sasl", nil),
+		pgAuth(domain.StatePass, domain.FailureNone, "", nil),
+		session,
+	)
+	return h.freeze()
+}

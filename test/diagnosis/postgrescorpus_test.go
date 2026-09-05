@@ -309,6 +309,12 @@ func pgCorpus() []pgIncident {
 				{"promote", "svcdoctor recommends no disruptive action, ever"},
 				{"split", "one session says nothing about any other endpoint"},
 				{"read-only", "recovery and default_transaction_read_only are independent facts"},
+				// Both spellings, since Phase 10.7B. `assertRefuses` scans
+				// **finding prose**, so this guards a rule that started deriving
+				// a read-only claim from recovery — not the observation line,
+				// which is guarded by TestPSRO* and PG-P21. A hyphen-only entry
+				// would miss the spaced form for no reason.
+				{"read only", "the same, in the spelling a finding would be likelier to use"},
 			},
 		},
 		{

@@ -27,27 +27,28 @@ const StepSession = servicepostgres.StepSession
 // one. The reader is the terminal renderer, which prints them as
 // endpoint-reported observations rather than as claims (ADR 0085 section 4).
 // The values and the producing code are unchanged.
+//
+// AttrDefaultTransactionReadOnly joined them in Phase 10.7B, on the same trigger
+// and after the same argument: ADR 0089 selected it as a Class 1 activation, so
+// the terminal renderer became its second reader. **It is not the same fact as
+// AttrInHotStandby and it does not follow it** — measured on a real standby,
+// in_hot_standby was "on" while this was "off" — and the definition now carries
+// that reasoning in full.
 const (
-	AttrServerVersion = servicepostgres.AttrServerVersion
-	AttrInHotStandby  = servicepostgres.AttrInHotStandby
+	AttrServerVersion              = servicepostgres.AttrServerVersion
+	AttrInHotStandby               = servicepostgres.AttrInHotStandby
+	AttrDefaultTransactionReadOnly = servicepostgres.AttrDefaultTransactionReadOnly
 )
 
 // The remaining attributes session establishment records.
 //
-// Two come from the ParameterStatus allowlist and one from the frame that ends
-// the window. Their values are the server's own strings, uninterpreted: this
-// layer records what was observed, and turning "on" into "this is a replica" is
-// a claim no layer above is authorized to make either (ADR 0040 section 20).
+// One comes from the ParameterStatus allowlist and one from the frame that ends
+// the window — it was two until Phase 10.7B moved AttrDefaultTransactionReadOnly
+// to the vocabulary package above, on the trigger that package names. Their
+// values are the server's own strings, uninterpreted: this layer records what was
+// observed, and turning "on" into "this is a replica" is a claim no layer above
+// is authorized to make either (ADR 0040 section 20).
 const (
-	// AttrDefaultTransactionReadOnly is the default_transaction_read_only GUC.
-	//
-	// **It is not the same fact as AttrInHotStandby, and it does not follow it.**
-	// Measured on a real standby: in_hot_standby was "on" while this was "off". A
-	// session on a standby is read-only because of recovery, not because this
-	// parameter is set, so a rule reading only this one would call a replica
-	// writable. Both are recorded and neither alone answers "can I write here".
-	AttrDefaultTransactionReadOnly domain.AttributeKey = "postgres.default_transaction_read_only"
-
 	// AttrIsSuperuser is "on" when the authenticated role is a superuser.
 	//
 	// One bit about the privilege of the connection svcdoctor established. It

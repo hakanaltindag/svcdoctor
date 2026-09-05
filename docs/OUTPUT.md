@@ -113,6 +113,36 @@ The rules the whole output obeys:
 - **A finding is valid from the vantage it was recorded at**, unless the evidence proves
   otherwise. `vantageDependent` says which.
 
+### Observations are not findings
+
+The Result block also prints **endpoint-reported observations** — what the endpoint said about
+itself. They are not findings: they carry no severity, no confidence and no recommendation, they
+move no exit code, and no rule reads them. They are shown because an operator wants the fact, and
+they stop there because svcdoctor holds no expectation to compare any of them against.
+
+PostgreSQL prints two, both describing **the session svcdoctor established** and nothing else:
+
+| Line | Values | What it means |
+|---|---|---|
+| `recovery` | `in recovery` / `not in recovery` | the session was reported as attached to a server in recovery, or not |
+| `default transaction read-only` | `on` / `off` | the session reported that its transactions default to read-only, or that they do not |
+
+**The second line prints the parameter's own value, deliberately.** `off` is *not* rendered as
+"read write", "writable" or anything else positive: the parameter says one default is not set,
+and every positive phrasing of that would be a claim about what the session can do. `on` is not
+rendered as "writes will fail" for the mirror-image reason.
+
+**They are independent and neither follows from the other.** A standby can report `in recovery`
+while `default transaction read-only` is `off`; a primary can report `not in recovery` while it is
+`on`, which is what `ALTER ROLE … SET default_transaction_read_only = on` does. Neither
+combination is a contradiction and svcdoctor does not present one as such.
+
+**Neither line answers "will my writes work."** That depends on the session-local
+`transaction_read_only`, on object, database and row-level privileges, on what the application
+does next, and — behind a pooler — on which backend serves the next transaction. svcdoctor runs
+no query and measures none of it. A line is printed only when the endpoint sent the parameter; a
+server that sent none produces no line, and never a default.
+
 ## Execution state versus diagnosis
 
 **This is the distinction to understand before automating anything.** They are two axes and

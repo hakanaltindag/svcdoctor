@@ -185,7 +185,7 @@ var services = map[domain.ServiceID]serviceView{
 		// TestSessionFactsStayEvidenceAndNeverBecomeFindings both enforce, and
 		// which is why "svcdoctor connected to a standby" cannot become a
 		// problem here without somebody deciding it should be.
-		// **One line, and `server_version` is deliberately not the second.**
+		// **`server_version` is deliberately not among them.**
 		//
 		// PostgreSQL's ParameterStatus values are unbounded: `wire.SessionParameters`
 		// allowlists four *keys* and retains each one's value as the server's own
@@ -198,6 +198,14 @@ var services = map[domain.ServiceID]serviceView{
 		// boundary, for every service at once. Phase 10.3 declines to widen the
 		// surface while that decision is outstanding, and the version is in the
 		// report's evidence either way.
+		//
+		// **The second line arrived in Phase 10.7B, and the two stay independent.**
+		// ADR 0089 selected it as a Class 1 activation: `default_transaction_read_only`
+		// has been recorded on every passing session since Phase 4.5 and was read by
+		// nothing. Neither line is derived from the other and neither may be — the
+		// adapter measured a real standby reporting `in_hot_standby=on` while
+		// `default_transaction_read_only=off`, so a reader that collapsed them would
+		// publish a mode nobody reported.
 		observations: []observationLine{
 			{
 				step:  servicepostgres.StepSession,
@@ -218,6 +226,43 @@ var services = map[domain.ServiceID]serviceView{
 						return "in recovery"
 					case "off":
 						return "not in recovery"
+					default:
+						return ""
+					}
+				},
+			},
+			{
+				step:  servicepostgres.StepSession,
+				key:   servicepostgres.AttrDefaultTransactionReadOnly,
+				label: "default transaction read-only",
+				// **The parameter's own two values, and no third concept.**
+				//
+				// The sibling above translates, because "in recovery" is English
+				// an operator can read and `in_hot_standby` is not. This one must
+				// not, and the reason is asymmetric: `on` has a faithful English
+				// form, and `off` does not. Every candidate for it — "read
+				// write", "writable", "writes enabled" — is a *positive* claim
+				// about what this session can do, and the parameter says only
+				// that one default is not set. Object, database and row-level
+				// privileges are untouched by it, a transaction may override it,
+				// and behind a pooler the next one may reach a different backend.
+				//
+				// So the label carries the meaning and the value stays the
+				// endpoint's own token. `off` renders `off`, which is exactly
+				// what was reported and nothing more.
+				//
+				// Closed all the same, for the reason the sibling is closed: the
+				// returned strings are this package's constants rather than the
+				// peer's bytes, and anything outside the two yields the empty
+				// string that drops the line.
+				// TestPGP13ServerControlledTextNeverReachesTrustedProse drives
+				// this key with hostile values, including one beginning "on".
+				render: func(v domain.AttrValue) string {
+					switch v.String() {
+					case "on":
+						return "on"
+					case "off":
+						return "off"
 					default:
 						return ""
 					}
@@ -248,6 +293,32 @@ var services = map[domain.ServiceID]serviceView{
 					"That is what the endpoint said about this session and nothing more:",
 					"svcdoctor ran no query, and it holds no expectation about which role",
 					"this target should have, so this is neither a finding nor a fault.",
+				},
+			},
+			{
+				step:  servicepostgres.StepSession,
+				key:   servicepostgres.AttrDefaultTransactionReadOnly,
+				value: "on",
+				// The same silence problem as the recovery note, and the same
+				// answer — with one addition, because this is the note that has
+				// to refuse the strongest available sentence. An operator reading
+				// it wants to be told their writes will fail, and svcdoctor did
+				// not measure that.
+				//
+				// The subject is **this session**, not the endpoint: the value is
+				// a session parameter, a pooler may hand the next transaction to
+				// a different backend, and saying "endpoint" would attribute to a
+				// server what only one session reported.
+				//
+				// Deliberately no matching note for "off". Reassurance is the
+				// failure mode on that side, and a note there would be svcdoctor
+				// commenting on something it did not measure.
+				lines: []string{
+					"This session reported that its transactions default to read-only.",
+					"That is what it reported and nothing more: it describes no other",
+					"session, it does not say whether any particular write would succeed,",
+					"and svcdoctor ran no query and holds no expectation about it. It is",
+					"neither a finding nor a fault.",
 				},
 			},
 		},

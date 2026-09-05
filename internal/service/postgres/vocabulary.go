@@ -103,3 +103,35 @@ const AttrServerVersion domain.AttributeKey = "postgres.server_version"
 // fact in the result block is exactly the mechanism that keeps it from becoming
 // a claim (ADR 0085 section 4).
 const AttrInHotStandby domain.AttributeKey = "postgres.in_hot_standby"
+
+// AttrDefaultTransactionReadOnly is "on" when the endpoint reported that new
+// transactions in this session default to read only, and "off" when it reported
+// the opposite.
+//
+// # It is not the recovery fact, and it is not derived from it
+//
+// The two are independent, and the repository measured it: on a real streaming
+// standby `in_hot_standby` was "on" while this was "off". A session on a standby
+// is read-only because of *recovery*, not because this GUC is set, and a primary
+// may set it deliberately — `ALTER ROLE … SET default_transaction_read_only = on`
+// is a per-role setting that appears in no configuration file the operator is
+// likely to read.
+//
+// **So neither value implies anything about the other, and no reader may combine
+// them into a single mode.** ADR 0089 section 7.1 forbids it and
+// `TestPGP21TheTwoSessionObservationsAreIndependent` enforces it.
+//
+// # What it does not answer
+//
+// Not "can this application write". The parameter that settles that for a given
+// transaction is the session-local `transaction_read_only`, which is not sent as
+// a `ParameterStatus` and would need SQL — which ADR 0039 section 17 forbids
+// (ADR 0040 section 20). Object, database and row-level privileges are untouched
+// by it, a transaction may override the default, and a pooler may serve the next
+// one from a different backend.
+//
+// It is read outside the adapter by the terminal renderer, as the second of
+// PostgreSQL's endpoint-reported observation lines. **No rule reads it and none
+// may**, which `TestTheRulesReadOnlyTheAuthorizedAttributes` and
+// `TestSessionFactsStayEvidenceAndNeverBecomeFindings` both enforce.
+const AttrDefaultTransactionReadOnly domain.AttributeKey = "postgres.default_transaction_read_only"

@@ -54,3 +54,46 @@ services:
       - ssl=off
       - -c
       - password_encryption=scram-sha-256
+
+  # A third listener whose sessions default to read-only transactions.
+  #
+  # Phase 10.7B exists because `default_transaction_read_only` has been recorded
+  # on every passing session since Phase 4.5 and no fixture had ever produced it
+  # as "on" — so the observation was activated against a value nobody measured.
+  # This measures it.
+  #
+  # **The GUC is set at startup and never by SQL.** `-c` is the same mechanism
+  # every other server here is configured with, so the value arrives in the
+  # `ParameterStatus` stream ahead of `ReadyForQuery` exactly as a real
+  # deployment's would. Setting it afterwards would have meant executing a
+  # statement, which ADR 0039 section 17 forbids svcdoctor and which would have
+  # proved something about the fixture rather than about the protocol.
+  #
+  # Plaintext, no certificates and `trust` authentication: a complete session is
+  # reachable with no credential at all. That keeps this container to one job —
+  # reporting one parameter — and keeps the credential-transport policy out of
+  # the measurement entirely.
+  postgres-readonly:
+    image: postgres:18
+    container_name: svcd-pg-readonly
+    # **No POSTGRES_PASSWORD, no POSTGRES_DB, no init script, and that is forced
+    # rather than chosen.** `-c default_transaction_read_only=on` applies from
+    # process start, including to the temporary server the entrypoint uses to
+    # initialize the cluster — so `CREATE DATABASE "appdb"`, `ALTER USER … WITH
+    # PASSWORD` and every `CREATE ROLE` in init.sql fail with
+    # `cannot execute CREATE DATABASE in a read-only transaction`. Measured, on
+    # the first attempt at this fixture.
+    #
+    # Leaving the database at its default means the entrypoint issues no
+    # `CREATE DATABASE` at all, and `trust` authentication means it issues no
+    # `ALTER USER` either. The container therefore executes **no SQL whatsoever**,
+    # which is what keeps this a protocol measurement.
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "55434:5432"
+    command:
+      - -c
+      - ssl=off
+      - -c
+      - default_transaction_read_only=on

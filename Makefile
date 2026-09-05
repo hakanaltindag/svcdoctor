@@ -202,14 +202,15 @@ postgres-up: ## Start the PostgreSQL validation server
 	@printf 'waiting for postgres'
 	@for i in $$(seq 1 60); do \
 		if docker exec svcd-pg pg_isready -q -U app -d appdb 2>/dev/null \
-			&& docker exec svcd-pg-plaintext pg_isready -q -U app -d appdb 2>/dev/null; then \
+			&& docker exec svcd-pg-plaintext pg_isready -q -U app -d appdb 2>/dev/null \
+			&& docker exec svcd-pg-readonly pg_isready -q 2>/dev/null; then \
 			printf ' ready\n'; exit 0; fi; \
 		printf '.'; sleep 1; \
 	done; \
 	printf '\nservers did not become ready\n'; \
 	printf '\n--- container state ---\n'; \
 	$(PG_COMPOSE) ps || true; \
-	for svc in postgres postgres-plaintext; do \
+	for svc in postgres postgres-plaintext postgres-readonly; do \
 		printf '\n--- %s (last 40 lines) ---\n' "$$svc"; \
 		$(PG_COMPOSE) logs --tail=40 --no-color "$$svc" 2>&1 || true; \
 	done; \
