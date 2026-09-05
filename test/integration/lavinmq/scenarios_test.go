@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	rmqwire "github.com/hakanaltindag/svcdoctor/internal/adapter/rabbitmq/wire"
+	"github.com/hakanaltindag/svcdoctor/internal/app"
 	diagnosisrabbitmq "github.com/hakanaltindag/svcdoctor/internal/diagnosis/rabbitmq"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicerabbitmq "github.com/hakanaltindag/svcdoctor/internal/service/rabbitmq"
@@ -211,6 +212,62 @@ func TestLMQ06ResourceLimitReached(t *testing.T) {
 		t.Error("a capacity ceiling was reported as a permission denial")
 	}
 	assertNoRawPeerText(t, result, peerTextOf(truth))
+
+	// Phase 10.8B: LavinMQ earns the same explanation, and that is the point.
+	//
+	// **This is a positive compatibility proof, not a negative contrast.** ADR
+	// 0090 had assumed LavinMQ produces no limit sentence and would stay silent;
+	// ADR 0091 §6 corrected it from this very scenario. LavinMQ reaches
+	// VHOST_CONNECTION_LIMIT through its own reply template, so it reaches the
+	// same closed outcome and therefore the same bounded sentence.
+	//
+	// Nothing in the rule can see which implementation answered. The explanation
+	// is earned by the authoritative outcome, never by product identity, and if
+	// this ever required an `if LavinMQ` the design would be wrong.
+	detail := findingDetail(t, result)
+	const want = "The endpoint named a connection limit scoped to the virtual host."
+	if !strings.Contains(detail, want) {
+		t.Errorf("LavinMQ did not receive the shared explanation.\ngot: %q", detail)
+	}
+	// The scopes LavinMQ did not name must be absent. It produces no node or
+	// user ceiling template at all, so acquiring one would mean the mapping had
+	// stopped being keyed on the outcome.
+	for _, absent := range []string{"scoped to the node.", "scoped to the user."} {
+		if strings.Contains(detail, absent) {
+			t.Errorf("a LavinMQ vhost ceiling named %q", absent)
+		}
+	}
+}
+
+// LMQ-09 — an unmapped LavinMQ refusal gains no capacity scope.
+//
+// The other half of the outcome-driven rule: a refusal that named no ceiling
+// must keep the explanation it has always had, on the same implementation that
+// legitimately receives one for a different outcome. If this ever fails, the
+// mapping has started matching something other than the exact closed value.
+func TestLMQ09UnmappedRefusalGainsNoScope(t *testing.T) {
+	result := run(t, runOptions{port: portAMQPS, username: userDefault,
+		password: passDefault, vhost: vhostAbsent, tls: trustFixtureCA(t)})
+
+	for _, f := range result.Report().Findings() {
+		if strings.Contains(f.Detail(), "scoped to the ") {
+			t.Errorf("%s acquired a capacity scope it never measured:\n%q",
+				f.Code(), f.Detail())
+		}
+	}
+}
+
+// findingDetail returns the canonical Detail of the connection-not-permitted
+// finding.
+func findingDetail(t *testing.T, result app.Result) string {
+	t.Helper()
+	for _, f := range result.Report().Findings() {
+		if f.Code() == diagnosisrabbitmq.CodeConnectionNotPermitted {
+			return f.Detail()
+		}
+	}
+	t.Fatalf("no RABBITMQ_CONNECTION_NOT_PERMITTED finding: %v", codes(result))
+	return ""
 }
 
 // LMQ-07 — a plaintext channel withholds the credential, identically.

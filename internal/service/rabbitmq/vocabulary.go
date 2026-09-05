@@ -154,6 +154,71 @@ const AttrVHostDefaulted domain.AttributeKey = "rabbitmq.vhost_defaulted"
 // condition still holds.
 const AttrCloseOutcome domain.AttributeKey = "rabbitmq.close_outcome"
 
+// CloseOutcome is the closed set of values AttrCloseOutcome can hold.
+//
+// # Why the values live beside the key rather than in the wire package
+//
+// They were declared in internal/adapter/rabbitmq/wire until Phase 10.8B, which
+// is where the classification that produces them still lives and will stay. What
+// moved is the *vocabulary*, and it moved for the reason this package exists:
+// depguard denies internal/diagnosis the adapter import, so a rule that needs to
+// recognize an outcome cannot name the adapter's constant. Respelling the
+// literals in the rule package instead would create a second authoritative
+// spelling of a contract string, which is the drift this package was created to
+// prevent. It is the same move AttrBrokerNodeID made in Phase 6.1c and
+// AttrDefaultTransactionReadOnly made in Phase 10.7B, on the same trigger.
+//
+// The wire package re-exports every name below as an alias, so the values, the
+// canonical evidence and every existing call site are unchanged.
+//
+// # The closure is a security property, not tidiness
+//
+// Every value is a literal declared here. **None is ever a slice of a peer's
+// buffer**: the classifier compares a reconstructed candidate for byte equality
+// and discards the peer's bytes, so an unrecognized refusal degrades to
+// CloseUnspecified rather than inventing an eighth value. That is what makes it
+// safe for a finding to select fixed prose from this set — and it is fuzz-proven
+// at the producer, not merely asserted (ADR 0069 §3, ADR 0091 §6).
+type CloseOutcome string
+
+const (
+	// CloseUnspecified means the text matched no candidate. It is a statement
+	// about svcdoctor's vocabulary, never about the peer being wrong, and it is
+	// the safe default: an unmatched refusal degrades to the weakest true
+	// conclusion the reply code alone supports.
+	CloseUnspecified CloseOutcome = "UNSPECIFIED"
+
+	// CloseUnspecifiedTruncated means the peer truncated its own explanation.
+	//
+	// It is distinct from CloseUnspecified so that a reader can tell "svcdoctor
+	// did not recognize this" from "svcdoctor saw a sentence it deliberately
+	// declined to read". Phase 8.0C measured RabbitMQ producing a 255-byte reply
+	// text ending in three dots, with the discriminating suffix entirely gone.
+	//
+	// **It is why absence of a capacity outcome proves nothing.** A real ceiling
+	// whose sentence was truncated arrives here, so a finding may say what a
+	// named outcome states and may never read silence as its negation.
+	CloseUnspecifiedTruncated CloseOutcome = "UNSPECIFIED_TRUNCATED"
+
+	CloseVHostNotFound      CloseOutcome = "VHOST_NOT_FOUND"
+	CloseVHostAccessRefused CloseOutcome = "VHOST_ACCESS_REFUSED"
+
+	// The three capacity ceilings, which are the only outcomes that carry a
+	// scope a finding may name (ADR 0091 §8).
+	//
+	// They are separate values because they have separate owners and separate
+	// next actions: a node ceiling is a property of the broker node, a virtual
+	// host ceiling of one tenant, and a user ceiling of one principal. The
+	// failure class RESOURCE_LIMIT_REACHED is shared by all three deliberately —
+	// the class explains the kind of break, and these explain its scope.
+	CloseNodeConnectionLimit  CloseOutcome = "NODE_CONNECTION_LIMIT"
+	CloseVHostConnectionLimit CloseOutcome = "VHOST_CONNECTION_LIMIT"
+	CloseUserConnectionLimit  CloseOutcome = "USER_CONNECTION_LIMIT"
+)
+
+// String implements fmt.Stringer.
+func (o CloseOutcome) String() string { return string(o) }
+
 // AttrReplyCode is the numeric AMQP reply code the endpoint sent.
 //
 // The peer's own structured field rather than prose, so it is safe to carry

@@ -10,6 +10,11 @@
 #               rather than against one and assumed for the rest. Phase 8.0C
 #               measured all three offering different mechanism *orders*, which
 #               is exactly the difference ADR 0068 §2 says must not matter.
+#   rabbit-nodelimit
+#               4.2.0 with `connection_max = 0`, so every AMQP connection is
+#               refused for node-wide capacity. Separate for the same reason
+#               rabbit-stop is: a node-wide ceiling would perturb every other
+#               scenario on that node.
 #   rabbit-stop 4.2.0, started and then stopped by RAB-16. It is separate so
 #               stopping it cannot perturb a scenario running against another
 #               broker.
@@ -83,6 +88,25 @@ services:
       - ./30-svcdoctor.conf:/etc/rabbitmq/conf.d/30-svcdoctor.conf:ro
       - ./certs:/etc/rabbitmq/certs:ro
     mem_limit: 768m
+    # The data directory is a tmpfs so the fixture leaves **no persistent
+    # residue**, which this phase requires. Nothing here needs to survive a run:
+    # every principal is recreated by `make rabbitmq-users`.
+    tmpfs:
+      - /var/lib/rabbitmq:uid=999,gid=999,size=256m
+
+  # RAB-26 needs a node whose *node-wide* connection ceiling is reached. That is
+  # a property of the node, so it cannot be set on a broker any other scenario
+  # uses — the same reasoning `rabbit-stop` below is separate for.
+  rabbit-nodelimit:
+    image: rabbitmq:4.2.0
+    container_name: svcd-rabbit-nodelimit
+    hostname: svcd-rabbit-nodelimit
+    ports:
+      - "127.0.0.1:56683:5671"
+    volumes:
+      - ./40-nodelimit.conf:/etc/rabbitmq/conf.d/40-nodelimit.conf:ro
+      - ./certs:/etc/rabbitmq/certs:ro
+    mem_limit: 512m
     # The data directory is a tmpfs so the fixture leaves **no persistent
     # residue**, which this phase requires. Nothing here needs to survive a run:
     # every principal is recreated by `make rabbitmq-users`.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	rmqwire "github.com/hakanaltindag/svcdoctor/internal/adapter/rabbitmq/wire"
+	"github.com/hakanaltindag/svcdoctor/internal/app"
 	diagnosisrabbitmq "github.com/hakanaltindag/svcdoctor/internal/diagnosis/rabbitmq"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicerabbitmq "github.com/hakanaltindag/svcdoctor/internal/service/rabbitmq"
@@ -134,6 +135,15 @@ func TestRAB21ResourceLimitReached(t *testing.T) {
 	}
 	assertNoRawPeerText(t, result, peerTextOf(truth))
 
+	// Phase 10.8B: the canonical explanation names which ceiling this was.
+	//
+	// Before this phase the finding said *"Where the endpoint named a capacity
+	// ceiling…"* and recommended reviewing node, virtual host **and** user
+	// limits — for a refusal whose evidence had already identified the virtual
+	// host. The scope is what the operator acts on: this one affects one tenant,
+	// where a node ceiling affects every client on the broker.
+	assertCapacityScope(t, result, "virtual host")
+
 	// The number the broker named is a fact about its configuration that
 	// svcdoctor was not asked to report and cannot verify (ADR 0069).
 	if strings.Contains(reportText(result), "(0)") {
@@ -147,6 +157,162 @@ func TestRAB21ResourceLimitReached(t *testing.T) {
 			t.Errorf("the report interprets a capacity ceiling as %q", blame)
 		}
 	}
+}
+
+// RAB-26 — a node-wide capacity ceiling, on a broker that has one.
+//
+// The scope matters more here than anywhere else in this file: a node ceiling is
+// reached by **every** client at once, so an operator who reads it as their own
+// application's problem looks in the wrong place. svcdoctor knew which ceiling
+// it was from the reply sentence and, until Phase 10.8B, said so nowhere.
+//
+// The broker is its own container with `connection_max = 0` because a node-wide
+// setting cannot be applied to a node other scenarios use. Zero rather than a
+// reached ceiling, so nothing is held open and nothing races.
+func TestRAB26NodeConnectionLimit(t *testing.T) {
+	truth := groundTruthJourney(t, "--port", "56683", "--tls",
+		"--ca", "certs/server.crt", "--server-name", serverName,
+		"--user", "guest", "--password", "guest", "--vhost", "/")
+	if !strings.Contains(truth, "node connection limit (0) is reached") {
+		t.Fatalf("ground truth: %q, want a node connection-limit refusal", truth)
+	}
+
+	result := run(t, runOptions{port: portNodeLimit, username: "guest",
+		password: "guest", vhost: "/", tls: trustFixtureCA(t)})
+
+	assertCapacityFinding(t, result, truth, rmqwire.CloseNodeConnectionLimit, "node")
+
+	// A node ceiling is the one an operator is most likely to over-read. It says
+	// this node refused this attempt, and nothing about a cluster.
+	//
+	// Scoped to the explanation rather than to the whole report, deliberately.
+	// The report legitimately contains the word "cluster" — RabbitMQ reports a
+	// `cluster_name` and the terminal renders it as an observation, which
+	// predates this phase and is not a claim. A repository-wide keyword scan
+	// would fail on that and teach nothing.
+	lower := strings.ToLower(findingDetail(t, result))
+	for _, overclaim := range []string{"cluster", "every client", "all clients", "globally"} {
+		if strings.Contains(lower, overclaim) {
+			t.Errorf("the explanation generalizes a node ceiling as %q", overclaim)
+		}
+	}
+}
+
+// RAB-27 — a per-user capacity ceiling.
+//
+// The third scope, and the one whose next action differs most: a user ceiling
+// usually means this application's own connections, where a virtual host ceiling
+// is the tenant's and a node ceiling is the broker's. It runs against the
+// scenario broker, because a per-user limit affects only that principal — which
+// is why `ulimit` exists and `app` is untouched.
+func TestRAB27UserConnectionLimit(t *testing.T) {
+	truth := groundTruthJourney(t, "--port", "56671", "--tls",
+		"--ca", "certs/server.crt", "--server-name", serverName,
+		"--user", userLimit, "--password", passLimit, "--vhost", "/")
+	if !strings.Contains(truth, "user connection limit (0) is reached") {
+		t.Fatalf("ground truth: %q, want a user connection-limit refusal", truth)
+	}
+
+	result := run(t, runOptions{port: portAMQPS, username: userLimit,
+		password: passLimit, vhost: "/", tls: trustFixtureCA(t)})
+
+	assertCapacityFinding(t, result, truth, rmqwire.CloseUserConnectionLimit, "user")
+
+	// The username is the operator's own input and is identity-classed; the
+	// explanation is fixed prose and must not name it.
+	if strings.Contains(findingDetail(t, result), userLimit) {
+		t.Error("the explanation interpolated the principal name")
+	}
+}
+
+// assertCapacityFinding is the shared body of the three capacity scenarios.
+//
+// It asserts the whole chain each one exists to prove: the closed outcome the
+// wire package produced, the failure class the adapter derived, the finding code
+// that has always owned it, and the canonical explanation Phase 10.8B added —
+// plus everything that must **not** have moved.
+func assertCapacityFinding(
+	t *testing.T, result app.Result, truth string,
+	want rmqwire.CloseOutcome, scope string,
+) {
+	t.Helper()
+
+	if !hasCode(result, diagnosisrabbitmq.CodeConnectionNotPermitted) {
+		t.Fatalf("got %v, want RABBITMQ_CONNECTION_NOT_PERMITTED", codes(result))
+	}
+	if hasCode(result, diagnosisrabbitmq.CodeVHostAccessRefused) {
+		t.Error("a capacity ceiling was reported as a permission denial")
+	}
+
+	open := oneNodeAt(t, result, stepOpen)
+	if got := attrText(t, open, servicerabbitmq.AttrCloseOutcome); got != string(want) {
+		t.Errorf("close outcome = %q, want %s", got, want)
+	}
+	if got := open.FailureClass(); got != domain.FailureResourceLimitReached {
+		t.Errorf("failure class = %s, want RESOURCE_LIMIT_REACHED", got)
+	}
+
+	assertCapacityScope(t, result, scope)
+	assertNoRawPeerText(t, result, peerTextOf(truth))
+
+	// The limit value the peer named is its configuration, not svcdoctor's
+	// finding (ADR 0069).
+	if strings.Contains(reportText(result), "(0)") {
+		t.Error("the peer's configured limit value was carried into the report")
+	}
+	lower := strings.ToLower(reportText(result))
+	for _, blame := range []string{
+		"connection leak", "leaking", "too low", "increase the limit", "abnormal",
+		"exhausted", "misconfigur", "overload",
+	} {
+		if strings.Contains(lower, blame) {
+			t.Errorf("the report interprets a capacity ceiling as %q", blame)
+		}
+	}
+}
+
+// assertCapacityScope pins the one sentence Phase 10.8B added, and pins that the
+// other two scopes are absent.
+//
+// Naming the wrong ceiling is the failure mode this phase created, so "contains
+// the right scope" is not enough on its own.
+func assertCapacityScope(t *testing.T, result app.Result, scope string) {
+	t.Helper()
+
+	detail := findingDetail(t, result)
+	want := "The endpoint named a connection limit scoped to the " + scope + "."
+	if !strings.Contains(detail, want) {
+		t.Errorf("the explanation does not name the %s scope.\ngot: %q", scope, detail)
+	}
+	for _, other := range []string{"node", "virtual host", "user"} {
+		if other == scope {
+			continue
+		}
+		if strings.Contains(detail, "scoped to the "+other+".") {
+			t.Errorf("a %s ceiling also named the %s scope", scope, other)
+		}
+	}
+	// The generic hedge is what the specific sentence replaces.
+	if strings.Contains(detail, "Where the endpoint named a capacity ceiling") {
+		t.Error("the generic hedge survived beside the specific sentence")
+	}
+	// And the impermanence sentence is what it must not replace.
+	if !strings.Contains(detail, "a second run a moment later may succeed") {
+		t.Error("the impermanence sentence was dropped")
+	}
+}
+
+// findingDetail returns the canonical Detail of the connection-not-permitted
+// finding.
+func findingDetail(t *testing.T, result app.Result) string {
+	t.Helper()
+	for _, f := range result.Report().Findings() {
+		if f.Code() == diagnosisrabbitmq.CodeConnectionNotPermitted {
+			return f.Detail()
+		}
+	}
+	t.Fatalf("no RABBITMQ_CONNECTION_NOT_PERMITTED finding: %v", codes(result))
+	return ""
 }
 
 // The vhost is not part of the credential authority, and this is the scenario

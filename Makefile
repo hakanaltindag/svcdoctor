@@ -406,6 +406,7 @@ rabbitmq-up: ## Start the RabbitMQ validation brokers
 		if docker exec -u rabbitmq svcd-rabbit rabbitmq-diagnostics -q ping >/dev/null 2>&1 \
 			&& docker exec -u rabbitmq svcd-rabbit-313 rabbitmq-diagnostics -q ping >/dev/null 2>&1 \
 			&& docker exec -u rabbitmq svcd-rabbit-409 rabbitmq-diagnostics -q ping >/dev/null 2>&1 \
+			&& docker exec -u rabbitmq svcd-rabbit-nodelimit rabbitmq-diagnostics -q ping >/dev/null 2>&1 \
 			&& docker exec -u rabbitmq svcd-rabbit-stop rabbitmq-diagnostics -q ping >/dev/null 2>&1; then \
 			printf ' ready\n'; $(MAKE) --no-print-directory rabbitmq-users; exit 0; fi; \
 		printf '.'; sleep 2; \
@@ -413,7 +414,7 @@ rabbitmq-up: ## Start the RabbitMQ validation brokers
 	printf '\nbrokers did not become ready\n'; \
 	printf '\n--- container state ---\n'; \
 	$(RMQ_COMPOSE) ps || true; \
-	for svc in rabbit rabbit-313 rabbit-409 rabbit-stop; do \
+	for svc in rabbit rabbit-313 rabbit-409 rabbit-nodelimit rabbit-stop; do \
 		printf '\n--- %s (last 40 lines) ---\n' "$$svc"; \
 		$(RMQ_COMPOSE) logs --tail=40 --no-color "$$svc" 2>&1 || true; \
 	done; \
@@ -428,6 +429,15 @@ rabbitmq-up: ## Start the RabbitMQ validation brokers
 #   noperm   a real user with no permission on / at all (RAB-07)
 #   limited  a vhost whose max-connections is 0, so every open is refused for
 #            capacity rather than for permission (RAB-21)
+#   ulimit   a principal whose own max-connections is 0, so every open it
+#            attempts is refused for **user** capacity (RAB-27). It is a separate
+#            principal because a per-user ceiling on `app` would refuse every
+#            other scenario.
+#
+# The `ulimit` limit is **verified** rather than attempted. `set_vhost_limits`
+# above still ends in `|| true` and is pre-existing debt: it happens to work
+# because it runs after the verified user loop. New provisioning does not get
+# to rely on that.
 #
 # `guest` is left exactly as RabbitMQ ships it: restricted to loopback, which is
 # what RAB-05 measures.
@@ -452,8 +462,14 @@ rabbitmq-users: ## Create the validation principals, vhosts and limits
 		docker exec -u rabbitmq $$c rabbitmqctl -q add_vhost limited >/dev/null 2>&1 || true; \
 		docker exec -u rabbitmq $$c rabbitmqctl -q set_permissions -p limited app '.*' '.*' '.*' >/dev/null 2>&1 || true; \
 		docker exec -u rabbitmq $$c rabbitmqctl -q set_vhost_limits -p limited '{"max-connections":0}' >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q add_user ulimit ulimit-pw >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q set_permissions -p / ulimit '.*' '.*' '.*' >/dev/null 2>&1 || true; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q set_user_limits ulimit '{"max-connections":0}' >/dev/null 2>&1 || true; \
 		docker exec -u rabbitmq $$c rabbitmqctl -q list_users 2>/dev/null | grep -q '^app' || { \
 			printf '\nthe app principal could not be created on %s\n' "$$c"; exit 1; }; \
+		docker exec -u rabbitmq $$c rabbitmqctl -q list_user_limits --user ulimit 2>/dev/null \
+			| grep -q '"max-connections":0' || { \
+			printf '\nthe ulimit user connection limit was not set on %s\n' "$$c"; exit 1; }; \
 	done; \
 	printf 'principals ready\n'
 	@# RAB-18 targets a real management listener. Enabling the plugin here keeps

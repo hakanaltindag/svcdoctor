@@ -1,38 +1,39 @@
 package wire
 
-import "strings"
+import (
+	"strings"
+
+	servicerabbitmq "github.com/hakanaltindag/svcdoctor/internal/service/rabbitmq"
+)
 
 // CloseOutcome is a Connection.Close, normalized to a constant.
 //
 // It is the only thing a refusal's reply text contributes above this package.
-// Every value here is a literal declared in this file; none is ever a slice of a
-// peer's buffer. ADR 0069 section 3.
-type CloseOutcome string
+// Every value is a literal declared in internal/service/rabbitmq; none is ever a
+// slice of a peer's buffer. ADR 0069 section 3.
+//
+// # The vocabulary moved; the classification did not
+//
+// Phase 10.8B moved the type and its constants to internal/service/rabbitmq so
+// that a diagnosis rule — which depguard forbids from importing this package —
+// can recognize an outcome without respelling its literal. `normalizeClose` and
+// everything below it stayed here, because that is protocol logic and a service
+// vocabulary holds constants.
+//
+// These are **aliases, not copies**. There is one authoritative spelling of each
+// value, so the two packages cannot drift, and every existing use of
+// `wire.CloseVHostNotFound` and of `wire.CloseOutcome` is unchanged.
+type CloseOutcome = servicerabbitmq.CloseOutcome
 
 const (
-	// CloseUnspecified means the text matched no candidate. It is a statement
-	// about svcdoctor's vocabulary, never about the peer being wrong, and it is
-	// the safe default: an unmatched refusal degrades to the weakest true
-	// conclusion the reply code alone supports.
-	CloseUnspecified CloseOutcome = "UNSPECIFIED"
-
-	// CloseUnspecifiedTruncated means the peer truncated its own explanation.
-	//
-	// It is distinct from CloseUnspecified so that a reader can tell "svcdoctor
-	// did not recognize this" from "svcdoctor saw a sentence it deliberately
-	// declined to read". Phase 8.0C measured RabbitMQ producing a 255-byte reply
-	// text ending in three dots, with the discriminating suffix entirely gone.
-	CloseUnspecifiedTruncated CloseOutcome = "UNSPECIFIED_TRUNCATED"
-
-	CloseVHostNotFound        CloseOutcome = "VHOST_NOT_FOUND"
-	CloseVHostAccessRefused   CloseOutcome = "VHOST_ACCESS_REFUSED"
-	CloseNodeConnectionLimit  CloseOutcome = "NODE_CONNECTION_LIMIT"
-	CloseVHostConnectionLimit CloseOutcome = "VHOST_CONNECTION_LIMIT"
-	CloseUserConnectionLimit  CloseOutcome = "USER_CONNECTION_LIMIT"
+	CloseUnspecified          = servicerabbitmq.CloseUnspecified
+	CloseUnspecifiedTruncated = servicerabbitmq.CloseUnspecifiedTruncated
+	CloseVHostNotFound        = servicerabbitmq.CloseVHostNotFound
+	CloseVHostAccessRefused   = servicerabbitmq.CloseVHostAccessRefused
+	CloseNodeConnectionLimit  = servicerabbitmq.CloseNodeConnectionLimit
+	CloseVHostConnectionLimit = servicerabbitmq.CloseVHostConnectionLimit
+	CloseUserConnectionLimit  = servicerabbitmq.CloseUserConnectionLimit
 )
-
-// String implements fmt.Stringer.
-func (o CloseOutcome) String() string { return string(o) }
 
 // truncationMarker is what Erlang's io_lib appends when {chars_limit, 255}
 // shortens a formatted string. Measured, not assumed.

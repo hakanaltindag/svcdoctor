@@ -143,6 +143,41 @@ does next, and — behind a pooler — on which backend serves the next transact
 no query and measures none of it. A line is printed only when the endpoint sent the parameter; a
 server that sent none produces no line, and never a default.
 
+### A finding's explanation is as specific as its evidence, and no more
+
+`detail` is canonical: it is a field of the finding, it is in the JSON, and the terminal prints
+it verbatim. So its specificity is a claim like any other, and it moves only when the evidence
+already earned it.
+
+**RabbitMQ capacity ceilings are the worked example.** A broker enforces three separate connection
+limits — one for the node, one for a virtual host, one for a user — and refuses with a sentence
+naming which. svcdoctor classifies that sentence into a closed value it owns, and
+`RABBITMQ_CONNECTION_NOT_PERMITTED` now says which ceiling the endpoint named:
+
+```text
+The endpoint named a connection limit scoped to the node.
+The endpoint named a connection limit scoped to the virtual host.
+The endpoint named a connection limit scoped to the user.
+```
+
+The three lead to different places: a node ceiling affects every client on that broker, a virtual
+host ceiling affects one tenant, and a user ceiling most often means one application's own
+connections. Before this, all three read *"Where the endpoint named a capacity ceiling…"* and
+recommended reviewing all three.
+
+**What the sentence does not say, and never will.** That the limit is reached everywhere, that it
+is too low, that demand is abnormal, that anything is leaking, that the broker is unhealthy, or
+what to change. The finding still ends with *"it proves nothing about why, for how long, or what
+to change, and a second run a moment later may succeed."* The recommendation is unchanged.
+
+**Absence of a scope proves nothing.** A broker whose reply text was truncated — which happens
+with long virtual host and user names — produces no recognizable value, and the finding keeps its
+general wording. A capacity ceiling was still reached; svcdoctor simply could not read which.
+
+**It is the outcome that earns the sentence, not the product.** LavinMQ reaches the same
+virtual-host value through its own reply wording and gets the same sentence. Nothing in svcdoctor
+branches on which implementation answered.
+
 ## Execution state versus diagnosis
 
 **This is the distinction to understand before automating anything.** They are two axes and

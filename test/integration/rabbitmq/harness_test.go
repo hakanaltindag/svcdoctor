@@ -50,6 +50,8 @@ const (
 	port409     = 56676 // 4.0.9, plaintext
 	port409TLS  = 56677 // 4.0.9, TLS
 	portStopped = 56678 // 4.2.0, stopped by RAB-16
+	// 56679 is the scenario broker's IPv6 publication; see compose.yaml.
+	portNodeLimit = 56683 // 4.2.0 TLS with connection_max = 0, for RAB-26
 )
 
 // The fixture's principals, created by `make rabbitmq-users`.
@@ -60,6 +62,11 @@ const (
 	passNoPerm  = "noperm-pw"
 	vhostLimit  = "limited" // max-connections 0
 	vhostAbsent = "no-such-vhost"
+
+	// A principal whose own max-connections is 0, so RAB-27 measures a *user*
+	// ceiling without a per-user limit on `app` refusing every other scenario.
+	userLimit = "ulimit"
+	passLimit = "ulimit-pw"
 )
 
 // certPath is the fixture CA, which is also the broker's own certificate.
@@ -77,6 +84,8 @@ func containerFor(port uint16) string {
 		return "svcd-rabbit-313"
 	case port409, port409TLS:
 		return "svcd-rabbit-409"
+	case portNodeLimit:
+		return "svcd-rabbit-nodelimit"
 	case portStopped:
 		return "svcd-rabbit-stop"
 	}

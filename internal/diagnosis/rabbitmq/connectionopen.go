@@ -82,6 +82,56 @@ const (
 	recommendConnectionNotPermitted = "Check the broker's own log for this connection " +
 		"attempt, and review any node, virtual host or user connection limits"
 
+	// The capacity-scope details, one per closed outcome.
+	//
+	// # What changes and what does not
+	//
+	// Each replaces detailConnectionNotPermitted for exactly one outcome. The
+	// first and last paragraphs are that constant's own, unchanged: the first
+	// still says what was ruled out, and the last still refuses cause, duration
+	// and remedy and still says a later run may succeed. Only the middle
+	// sentence is new, and it states the one thing the generic text hedges as
+	// *"Where the endpoint named a capacity ceiling"* — which of the three it
+	// was.
+	//
+	// The fourth generic sentence — *"Where svcdoctor could not classify the
+	// refusal, it declines to guess"* — is dropped here rather than carried,
+	// because on these three outcomes svcdoctor did classify it and the sentence
+	// would be describing a path this finding did not take.
+	//
+	// # The ceiling on what they may say (ADR 0091 section 8)
+	//
+	// They name **the scope of the limit the peer named**, and nothing else. Not
+	// that the limit is reached everywhere, not that it is too low, not that
+	// demand is abnormal, not that anything leaked, and not what to change. The
+	// distinction is the one PostgreSQL settled for SQLSTATE 53300: an
+	// authoritative refusal of *this* attempt is not proof of global capacity
+	// state.
+	//
+	// They interpolate nothing. No endpoint, no user, no virtual host, no
+	// product, no version, no numeric limit and no byte the peer sent. Each is a
+	// constant, so the strongest thing a hostile peer can do is fail to be
+	// classified — which yields the generic text.
+	detailCapacityPrefix = "svcdoctor authenticated successfully and the endpoint " +
+		"refused the connection for a reason other than a missing virtual host or a " +
+		"permission decision.\n"
+
+	detailCapacitySuffix = "\nThat is recorded as what it said and nothing more. It proves " +
+		"the endpoint refused at that moment; it proves nothing about why, for how long, " +
+		"or what to change, and a second run a moment later may succeed."
+
+	detailCapacityNode = detailCapacityPrefix +
+		"The endpoint named a connection limit scoped to the node." +
+		detailCapacitySuffix
+
+	detailCapacityVHost = detailCapacityPrefix +
+		"The endpoint named a connection limit scoped to the virtual host." +
+		detailCapacitySuffix
+
+	detailCapacityUser = detailCapacityPrefix +
+		"The endpoint named a connection limit scoped to the user." +
+		detailCapacitySuffix
+
 	summaryConnectionNotEstablished = "The connection could not be opened on this endpoint"
 
 	detailConnectionNotEstablished = "svcdoctor authenticated successfully and the terminal " +
@@ -168,7 +218,7 @@ func connectionOpenFinding(node domain.Evidence) (domain.FindingInput, bool) {
 			Confidence: domain.ConfidenceHigh,
 			Layer:      domain.LayerAuth,
 			Summary:    summaryConnectionNotPermitted,
-			Detail:     detailConnectionNotPermitted,
+			Detail:     connectionNotPermittedDetail(node),
 			// A capacity ceiling is a property of the endpoint at an instant, and
 			// a node-wide one is reached by every client at once — but a
 			// per-user ceiling is not, and svcdoctor does not separate them here.
@@ -189,6 +239,68 @@ func connectionOpenFinding(node domain.Evidence) (domain.FindingInput, bool) {
 			Recommendations:  recommend(recommendConnectionNotEstablished),
 		}, true
 	}
+}
+
+// capacityScopeDetail is the closed mapping from a capacity outcome to its
+// explanation.
+//
+// **A map keyed on the constants, never a match on the text.** There is no
+// prefix, no suffix, no trimming, no case folding and no fuzzy comparison: a
+// value that is not byte-equal to one of these three keys is not in the map and
+// gets nothing. That is what makes the mapping safe even if the closure upstream
+// were ever to regress — the defence does not depend on the producer's
+// invariant, it depends on this being a lookup.
+//
+// Only capacity outcomes appear. VHOST_NOT_FOUND and VHOST_ACCESS_REFUSED reach
+// their own finding codes and never this one; UNSPECIFIED and
+// UNSPECIFIED_TRUNCATED are svcdoctor saying it did not classify the refusal, and
+// giving either a scope would be inventing the very specificity they record the
+// absence of.
+var capacityScopeDetail = map[servicerabbitmq.CloseOutcome]string{
+	servicerabbitmq.CloseNodeConnectionLimit:  detailCapacityNode,
+	servicerabbitmq.CloseVHostConnectionLimit: detailCapacityVHost,
+	servicerabbitmq.CloseUserConnectionLimit:  detailCapacityUser,
+}
+
+// connectionNotPermittedDetail selects the explanation for one refusal.
+//
+// # It reads the node it is given, and no other
+//
+// The node is the one ConnectionOpen is building a finding for, and its
+// identifier is the finding's only EvidenceRef. There is no graph here and no
+// lookup by step, so another endpoint's outcome — or another target's — cannot
+// reach this sentence. That is structural rather than checked: this function
+// cannot see anything else.
+//
+// # Two gates, and the second is deliberately redundant
+//
+// The failure class must be RESOURCE_LIMIT_REACHED *and* the outcome must be one
+// of the three. The adapter already guarantees the pairing — classify() returns
+// that class for exactly these outcomes — so the first gate can never fail on
+// evidence a producer made. It is here because the consequence of the pairing
+// breaking is a specific sentence over a refusal that was never a capacity
+// refusal, and falling back to the generic text is the safe direction.
+//
+// Anything else returns detailConnectionNotPermitted, byte for byte: an absent
+// attribute, an empty value, an outcome svcdoctor does not map, and a value no
+// version of svcdoctor ever produced.
+func connectionNotPermittedDetail(node domain.Evidence) string {
+	if node.FailureClass() != domain.FailureResourceLimitReached {
+		return detailConnectionNotPermitted
+	}
+	value, ok := node.Attribute(servicerabbitmq.AttrCloseOutcome)
+	if !ok {
+		return detailConnectionNotPermitted
+	}
+	outcome, ok := value.Str()
+	if !ok {
+		return detailConnectionNotPermitted
+	}
+	detail, mapped := capacityScopeDetail[servicerabbitmq.CloseOutcome(outcome)]
+	if !mapped {
+		return detailConnectionNotPermitted
+	}
+	return detail
 }
 
 // vhostNotFoundDetail names the default when the run did not name a virtual
