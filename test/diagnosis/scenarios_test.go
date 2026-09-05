@@ -268,9 +268,15 @@ func TestS08TwoRulesOneConclusionConverge(t *testing.T) {
 		}
 	}
 
+	// Both routes write the same sentence, which since Phase 10.2a is what makes
+	// them one conclusion rather than two: prose is a merge precondition, and two
+	// rules that mean one claim share the constant that states it. The
+	// differing-prose half of this scenario is TestS08bTwoRoutesTwoClaimsStayTwo.
+	const oneClaim = "nothing accepted a connection on that port from this vantage point"
+
 	r := diagnose(t, g, false,
-		namedRule{"test/route-one", claim("s8-tcp", "one route to the claim")},
-		namedRule{"test/route-two", claim("s8-dns", "another route to the claim")})
+		namedRule{"test/route-one", claim("s8-tcp", oneClaim)},
+		namedRule{"test/route-two", claim("s8-dns", oneClaim)})
 
 	var merged []domain.Finding
 	for _, f := range r.report.Findings() {
@@ -283,6 +289,79 @@ func TestS08TwoRulesOneConclusionConverge(t *testing.T) {
 	}
 	if want := []domain.EvidenceID{"s8-dns", "s8-tcp"}; !slices.Equal(merged[0].EvidenceRefs(), want) {
 		t.Errorf("EvidenceRefs = %v, want the union %v", merged[0].EvidenceRefs(), want)
+	}
+	if merged[0].Summary() != oneClaim {
+		t.Errorf("Summary = %q, want the sentence both routes wrote", merged[0].Summary())
+	}
+}
+
+// TestS08bTwoRoutesTwoClaimsStayTwo is the other half of S08, through the same
+// pipeline.
+//
+// Two rules reach one code about one endpoint at one layer and say *different
+// things*. Until Phase 10.2a the engine merged them and published whichever
+// sentence sorted first by rule identity, discarding the other claim while
+// keeping its evidence. It now keeps both findings, and the report is longer and
+// true rather than shorter and partly invented.
+func TestS08bTwoRoutesTwoClaimsStayTwo(t *testing.T) {
+	s := newGraph(t)
+	dns := s.node("s8b-dns", "f.example:5432", domain.LayerDNS, "dns.lookup", domain.StatePass)
+	tcp := s.node("s8b-tcp", "f.example:5432", domain.LayerTCP, "tcp.connect", domain.StateFail)
+	s.parent(tcp, dns)
+	g := s.freeze()
+
+	subject, err := domain.NewEndpointSubject("f.example:5432")
+	if err != nil {
+		t.Fatalf("NewEndpointSubject: %v", err)
+	}
+	claim := func(ref domain.EvidenceID, summary string) diagnosis.Rule {
+		return func(diagnosis.RuleContext) []domain.Finding {
+			f, err := domain.NewFinding(domain.FindingInput{
+				Code: "TCP_CONNECTION_REFUSED", Kind: domain.FindingKindConfirmed,
+				Severity: domain.SeverityError, Confidence: domain.ConfidenceHigh,
+				Layer: domain.LayerTCP, Subject: subject, Summary: summary,
+				EvidenceRefs: []domain.EvidenceID{ref},
+			})
+			if err != nil {
+				t.Fatalf("NewFinding: %v", err)
+			}
+			return []domain.Finding{f}
+		}
+	}
+
+	const (
+		claimA = "the first port this run tried refused the connection"
+		claimB = "the second port this run tried refused the connection"
+	)
+
+	r := diagnose(t, g, false,
+		namedRule{"test/route-one", claim("s8b-tcp", claimA)},
+		namedRule{"test/route-two", claim("s8b-dns", claimB)})
+
+	var kept []domain.Finding
+	for _, f := range r.report.Findings() {
+		if f.Code() == "TCP_CONNECTION_REFUSED" {
+			kept = append(kept, f)
+		}
+	}
+	if len(kept) != 2 {
+		t.Fatalf("got %d findings, want both claims kept: %v", len(kept), kept)
+	}
+
+	got := map[string][]domain.EvidenceID{}
+	for _, f := range kept {
+		got[f.Summary()] = f.EvidenceRefs()
+	}
+	for summary, wantRef := range map[string]domain.EvidenceID{claimA: "s8b-tcp", claimB: "s8b-dns"} {
+		refs, present := got[summary]
+		if !present {
+			t.Errorf("the claim %q did not survive; a sentence a reader acts on is not "+
+				"chosen by a tie-break (ADR 0081 section 2.2b)", summary)
+			continue
+		}
+		if !slices.Equal(refs, []domain.EvidenceID{wantRef}) {
+			t.Errorf("the claim %q cites %v, want only its own %q", summary, refs, wantRef)
+		}
 	}
 }
 

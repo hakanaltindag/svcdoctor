@@ -63,12 +63,16 @@ func TestDIAG024IdentityIsCodeAndSubject(t *testing.T) {
 // finding with no subject has identity (Code, nothing), and there can be at most
 // one of it.
 func TestARunLevelClaimHasOneIdentity(t *testing.T) {
+	// The two routes state one sentence. Identity is what this test is about,
+	// and since Phase 10.2a prose is a merge precondition, so routes that
+	// disagreed in prose would demonstrate the precondition rather than the
+	// identity. The differing-prose case is TestC03.
 	a := findingAbout(t, "TCP_CONNECTION_REFUSED", domain.Subject{},
 		domain.FindingKindConfirmed, domain.SeverityError, domain.ConfidenceHigh,
-		"one route to the claim", "a-tcp")
+		"the run reached one claim", "a-tcp")
 	b := findingAbout(t, "TCP_CONNECTION_REFUSED", domain.Subject{},
 		domain.FindingKindConfirmed, domain.SeverityError, domain.ConfidenceHigh,
-		"another route to the claim", "a-dns")
+		"the run reached one claim", "a-dns")
 
 	if IdentityOf(a) != IdentityOf(b) {
 		t.Fatal("two run-level claims with one code got two identities")
@@ -98,8 +102,8 @@ func TestDIAG025TheMergeTable(t *testing.T) {
 		Confidence:       domain.ConfidenceLow,
 		Layer:            domain.LayerTCP,
 		Subject:          subject,
-		Summary:          "z the weaker route, alphabetically last",
-		Detail:           "the weaker route's detail",
+		Summary:          "one claim about this endpoint, reached two ways",
+		Detail:           "the shared detail both routes write",
 		EvidenceRefs:     []domain.EvidenceID{"a-dns"},
 		Recommendations:  []domain.Recommendation{recommendation(t, "look at the second thing")},
 		VantageDependent: false,
@@ -116,8 +120,8 @@ func TestDIAG025TheMergeTable(t *testing.T) {
 		Confidence:       domain.ConfidenceHigh,
 		Layer:            domain.LayerTCP,
 		Subject:          subject,
-		Summary:          "a the stronger route, alphabetically first",
-		Detail:           "the stronger route's detail",
+		Summary:          "one claim about this endpoint, reached two ways",
+		Detail:           "the shared detail both routes write",
 		EvidenceRefs:     []domain.EvidenceID{"a-tcp"},
 		Recommendations:  []domain.Recommendation{recommendation(t, "look at the first thing")},
 		VantageDependent: true,
@@ -150,11 +154,15 @@ func TestDIAG025TheMergeTable(t *testing.T) {
 	if got.Severity() != domain.SeverityError {
 		t.Errorf("Severity = %s, want the maximum ERROR", got.Severity())
 	}
-	if got.Summary() != strong.Summary() {
-		t.Errorf("Summary = %q, want the tie-break winner's (a/stronger)", got.Summary())
+	// Prose is MUST_EQUAL since Phase 10.2a, so there is nothing to choose: both
+	// routes wrote this sentence and the merged finding carries it unchanged.
+	// The rule identities here are deliberately reversed alphabetically against
+	// the strong/weak split, so a surviving tie-break would be visible.
+	if got.Summary() != strong.Summary() || got.Summary() != weak.Summary() {
+		t.Errorf("Summary = %q, want the sentence both routes wrote", got.Summary())
 	}
-	if got.Detail() != strong.Detail() {
-		t.Errorf("Detail = %q, want the winner's", got.Detail())
+	if got.Detail() != strong.Detail() || got.Detail() != weak.Detail() {
+		t.Errorf("Detail = %q, want the detail both routes wrote", got.Detail())
 	}
 	if !got.VantageDependent() {
 		t.Error("VantageDependent = false, want the logical OR")
@@ -167,10 +175,12 @@ func TestDIAG025TheMergeTable(t *testing.T) {
 	for _, r := range got.Recommendations() {
 		actions = append(actions, r.Action())
 	}
-	want := []string{"look at the first thing", "look at the second thing"}
+	// The union's order is derived from the findings' own content — evidence
+	// first — and never from a rule's name. "a-dns" sorts before "a-tcp", so the
+	// weaker route's advice comes first even though its rule identity is "b/".
+	want := []string{"look at the second thing", "look at the first thing"}
 	if !slices.Equal(actions, want) {
-		t.Errorf("Recommendations = %v, want the union with the winner's order first %v",
-			actions, want)
+		t.Errorf("Recommendations = %v, want the content-ordered union %v", actions, want)
 	}
 }
 
@@ -181,12 +191,16 @@ func TestDIAG025TheMergeTable(t *testing.T) {
 func TestDIAG026ConfidenceDoesNotAccumulate(t *testing.T) {
 	_, subject := linearGraph(t)
 
+	// Five independent routes to one claim, all writing the same sentence —
+	// which is what "the same claim reached five ways" means once prose is a
+	// merge precondition. Their evidence differs, so the union grows while the
+	// confidence does not.
 	var in []AttributedFinding
 	for i, rule := range []RuleID{"a/one", "b/two", "c/three", "d/four", "e/five"} {
 		in = append(in, AttributedFinding{Rule: rule, Finding: findingAbout(t,
 			"TCP_CONNECTION_REFUSED", subject, domain.FindingKindHypothesis,
 			domain.SeverityWarn, domain.ConfidenceMedium,
-			"route "+string(rune('a'+i)), "a-tcp")})
+			"one claim, reached independently", domain.EvidenceID("a-route-"+string(rune('a'+i))))})
 
 		merged, err := Converge(in)
 		if err != nil {

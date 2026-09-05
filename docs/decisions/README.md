@@ -138,6 +138,19 @@ correct deployment. Finding codes move 61 → **63**, both `KAFKA_`; the observa
 because severity is never a count-derived cluster verdict, and the hypothesis cannot reach
 `HIGH` because it declares `AuthorityNone` and the ladder admits `HIGH` on nothing else.
 
+**0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
+§2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
+tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:
+§2.2 had said *explicitly* that `Summary` and `Detail` come from the tie-break winner, and that
+row is now withdrawn. What forced it was three reachable Kafka shapes in which the engine chose
+between two true sentences and published one of them over both routes' evidence — including one
+that promoted a hypothesis about an unmeasured broker into a confirmed claim. The premise the
+original row rested on was that a finding's prose says nothing its structured fields do not, and
+Phase 10.2's rules — which name a broker node identifier in prose under a subject carrying only
+the endpoint — falsify it. Prose is now a merge **precondition**, compared byte for byte and
+never fuzzily; **§2.6a** adds the rename property that follows, and the superseded paragraphs are
+left standing with markers so the reasoning that was wrong stays legible.
+
 **0071 to 0074 have left this list.** Phase 9.0 froze the multi-target
 configuration and execution contract before any multi-target code exists, and all four bind from
 Phase 9.1, which implemented all four: **0071** (one strict YAML document, its own `version: 1`, a required and explicit target

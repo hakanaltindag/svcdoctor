@@ -53,9 +53,19 @@ func stateRule(t *testing.T) Rule {
 		var out []domain.Finding
 		for _, node := range ctx.Graph.Nodes() {
 			code := "TCP_STATE_" + node.State().String()
+			// The summary is a function of what the finding *claims* — the state
+			// and the subject — and not of the node it happened to read.
+			//
+			// It used to name the evidence identifier, and that made every
+			// finding's prose unique, which since Phase 10.2a means nothing
+			// merges. The change is not a weakening: a rule whose prose names
+			// something its subject does not carry is exactly the shape ADR 0081
+			// section 2.2b found publishing one broker's sentence over two
+			// brokers' evidence. This fixture now models a well-formed rule, and
+			// TestC03 and TestC04 model the ill-formed one deliberately.
 			out = append(out, findingAbout(t, code, node.Subject(),
 				domain.FindingKindConfirmed, domain.SeverityInfo, domain.ConfidenceHigh,
-				"the recorded state of "+string(node.ID()), node.ID()))
+				"the subject was last recorded "+node.State().String(), node.ID()))
 		}
 		return out
 	}

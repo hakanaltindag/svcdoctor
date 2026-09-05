@@ -5089,6 +5089,25 @@ Two of the previous section's open items are closed by it and one is not:
 | **No Kafka DEEP surface exists.** Partition, replica, ISR, leader and consumer-group state are a different diagnostic surface and BASIC requests none of it | Its own phase and its own ADR, if ever |
 | **The topology observation and the per-endpoint findings restate the same failure at two scopes.** Three unreachable brokers produce three `ERROR` findings and one `INFO` count | Deliberate: the impact is per endpoint and the scope is per exchange. Reopens only if a renderer study shows the pair reads as duplication |
 
+## Phase 10.2A — Convergence semantic closure: COMPLETE
+
+ADR 0081 **§2.2b** (supersession) and **§2.6a** (the rename property). Prose is a merge
+precondition; `RuleID` reaches no merged field. Mutation closure **8 planted, 8 caught, 0
+survivors**; no schema change, no new finding code, no golden byte moved. See
+`docs/validation/PHASE102A_CONVERGENCE_CLOSURE.md`.
+
+It closed the item the Phase 10.1B section left open — *"`Summary` and `Detail` still come from
+the merge tie-break winner… not an open question; recorded so the one remaining tie-break is
+visible"*. It **was** an open question, and making it visible is what let Phase 10.2A answer it.
+
+### Open items
+
+| Item | Condition |
+|---|---|
+| **Two findings may now share a code, subject and layer while saying different things.** That is the correct output and it looks like duplication | Reopens only if a renderer study shows readers misread the pair. The fix would be presentational — grouping — never re-merging |
+| **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
+| **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6

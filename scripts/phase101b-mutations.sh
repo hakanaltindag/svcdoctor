@@ -246,11 +246,24 @@ mutate B11 "semantic identity drops the subject, so two endpoints merge into one
 assert "SemanticIdentity{code: f.Code()}" in s' \
   ./test/diagnosis 'TestS09SameCodeDifferentSubjectStaysTwoResults|TestS03TwoBranchesFailingAtDifferentLayers'
 
+# B11b was re-anchored in Phase 10.2A and made stronger.
+#
+# The mergeKey it edited was a one-line struct literal of (layer, discriminator);
+# 10.2A widened it to (layer, summary, detail, discriminator) and added a
+# belt-and-braces recheck inside mergeGroup, so the original single replacement
+# no longer matched and the plant reported itself unplantable. Deleting it would
+# have removed a live guard because an implementation changed shape.
+#
+# The plant now removes **both** halves of the layer precondition — the key and
+# the recheck — which is a strictly harder mutation to catch than the original,
+# since either alone would still refuse the merge.
 mutate B11b "a differing Layer no longer prevents convergence" \
   internal/diagnosis/converge.go \
-  's = s.replace("""	return mergeKey{layer: f.Layer(), discriminator: f.Discriminator()}""",
-"""	return mergeKey{discriminator: f.Discriminator()}""", 1)
-assert "return mergeKey{discriminator: f.Discriminator()}" in s' \
+  's = s.replace("""		layer:         f.Layer(),""", """		layer:         domain.LayerUnspecified,""", 1)
+assert "layer:         domain.LayerUnspecified," in s
+s = s.replace("""		if af.Finding.Layer() != rep.Finding.Layer() {""",
+"""		if false && af.Finding.Layer() != rep.Finding.Layer() {""", 1)
+assert "if false && af.Finding.Layer()" in s' \
   ./internal/diagnosis 'TestMC02DifferentLayerMustNotConverge'
 
 echo

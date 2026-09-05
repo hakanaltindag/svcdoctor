@@ -187,14 +187,34 @@ does not yet support — and the second case is an ADR, not a workaround.
     no single generic catch-all, and never an executable command.
 18. **Text is deterministic.** Same graph, same bytes: sort anything collected from a map or a
     traversal.
-19. **Two rules that can reach one `(code, subject, layer)` must state one claim in two
-    wordings.** Convergence takes `summary` and `detail` from a `RuleID` tie-break (ADR 0081
-    §2.2), which is safe only under that condition — and the condition is a **rule author's
-    obligation**, not something the engine can check. Phase 10.2 found the first pair of codes
-    for which it would not hold: two topology counts over one exchange would be *"None of the
-    3"* and *"1 of the 3"*, and a tie-break would publish a number nobody measured. The
-    resolution is to make the shape unreachable rather than to merge it correctly. If a rule
-    cannot guarantee this, it must not be able to produce two findings with one identity.
+19. **Two findings merge only when they already agree about everything a merged finding
+    *takes*.** This is the rule-authoring contract, and it is mechanical — answering "can these
+    two merge?" needs no knowledge of rule names, wiring order or the merge implementation:
+
+    ```text
+    same code  AND  same subject          -> they are candidates
+      AND same layer
+      AND compatible discriminator         (at most one distinct non-empty value)
+      AND byte-identical summary
+      AND byte-identical detail
+                                           -> they merge into one finding whose
+                                              evidence is the union
+    otherwise                              -> they remain two findings
+    ```
+
+    Everything else — severity, confidence, kind, vantage dependence, the evidence union, the
+    recommendation union — is reconciled by an order-independent operation and never chosen.
+
+    **Remaining distinct is the safe outcome.** Two findings that look like duplicates are two
+    claims that were both made; one finding whose sentence describes half of its own evidence is
+    a claim nobody made. Phase 10.2A measured three reachable Kafka shapes where the old
+    tie-break produced the second, including one that promoted a hypothesis about an unmeasured
+    broker into a confirmed claim. See ADR 0081 §2.2b.
+
+    **The practical consequence for a rule author:** if your prose names something your subject
+    does not carry — a broker number, an address, a count — then two of your findings about one
+    subject will *not* merge, and that is correct. If you want two rules to converge, have them
+    share the constant that states the claim.
 
 **The check that catches the rest:** render the finding with the hostnames removed and ask
 whether an on-call engineer who has never read this repository knows what failed, how sure we

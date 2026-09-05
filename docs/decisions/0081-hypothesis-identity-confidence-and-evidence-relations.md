@@ -3,6 +3,9 @@
 **Status:** Accepted
 **Date:** 2026-09-02
 **Phase:** 10.0
+**Amended:** Phase 10.1B (§2.2a, a clarification) and **Phase 10.2A (§2.2b and §2.6a, a
+supersession of one row of §2.2's merge table)**. The amendments are dated in place and the
+superseded text is left standing with a marker, so the reasoning that was wrong stays legible.
 **Refines:** ADR 0014 (findings reference evidence by identifier), ADR 0017 (which deferred
 finding identity), `docs/FINDINGS.md` §3.1.
 
@@ -48,9 +51,9 @@ When two rules produce findings with the same identity, the engine merges them:
 | `Confidence` | the **maximum**, but only if §2.3's ladder admits it; see below |
 | `Kind` | `CONFIRMED` wins over `HYPOTHESIS`: a proof and a guess about the same thing means it was proven |
 | `Severity` | the maximum |
-| `Summary` / `Detail` | the winner's, chosen by the deterministic tie-break in §2.6 |
-| `Recommendations` | union by action text, order preserved from the tie-break winner |
-| `Discriminator` | the winner's; empty once `Kind` is `CONFIRMED` |
+| `Summary` / `Detail` | **superseded by §2.2b: MUST_EQUAL, a merge precondition.** Originally: the winner's, chosen by the deterministic tie-break in §2.6 |
+| `Recommendations` | union by action text. **§2.2b replaces the ordering:** content order, not the tie-break winner's |
+| `Discriminator` | the group's one non-empty value; empty once `Kind` is `CONFIRMED` |
 | `VantageDependent` | logical OR — if either route is vantage-dependent, the claim is |
 
 **Confidence does not add up.** Two `MEDIUM` routes to the same conclusion produce `MEDIUM`,
@@ -104,6 +107,13 @@ two routes state one claim at one layer, and which wording survives changes
 nothing machine-readable. Prose is explicitly not identity (§4) and is explicitly
 free to be reworded (`docs/FINDINGS.md` §3.1 rule 13).
 
+> **Superseded by §2.2b (Phase 10.2A).** The paragraph above is left as written
+> because the reasoning is legible and the mistake in it is worth seeing. Its
+> hidden premise is that a finding's prose says nothing its structured fields do
+> not, and Phase 10.2's Kafka rules — which name a broker node identifier in
+> prose under a subject that carries only the endpoint — falsify it. Prose is now
+> a merge precondition.
+
 **Why this is not an identity change.** Adding `Layer` to `(Code, Subject)` would
 produce the same output and would rewrite §2.1. Expressing it as a merge
 precondition leaves the identity definition alone and fills the gap §2.2 left,
@@ -120,6 +130,136 @@ at every construction site. `VantageDependent` varies for three codes and is
 reconciled by logical OR, which is order-independent and is what OR is for. The
 full matrix is in
 `docs/validation/PHASE101B_DIAGNOSTIC_ACTIVATION_VALIDATION.md`.
+
+### 2.2b Supersession (Phase 10.2A): prose is a merge precondition
+
+**Status of this section:** it **supersedes** one row of §2.2's table. §2.2a was a
+clarification — it filled a silence. This is not: §2.2 said *"`Summary` / `Detail` — the
+winner's, chosen by the deterministic tie-break in §2.6"* explicitly, §2.2a re-affirmed it, and
+Phase 10.1B's validation defended it at length. That decision is withdrawn.
+
+| Field | §2.2 said | Now |
+|---|---|---|
+| `Summary` | the tie-break winner's | **MUST_EQUAL — a merge precondition** |
+| `Detail` | the tie-break winner's | **MUST_EQUAL — a merge precondition** |
+| `Recommendations` | union by action text, winner's order first | union by action text, **content order** |
+
+Everything else in §2.2 stands unchanged.
+
+#### Why the original argument fails
+
+It was: once `Code`, `Subject` and `Layer` all match, the two routes state one claim at one
+layer, so which wording survives changes nothing a consumer parses. Prose is not identity (§4)
+and is free to be reworded (`docs/FINDINGS.md` §3.1 rule 13).
+
+The hidden premise is that **a finding's prose says nothing its structured fields do not**.
+Phase 10.2 built the first rules that break it, and Phase 10.2A measured three shapes that a
+real Kafka cluster can produce:
+
+1. **Two brokers advertised at one endpoint.** `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` carries
+   the broker node identifier in its summary and only the endpoint in its subject — deliberately,
+   because `docs/REPORT_SCHEMA.md` has no subject kind for a service-internal integer (ADR 0034
+   §12). Two such findings shared an identity and a layer while describing different brokers.
+   The merge published *"for broker node 2"* over evidence from nodes 2 and 7, and node 7's
+   claim ceased to exist. **ADR 0034 §10 had already decided the opposite** — *"two
+   advertisements naming one endpoint are two facts and produce two findings; nothing
+   deduplicates by endpoint or by node identifier"* — so the tie-break silently overrode an
+   Accepted decision.
+2. **The same shape for `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE`.**
+3. **A CONFIRMED claim and a HYPOTHESIS at one endpoint.** The unset discriminator folded into
+   the set one, `CONFIRMED` absorbed `HYPOTHESIS`, the discriminator was cleared, and the report
+   stated that an endpoint whose paths were never finished measuring *could not be reached*.
+   **Less evidence produced a stronger claim**, which is the failure this project names by name.
+
+None of these is a defect in a rule. Each rule said something true; the engine chose between two
+true sentences and published one of them over both sets of evidence.
+
+#### The decision
+
+**A group may be merged only when its members already agree about every field the merged
+finding *takes* rather than *reconciles*.** Concretely, the merge preconditions are now:
+
+| Field | Precondition |
+|---|---|
+| `Code`, `Subject` | equal — they are the identity |
+| `Layer` | equal (§2.2a) |
+| `Discriminator` | at most one distinct non-empty value (§2.2a) |
+| `Summary` | **equal** |
+| `Detail` | **equal** |
+
+Where they differ, both findings are kept. `Severity`, `Confidence`, `Kind`,
+`VantageDependent`, `EvidenceRefs` and `Recommendations` remain reconciled exactly as §2.2 says,
+because every one of those operations is order-independent.
+
+This is a **strict narrowing**. A group that used to merge either still merges byte for byte, or
+becomes two findings that each state exactly what their rule stated. Convergence can now produce
+*more* findings than before and never a *different* one, which is why no golden output moved.
+
+#### Byte equality, and no fuzzy matching
+
+Two rules that mean one claim write one sentence, and the ordinary way to do that is to share a
+constant. Byte equality is the only comparison a rule author can predict and a test can state.
+
+Similarity scoring is refused for the same reason §2.1 refuses prose as identity: it would make
+a merge depend on a threshold, a typo would silently split or join conclusions, and no reviewer
+could tell which. **If two rules cannot share a constant, they did not mean the same thing.**
+
+#### What replaces the tie-break
+
+Nothing. There is no winner. Every field a merged finding takes is a precondition, so the
+representative could be any member without changing a byte — which is what makes §2.6a below a
+structural property rather than a tested hope.
+
+#### The consequence that is a feature, not a regression
+
+A report may now carry two findings with one code, one subject and one layer, saying different
+things. That looks like duplication and is not: it is two claims that were always there, one of
+which used to be discarded. A renderer showing both is showing what was measured. The
+alternative — one finding whose sentence describes half of its own evidence — is the shape this
+supersession exists to make unreachable.
+
+#### The one production convergence, unaffected
+
+Kafka reaches `KAFKA_AUTH_MECHANISM_NOT_OFFERED` about one endpoint from the SASL handshake step
+and the SASL authenticate step, with byte-identical summary, detail and recommendation. It is a
+genuine two-routes-one-claim case, it still merges, and the merged finding cites both nodes.
+
+#### A note on §2.1's run-level sentence
+
+§2.1 ends *"a finding with no subject has identity `(Code, ∅)` and there can be at most one of
+it"*. That is a statement about **identity**, and it stands. It is not a guarantee that two
+run-level findings always merge into one — under these preconditions they merge when they say
+the same thing and stay apart when they do not, exactly as for subject-bearing findings. No
+run-level finding code exists (ADR 0073 §12 declined to create one), so nothing depends on the
+stronger reading.
+
+### 2.6a The rule-identity rename property (Phase 10.2A)
+
+**Renaming a `RuleID`, while preserving the rule's semantics and the registration set, must not
+change the canonical diagnostic meaning of a report.**
+
+A rule identity is svcdoctor's internal name for a piece of code. It is not serialized (ADR 0080
+§2.5), no consumer can see it, and renaming one is a refactor. A claim that moved when a rule was
+renamed would mean the report encoded a fact about svcdoctor's source tree, which is not a fact
+about the target.
+
+It must never alter `Layer`, `Kind`, `Severity`, `Confidence`, `Discriminator`, recommendation
+meaning **or order**, `Summary` or `Detail`.
+
+Before Phase 10.2A this property did not hold, in two places. Prose came from the RuleID winner,
+so a rename could change the published sentence. And the recommendation union was ordered
+"winner first, then by RuleID", so a rename could reorder a user-visible array. Both are gone:
+prose is a precondition, and the union is ordered by the findings' own content — evidence, then
+the reconciled fields, then the advice.
+
+§2.6's tie-break by `RuleID` therefore no longer has a subject. It is retained in this record as
+history: the ordering it defined is the one this section removes.
+
+**How it is held.** `TestC06ARuleIDRenameCannotChangeAnything` rewrites every identity in an
+input through five namings — including ones that reverse the original alphabetical order, and one
+that gives every rule the same name — and requires the encoded output to be byte-identical.
+`TestC06TheRenamePropertyHoldsForRecommendationOrderToo` isolates the array-order half. Mutation
+`C-M04` restores the RuleID sort and must be caught.
 
 ### 2.3 The confidence ladder
 
@@ -254,6 +394,21 @@ needing its own evidence, and the discriminator already delivers the operational
 **Ranking competing hypotheses.** Rejected. Ranking is choosing, and the premise of the scenario
 is that svcdoctor cannot choose.
 
+**Five models for prose ownership, weighed in Phase 10.2A** before §2.2b chose the second:
+
+| | Model | Verdict |
+|---|---|---|
+| A | keep the `RuleID` winner | **rejected** — it is already publishing a claim no rule made, on three reachable Kafka shapes, and "it is deterministic" answers a different question from "it is true" |
+| B | **prose MUST_EQUAL for merge eligibility** | **selected** — mechanical, byte-comparable, no schema change, and a strict narrowing: it can only ever produce more findings, never a different one |
+| C | rules emit no prose; the engine generates it from a typed semantic result | rejected for now — it needs a typed payload per finding code, which is a large model addition with one motivating case, and it moves every sentence in the tree out of the package that owns the claim. It is the right answer *if* B ever forces a rule author to duplicate a constant across packages; nothing does today |
+| D | one "primary" rule owns prose, others contribute evidence only | rejected — it re-creates the arbitrary choice as a wiring decision, and the composition root would then decide what a report says |
+| E | a typed payload determines canonical prose | the same as C with the same blocker; recorded separately because it could arrive without C's renderer implications |
+| F | similarity matching on prose | rejected outright — a threshold decides a merge, a typo splits or joins conclusions silently, and no reviewer can tell which. §2.1 already refuses prose as identity for this reason |
+
+The condition that would reopen C or E: a service where two rules genuinely mean one claim and
+cannot share a constant because they live in different packages. Kafka's one real convergence
+shares a table entry, so it does not.
+
 ## 5. Security implications
 
 §2.7 is the security-relevant clause: it keeps attacker-controlled text out of the prose surface
@@ -281,6 +436,19 @@ is unaffected because severity is merged by maximum.
 - Unit: §2.2a's preconditions — same identity and same layer converges, same
   identity and different layer does not, and no canonical field is chosen by rule
   order (`internal/diagnosis/mergecompat_test.go`).
+- Unit: §2.2b's preconditions and §2.6a's rename property — the C01-C10 closure
+  suite in `internal/diagnosis/convergeclosure_test.go`, and the three Kafka
+  shapes that forced them in `internal/diagnosis/kafka/convergence_test.go`.
+- Property: renaming every rule identity, including to one shared name, produces
+  byte-identical output.
+- Static guard: every finding code reachable from more than one production rule
+  is inventoried with the reason it is safe
+  (`test/security/convergenceinventory_test.go`), with two non-vacuity proofs —
+  the scan must find the one real pair, and must see through a package-level
+  claim table.
+- Mutation: `scripts/phase102a-mutations.sh` — restore the layer, summary,
+  detail and recommendation-order tie-breaks; merge incompatible discriminators;
+  merge distinct subjects; lose evidence.
 - Mutation: accumulate confidence on convergence; treat missing evidence as contradiction;
   allow `HIGH` for a hypothesis without direct authority; break merge ties by wiring order;
   deduplicate by summary text.

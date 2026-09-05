@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
@@ -82,13 +83,26 @@ func (i SemanticIdentity) compare(other SemanticIdentity) int {
 
 // AttributedFinding is one finding and the rule that produced it.
 //
-// Convergence needs the attribution for one reason only: the tie-break. When two
-// rules reach one conclusion, the merged finding takes its prose from one of
-// them, and ADR 0081 section 2.6 breaks that tie by RuleID ascending. The
-// alternative — "whichever rule ran first" — would make wiring order observable
-// in a report, which is the property every determinism guarantee here rests on.
+// # The attribution no longer decides anything
+//
+// It used to. Until Phase 10.2a the merged finding took its prose from a winner
+// chosen by RuleID ascending, and the attribution existed to break that tie.
+// ADR 0081 section 2.2b removed the tie: prose is now a merge **precondition**,
+// so every member of a group already agrees about it and there is nothing left
+// to choose. See mergeGroup.
+//
+// The field stays for two reasons that are not tie-breaking. It is validated —
+// a finding attributed to something that is not a rule identity is a defect in
+// the caller, and refusing it here is cheaper than discovering it in a report.
+// And it is what a debugger and a test failure message need in order to answer
+// "which rule said this", which no report field answers (ADR 0080 section 2.5).
+//
+// **Nothing downstream may read it.** TestC06ARuleIDRenameCannotChangeAnything
+// permutes every Rule in an input and requires byte-identical output, which is
+// the structural form of the property ADR 0081 section 2.6a states.
 type AttributedFinding struct {
-	// Rule is the identity the finding's producer was wired in under.
+	// Rule is the identity the finding's producer was wired in under. It is
+	// validated and then ignored.
 	Rule RuleID
 
 	// Finding is what the rule concluded.
@@ -120,8 +134,9 @@ type AttributedFinding struct {
 //	Severity          the maximum               — ordinal, order-independent
 //	Kind              CONFIRMED absorbs HYPOTHESIS
 //	VantageDependent  BOOLEAN_JOIN              — logical OR
-//	Recommendations   SEMANTIC_DEDUP_UNION      — by action text, winner's order first
-//	Summary/Detail    the winner's              — ADR 0081 section 2.2, explicitly
+//	Summary           MUST_EQUAL                — a merge precondition since 10.2a
+//	Detail            MUST_EQUAL                — a merge precondition since 10.2a
+//	Recommendations   SEMANTIC_DEDUP_UNION      — by action text, content order
 //
 // # Confidence does not add up
 //
@@ -132,25 +147,27 @@ type AttributedFinding struct {
 // frozen property: a merged finding reaches HIGH only if one of its inputs
 // independently qualified for HIGH.
 //
-// # Determinism
+// # Determinism, and why nothing is chosen any more
 //
-// The result is the same for any input order: every merged field is either
-// order-independent (max, union, OR) or taken from a winner chosen by a total
-// order over (RuleID, Summary, Detail). Merging is therefore commutative and
-// associative, which is what ADR 0081 section 7 asks to be proven.
+// The result is the same for any input order, and it no longer depends on a
+// winner at all: every field is either a precondition every member already
+// agrees about, or reconciled by an order-independent operation — maximum,
+// absorption, logical OR, a sorted union. Merging is therefore commutative and
+// associative, which is what ADR 0081 section 7 asks to be proven, and it is
+// additionally invariant under renaming the rules that produced the input.
 //
-// # Why Summary and Detail may come from a winner and Layer may not
+// # Why prose is a precondition and not a reconciled field
 //
-// Prose is explicitly not identity (ADR 0081 section 4) and is explicitly free
-// to be reworded (docs/FINDINGS.md section 3.1 rule 13), and ADR 0081 section
-// 2.2 assigns it to the tie-break winner on purpose. Once Code, Subject and
-// Layer all match, the two routes are stating one claim at one layer, so which
-// wording survives changes nothing a consumer parses.
-//
-// Layer is the opposite: it is structured metadata a consumer reads, and it is
-// one of the keys domain.SortFindings orders by. ADR 0081's table does not
-// mention it at all. Phase 10.1a filled that silence with "the winner's" and
-// Phase 10.1b measured what that does — see mergeable.
+// Phase 10.1a and 10.1b took ADR 0081 section 2.2 at its word and let the prose
+// come from a tie-break winner, on the argument that once Code, Subject and
+// Layer match the two routes state one claim and only the wording differs.
+// Phase 10.2a measured three production shapes where the argument fails,
+// because a rule may name in its prose something that is not in its subject —
+// a Kafka broker node identifier, for instance, under a subject that is only
+// the endpoint. Merging then published one broker's sentence over two brokers'
+// evidence, and in the worst shape promoted a hypothesis about an unmeasured
+// broker into a confirmed claim. See mergeable for the three, and ADR 0081
+// section 2.2b for the decision that replaced the row.
 //
 // The returned findings are in the canonical order domain.SortFindings defines.
 func Converge(in []AttributedFinding) ([]domain.Finding, error) {
@@ -208,6 +225,8 @@ func Converge(in []AttributedFinding) ([]domain.Finding, error) {
 // without inventing a value neither rule stated".
 type mergeKey struct {
 	layer         domain.Layer
+	summary       string
+	detail        string
 	discriminator string
 }
 
@@ -243,16 +262,80 @@ type mergeKey struct {
 // anybody asked. A CONFIRMED merge clears it entirely, so no conflict survives
 // there either.
 //
+// # Summary and Detail, added in Phase 10.2a
+//
+// They are MUST_EQUAL, and this reverses the one row of ADR 0081 section 2.2
+// that assigned them to a tie-break winner. ADR 0081 section 2.2b records the
+// supersession; what forced it was measurement, not argument.
+//
+// The row was defended on the grounds that once Code, Subject and Layer all
+// match, two routes state one claim at one layer and only the wording differs.
+// **That premise is false for a rule that names something in its prose which is
+// not in its subject.** Three production shapes proved it, all reachable:
+//
+//   - Two brokers advertised at one endpoint. `KAFKA_ADVERTISED_ENDPOINT_
+//     UNREACHABLE` names the broker node identifier in its summary and the
+//     endpoint in its subject, so the two findings shared an identity and a
+//     layer while describing different brokers. Merging published *"for broker
+//     node 2"* over evidence from nodes 2 and 7, and node 7's claim vanished.
+//     ADR 0034 section 10 had already decided the opposite in as many words —
+//     *"two advertisements naming one endpoint are two facts and produce two
+//     findings"* — so the merge silently overrode an Accepted decision.
+//   - The same shape for `KAFKA_ADVERTISED_ENDPOINT_UNUSABLE`.
+//   - The same endpoint carrying a CONFIRMED claim about one broker and a
+//     HYPOTHESIS about another. Absorption promoted the hypothesis, dropped its
+//     discriminator, and published *"could not be reached"* about a broker whose
+//     paths were never finished measuring. Less evidence produced a stronger
+//     claim, which is the failure this project names by name.
+//
+// So prose joins the preconditions rather than the reconciled fields. It is a
+// **strict narrowing**: a group that used to merge either still merges byte for
+// byte, or becomes two findings that each state exactly what their rule stated.
+// Convergence can now produce more findings than before and never a different
+// one. Where two rules genuinely mean one claim, they already write one sentence
+// — `KAFKA_AUTH_MECHANISM_NOT_OFFERED` reaches one endpoint from two protocol
+// steps with byte-identical summary, detail and recommendations, and still
+// merges into one finding citing both nodes.
+//
+// **No fuzzy matching, and that is deliberate.** Byte equality is the only
+// comparison a test can state and a rule author can predict. If two rules mean
+// the same thing they can share a constant; if they cannot share a constant they
+// did not mean the same thing (ADR 0081 section 2.2b).
+//
 // # What is not in this key, and why
 //
 // Severity, Confidence, Kind and VantageDependent are all reconciled by an
 // order-independent operation — maximum, maximum, absorption, logical OR — so
 // none of them can inherit a value because a rule sorted first. EvidenceRefs and
-// Recommendations are unions. Summary and Detail come from the winner, which
-// ADR 0081 section 2.2 decides explicitly and which is safe precisely because
-// everything a consumer parses now has to match.
+// Recommendations are unions, and Phase 10.2a made the union's order
+// content-derived so that it cannot depend on a rule's name either.
 func mergeable(f domain.Finding) mergeKey {
-	return mergeKey{layer: f.Layer(), discriminator: f.Discriminator()}
+	return mergeKey{
+		layer:         f.Layer(),
+		summary:       f.Summary(),
+		detail:        f.Detail(),
+		discriminator: f.Discriminator(),
+	}
+}
+
+// sameClaimAs reports whether two keys agree about everything but the
+// discriminator.
+func (k mergeKey) sameClaimAs(other mergeKey) bool {
+	return k.layer == other.layer && k.summary == other.summary && k.detail == other.detail
+}
+
+// compare orders two keys totally, from their own content.
+func (k mergeKey) compare(other mergeKey) int {
+	if c := cmp.Compare(k.layer, other.layer); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(k.summary, other.summary); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(k.detail, other.detail); c != 0 {
+		return c
+	}
+	return cmp.Compare(k.discriminator, other.discriminator)
 }
 
 // partitionByCompatibility splits one identity's findings into groups that may
@@ -283,9 +366,15 @@ func partitionByCompatibility(group []AttributedFinding) [][]AttributedFinding {
 		buckets[key] = append(buckets[key], af)
 	}
 
-	// An unset discriminator folds into the one non-empty discriminator at its
-	// layer, when there is exactly one. With none it is already its own group;
-	// with two it must stay separate, because joining either would be choosing.
+	// An unset discriminator folds into the one non-empty discriminator that
+	// agrees with it about everything else, when there is exactly one. With none
+	// it is already its own group; with two it must stay separate, because
+	// joining either would be choosing.
+	//
+	// "Everything else" is the whole key minus the discriminator — layer and
+	// prose since Phase 10.2a. A silent finding may only join a question asked
+	// about the same claim at the same layer; folding it into a differently
+	// worded one would reintroduce the choice this key exists to remove.
 	for _, key := range keys {
 		if key.discriminator != "" {
 			continue
@@ -293,7 +382,7 @@ func partitionByCompatibility(group []AttributedFinding) [][]AttributedFinding {
 		var host mergeKey
 		hosts := 0
 		for _, other := range keys {
-			if other.layer == key.layer && other.discriminator != "" {
+			if other.discriminator != "" && other.sameClaimAs(key) {
 				host = other
 				hosts++
 			}
@@ -311,12 +400,7 @@ func partitionByCompatibility(group []AttributedFinding) [][]AttributedFinding {
 			remaining = append(remaining, key)
 		}
 	}
-	slices.SortFunc(remaining, func(a, b mergeKey) int {
-		if c := cmp.Compare(a.layer, b.layer); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.discriminator, b.discriminator)
-	})
+	slices.SortFunc(remaining, mergeKey.compare)
 
 	out := make([][]AttributedFinding, 0, len(remaining))
 	for _, key := range remaining {
@@ -325,43 +409,51 @@ func partitionByCompatibility(group []AttributedFinding) [][]AttributedFinding {
 	return out
 }
 
-// mergeGroup merges findings that already share an identity.
+// mergeGroup merges findings that already share an identity and a merge key.
+//
+// # There is no winner
+//
+// Until Phase 10.2a this function chose one member by RuleID and copied its
+// prose. It no longer chooses anything: Code, Subject, Layer, Summary and Detail
+// are all merge preconditions, so every member already agrees about every field
+// that is *taken* rather than *reconciled*, and the representative below could
+// be any member without changing a byte.
+//
+// That is what makes ADR 0081 section 2.6a's rename property structural rather
+// than tested-and-hoped-for. Renaming a rule cannot alter a merged finding,
+// because no merged field is derived from a rule's name.
 func mergeGroup(group []AttributedFinding) (domain.Finding, error) {
 	if len(group) == 1 {
 		return group[0].Finding, nil
 	}
 
-	winner := slices.MinFunc(group, func(a, b AttributedFinding) int {
-		if c := cmp.Compare(a.Rule, b.Rule); c != 0 {
-			return c
-		}
-		// One rule may legitimately produce two findings with one identity, and
-		// then RuleID does not discriminate. Falling through to the prose keeps
-		// the choice total and deterministic; it is arbitrary, and being stable
-		// is the whole requirement.
-		if c := cmp.Compare(a.Finding.Summary(), b.Finding.Summary()); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Finding.Detail(), b.Finding.Detail())
-	})
+	// The first member is the representative, and which one it is cannot matter.
+	// Every field read from it below is a merge precondition, and the two checks
+	// that follow turn a partitioning defect into a refusal rather than into a
+	// published value nobody measured.
+	rep := group[0]
 
-	// Layer is a merge precondition, so every member already agrees. Rechecking
-	// costs one comparison and turns a partitioning defect into a refusal rather
-	// than into a published layer nobody measured.
 	for _, af := range group {
-		if af.Finding.Layer() != winner.Finding.Layer() {
+		if af.Finding.Layer() != rep.Finding.Layer() {
 			return domain.Finding{}, fmt.Errorf(
 				"%w: %s spans layers %s and %s; a layer is not chosen by a tie-break "+
 					"(ADR 0081 section 2.2, clarified in Phase 10.1b)",
-				ErrCannotConverge, IdentityOf(winner.Finding),
-				winner.Finding.Layer(), af.Finding.Layer())
+				ErrCannotConverge, IdentityOf(rep.Finding),
+				rep.Finding.Layer(), af.Finding.Layer())
+		}
+		if af.Finding.Summary() != rep.Finding.Summary() ||
+			af.Finding.Detail() != rep.Finding.Detail() {
+			return domain.Finding{}, fmt.Errorf(
+				"%w: %s carries two different claims in prose; a sentence a reader acts "+
+					"on is not chosen by a tie-break (ADR 0081 section 2.2b)",
+				ErrCannotConverge, IdentityOf(rep.Finding))
 		}
 	}
 
-	// The discriminator is the group's one non-empty value, not the winner's.
-	// The winner is chosen by RuleID, and the rule that sorts first may be the
-	// one that asked no question — taking its silence would drop the only open
-	// question in the group.
+	// The discriminator is the group's one non-empty value, not the
+	// representative's: a silent member may sit beside a member that asked a
+	// question, and taking the silence would drop the only open question in the
+	// group.
 	discriminator := ""
 	for _, af := range group {
 		if got := af.Finding.Discriminator(); got != "" {
@@ -369,22 +461,22 @@ func mergeGroup(group []AttributedFinding) (domain.Finding, error) {
 				return domain.Finding{}, fmt.Errorf(
 					"%w: %s carries two different discriminators; two hypotheses asking "+
 						"different questions are not one hypothesis",
-					ErrCannotConverge, IdentityOf(winner.Finding))
+					ErrCannotConverge, IdentityOf(rep.Finding))
 			}
 			discriminator = got
 		}
 	}
 
 	in := domain.FindingInput{
-		Code:             winner.Finding.Code(),
-		Kind:             winner.Finding.Kind(),
-		Severity:         winner.Finding.Severity(),
-		Confidence:       winner.Finding.Confidence(),
-		Layer:            winner.Finding.Layer(),
-		Subject:          winner.Finding.Subject(),
-		Summary:          winner.Finding.Summary(),
-		Detail:           winner.Finding.Detail(),
-		VantageDependent: winner.Finding.VantageDependent(),
+		Code:             rep.Finding.Code(),
+		Kind:             rep.Finding.Kind(),
+		Severity:         rep.Finding.Severity(),
+		Confidence:       rep.Finding.Confidence(),
+		Layer:            rep.Finding.Layer(),
+		Subject:          rep.Finding.Subject(),
+		Summary:          rep.Finding.Summary(),
+		Detail:           rep.Finding.Detail(),
+		VantageDependent: rep.Finding.VantageDependent(),
 		Discriminator:    discriminator,
 	}
 
@@ -392,17 +484,15 @@ func mergeGroup(group []AttributedFinding) (domain.Finding, error) {
 	recommendations := make([]domain.Recommendation, 0, len(group))
 	seenActions := make(map[string]struct{}, len(group))
 
-	// The winner's recommendations come first so that its order is preserved,
-	// then the rest in the deterministic order below.
+	// The members are visited in an order derived from their own content, never
+	// from a rule's name. Only the recommendation union can see this order at
+	// all — every other fold below is a maximum, an absorption or a logical OR —
+	// but a recommendation list is user-visible output, so an order that moved
+	// when a rule was renamed would violate ADR 0081 section 2.6a just as surely
+	// as a changed sentence would.
 	rest := slices.Clone(group)
 	slices.SortFunc(rest, func(a, b AttributedFinding) int {
-		if c := cmp.Compare(a.Rule, b.Rule); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(a.Finding.Summary(), b.Finding.Summary()); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Finding.Detail(), b.Finding.Detail())
+		return compareByContent(a.Finding, b.Finding)
 	})
 
 	for _, af := range rest {
@@ -435,7 +525,64 @@ func mergeGroup(group []AttributedFinding) (domain.Finding, error) {
 	merged, err := domain.NewFinding(in)
 	if err != nil {
 		return domain.Finding{}, fmt.Errorf(
-			"%w: merging %s: %w", ErrCannotConverge, IdentityOf(winner.Finding), err)
+			"%w: merging %s: %w", ErrCannotConverge, IdentityOf(rep.Finding), err)
 	}
 	return merged, nil
+}
+
+// compareByContent orders two findings of one merge group from their own values.
+//
+// Code, Subject, Layer, Summary and Detail are equal by precondition, so the
+// order is decided by what remains: the evidence each cites, then the reconciled
+// fields, then the advice. Two findings that tie on all of it are
+// indistinguishable to every consumer, so any order between them yields the same
+// merged finding.
+//
+// It exists so that no merged field is a function of a rule's identity. See
+// TestC06ARuleIDRenameCannotChangeAnything.
+func compareByContent(a, b domain.Finding) int {
+	if c := cmp.Compare(joinRefs(a), joinRefs(b)); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Kind(), b.Kind()); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Severity(), b.Severity()); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Confidence(), b.Confidence()); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Discriminator(), b.Discriminator()); c != 0 {
+		return c
+	}
+	if a.VantageDependent() != b.VantageDependent() {
+		if a.VantageDependent() {
+			return 1
+		}
+		return -1
+	}
+	return cmp.Compare(joinActions(a), joinActions(b))
+}
+
+// joinRefs renders a finding's evidence references as one comparable string.
+// domain.NewFinding already sorted and deduplicated them.
+func joinRefs(f domain.Finding) string {
+	var b strings.Builder
+	for _, ref := range f.EvidenceRefs() {
+		b.WriteString(string(ref))
+		b.WriteByte(0)
+	}
+	return b.String()
+}
+
+// joinActions renders a finding's advice as one comparable string, in the order
+// the rule wrote it.
+func joinActions(f domain.Finding) string {
+	var b strings.Builder
+	for _, r := range f.Recommendations() {
+		b.WriteString(r.Action())
+		b.WriteByte(0)
+	}
+	return b.String()
 }

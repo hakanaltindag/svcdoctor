@@ -192,13 +192,19 @@ func TestMC04RegistrationOrderCannotReachAnyCanonicalField(t *testing.T) {
 		rule Rule
 	}{
 		{"a/one", ruleAt(domain.LayerTCP, "a-tcp", domain.SeverityWarn,
-			domain.ConfidenceLow, false, "a claim from the first route")},
+			domain.ConfidenceLow, false, "one claim, reached two ways")},
 		{"b/two", ruleAt(domain.LayerTCP, "a-dns", domain.SeverityError,
-			domain.ConfidenceHigh, true, "b claim from the second route")},
+			domain.ConfidenceHigh, true, "one claim, reached two ways")},
 		{"c/three", ruleAt(domain.LayerDNS, "a-dns", domain.SeverityInfo,
-			domain.ConfidenceMedium, false, "c claim at another layer entirely")},
+			domain.ConfidenceMedium, false, "a claim at another layer entirely")},
 	}
 
+	// The two L2 routes state **the same sentence**, which since Phase 10.2a is
+	// what makes them mergeable at all: prose is a merge precondition, so a
+	// fixture whose routes disagree in prose would be testing that they stay
+	// apart rather than that order cannot reach a merged field. The L1 route
+	// keeps its own sentence and its own layer, and stays separate for both
+	// reasons.
 	var want string
 	for i, order := range permutations(len(rules)) {
 		set := NewRuleSet()
