@@ -15,6 +15,24 @@ import (
 // nothing, and the pressure to emit remediation grows exactly as the reasoning
 // improves.
 
+// The assignability half of the alias property, asserted by the compiler in both
+// directions: each declaration takes its type from one vocabulary and its value
+// from the other, so it builds only while the two are one type.
+//
+// It is written with the blank identifier deliberately. On a *named* variable the
+// same four declarations are what staticcheck reports as ST1023 / QF1011 — and it
+// is right that the type is redundant *to the compiler*, because for an alias it
+// is. Here the left-hand type is the entire assertion, so it must be stated
+// rather than inferred, and `var _ T = v` is the idiom that states it. Inferring
+// it instead — `var kind = AdviceKindNextEvidence` — would compile whether or not
+// the alias survived, which is the assertion silently disappearing.
+var (
+	_ AdviceKind                = domain.RecommendationKindNextEvidence
+	_ domain.RecommendationKind = AdviceKindNextEvidence
+	_ SafetyClass               = domain.SafetyCompare
+	_ domain.SafetyClass        = SafetyCompare
+)
+
 // TestAdviceVocabularyIsTheDomainVocabulary is what replaced the old name-table
 // walk, and it is a stronger property than the one it replaced.
 //
@@ -27,15 +45,14 @@ import (
 // A Go type alias is transparent, so assigning across the two directions in both
 // directions compiles only if they are one type. If someone reintroduces a
 // distinct type with a conversion, this file stops compiling, which is the
-// loudest available failure.
+// loudest available failure. The assignability half of that is asserted at
+// package scope, just above; the comparability half is asserted here.
 func TestAdviceVocabularyIsTheDomainVocabulary(t *testing.T) {
-	var (
-		kind    AdviceKind                = domain.RecommendationKindNextEvidence
-		domKind domain.RecommendationKind = AdviceKindNextEvidence
-		class   SafetyClass               = domain.SafetyCompare
-		domCls  domain.SafetyClass        = SafetyCompare
-	)
-	if kind != domKind || class != domCls {
+	// Comparing across the two vocabularies compiles only if they are one type,
+	// and the two constants must also hold the same value. The four assertions
+	// above cover assignment; this covers comparison and the values themselves.
+	if AdviceKindNextEvidence != domain.RecommendationKindNextEvidence ||
+		SafetyCompare != domain.SafetyCompare {
 		t.Fatal("the alias does not round-trip; a mapping has appeared where identity was")
 	}
 
