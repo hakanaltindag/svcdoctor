@@ -19,28 +19,26 @@ import (
 // StepSSLRequest.
 const StepSession = servicepostgres.StepSession
 
-// The attributes session establishment records.
+// AttrServerVersion and AttrInHotStandby name two of the ParameterStatus facts
+// this step records.
 //
-// Four come from the ParameterStatus allowlist and one from the frame that ends
+// Aliases; the definitions moved to internal/service/postgres in Phase 10.3, on
+// the trigger that package's doc comment already names — a reader outside this
+// one. The reader is the terminal renderer, which prints them as
+// endpoint-reported observations rather than as claims (ADR 0085 section 4).
+// The values and the producing code are unchanged.
+const (
+	AttrServerVersion = servicepostgres.AttrServerVersion
+	AttrInHotStandby  = servicepostgres.AttrInHotStandby
+)
+
+// The remaining attributes session establishment records.
+//
+// Two come from the ParameterStatus allowlist and one from the frame that ends
 // the window. Their values are the server's own strings, uninterpreted: this
 // layer records what was observed, and turning "on" into "this is a replica" is
-// a claim a Phase 4.6 rule makes over frozen evidence.
+// a claim no layer above is authorized to make either (ADR 0040 section 20).
 const (
-	// AttrServerVersion is the server's own version string.
-	//
-	// It carries the packaging suffix a distribution adds — "18.6 (Debian
-	// 18.6-1.pgdg13+2)" — because that is what the server sends. It is not a
-	// number, and `server_version_num` is not sent by any version in the support
-	// window, so a consumer that needs an ordered comparison must parse this.
-	AttrServerVersion domain.AttributeKey = "postgres.server_version"
-
-	// AttrInHotStandby is "on" when the session is attached to a server in
-	// recovery.
-	//
-	// Measured "on" against a real streaming standby and "off" against its
-	// primary, on 14.24 and 18.6 alike.
-	AttrInHotStandby domain.AttributeKey = "postgres.in_hot_standby"
-
 	// AttrDefaultTransactionReadOnly is the default_transaction_read_only GUC.
 	//
 	// **It is not the same fact as AttrInHotStandby, and it does not follow it.**
@@ -421,9 +419,15 @@ func (o sessionObservation) classify() (domain.State, domain.FailureClass) {
 //
 // too_many_connections: PostgreSQL raises ERRCODE_TOO_MANY_CONNECTIONS in this
 // window from InitializeSessionUserId and InitPostgres, after authentication has
-// completed, when no connection slot is available. Phase 7.3A measured a real
-// endpoint producing it, and `namedConditions` in
-// `internal/diagnosis/postgres/shared.go` already restates it.
+// completed, when **a connection limit applicable to the session being admitted**
+// has been reached. It has several — max_connections, the reserved-slot margins,
+// a database's CONNECTION LIMIT and a role's — and the ErrorResponse names none
+// of them, so this class carries "a limit was reached" and never "the endpoint
+// has no connection left". A role with CONNECTION LIMIT 0 produces the code on a
+// server with connections to spare, which is how the integration fixture makes it
+// deterministic. Phase 7.3A measured a real endpoint producing it, and
+// `namedConditions` in `internal/diagnosis/postgres/shared.go` restates it for
+// the windows where a floor is still what states it.
 //
 // **It moved to RESOURCE_LIMIT_REACHED in Phase 8.1, and the earlier reasoning
 // here is superseded rather than merely edited.** This comment used to say that
@@ -440,10 +444,12 @@ func (o sessionObservation) classify() (domain.State, domain.FailureClass) {
 // protocol expects*, and an ErrorResponse carrying 53300 is precisely what the
 // protocol expects. It carries no cause — see the class documentation.
 //
-// Nothing else about 53300 changed. The finding is still
-// POSTGRES_SESSION_ESTABLISHMENT_FAILED, the detail sentence is still the one
-// Phase 7.3A wrote, and `floorDetail`'s unattributable sentence was already
-// suppressed for it by `namedConditions` and stays suppressed.
+// **Phase 10.3 then moved the finding.** At `postgres.session` the class now
+// reaches POSTGRES_CONNECTION_LIMIT_REACHED (ADR 0085 section 3) rather than the
+// session floor; at `postgres.startup` and `postgres.authentication` 53300 still
+// falls through below, where the floor and `namedConditions` state it. In both
+// windows `floorDetail`'s unattributable sentence was already suppressed for it
+// by `namedConditions` and stays suppressed.
 //
 // # Everything else
 //

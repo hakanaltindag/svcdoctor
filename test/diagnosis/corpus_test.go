@@ -284,3 +284,25 @@ func TestTheCorpusUsesTheProductionRuleSet(t *testing.T) {
 	// And the boundary rule really is the one internal/app wires, not a copy.
 	var _ diagnosis.Rule = diagnosis.FailureBoundary
 }
+
+// TestTheHandMaintainedListIsNotTheOnlyThingHoldingThis names its own successor.
+//
+// The check above compares one hand-written list against another hand-written
+// list beside it. That catches a harness that *drops* a rule and misses the case
+// Phase 10.2 actually hit — a composition root that *gains* one — because
+// neither list is derived from production.
+//
+// Phase 10.3 added the derived check:
+// test/security/postgres_rule_wiring_test.go parses
+// internal/app/postgres.go's own NewRuleSet chain and requires every
+// PostgreSQL harness to run exactly that set. It found this file running five of
+// six rules on the day it was written, which is the whole argument for it.
+func TestTheHandMaintainedListIsNotTheOnlyThingHoldingThis(t *testing.T) {
+	// The service harness list must at least reach the rules the derived guard
+	// checks, so that a reader arriving here is not misled into thinking this is
+	// the whole story.
+	if len(postgresRules()) < 5 {
+		t.Errorf("postgresRules wires %d rules; the derived guard in test/security "+
+			"is what pins the number, and this is the pointer to it", len(postgresRules()))
+	}
+}

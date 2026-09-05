@@ -231,6 +231,11 @@ func DiagnosePostgres(ctx context.Context, params PostgresParams) (Result, error
 		Add("postgres/startup", diagnosispostgres.Startup).
 		Add("postgres/authentication", diagnosispostgres.Authentication).
 		Add("postgres/session", diagnosispostgres.Session).
+		// The one topology-shaped PostgreSQL rule, wired last because it is the
+		// only one here that is about the whole address set rather than about
+		// one address's own stage. It is inert on a target that resolved to a
+		// single address, which is nearly every run (ADR 0085 section 2).
+		Add("postgres/admission-scope", diagnosispostgres.AdmissionScope).
 		Freeze()
 	if err != nil {
 		return Result{}, err

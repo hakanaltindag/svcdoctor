@@ -3,6 +3,7 @@ package postgres
 import (
 	"strings"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
@@ -159,21 +160,34 @@ const (
 	sentenceNotNative = "The response did not carry the non-localized severity field that a " +
 		"PostgreSQL backend has sent since 9.6."
 
-	// sentenceNoConnectionSlot restates the endpoint's own condition and stops
-	// there.
+	// sentenceConnectionLimitReached restates the endpoint's own condition and
+	// stops there.
 	//
 	// 53300 is PostgreSQL's too_many_connections. The peer named it; svcdoctor
 	// is not inferring it from position, from timing or from a message, exactly
 	// as 3D000 and 42501 are handled a step away.
 	//
+	// **It is scoped to the attempt, not to the endpoint.** PostgreSQL raises
+	// 53300 whenever a connection limit applicable to the session being admitted
+	// has been reached, and it has several — max_connections, the reserved-slot
+	// margins, a database's CONNECTION LIMIT and a role's — and the ErrorResponse
+	// names none of them. A role created with CONNECTION LIMIT 0 produces this
+	// code on a server with connections to spare, which is what the integration
+	// fixture does, so "no connection slot was available" was a stronger sentence
+	// than the code carries. It was corrected rather than kept, here as well as in
+	// the claim, so the two windows say the same thing about the same five
+	// characters.
+	//
 	// What it deliberately does **not** say, because none of it follows from the
-	// code: that max_connections is configured too low, that a client is leaking
-	// connections, that a pool is misconfigured, that load spiked, or that the
-	// exhaustion is persistent rather than the instant this run measured. A
-	// second run a moment later may connect. The remedy differs for every one of
-	// those causes, and the evidence separates none of them.
-	sentenceNoConnectionSlot = "That is the endpoint's own too_many_connections condition: it " +
-		"refused because no connection slot was available to it at that moment."
+	// code: which limit was reached, that max_connections is configured too low,
+	// that a client is leaking connections, that a pool is misconfigured, that
+	// load spiked, or that the condition is persistent rather than the instant
+	// this run measured. A second run a moment later may connect. The remedy
+	// differs for every one of those causes, and the evidence separates none of
+	// them.
+	sentenceConnectionLimitReached = "That is the endpoint's own too_many_connections " +
+		"condition: a connection limit that applied to the attempted session had been " +
+		"reached. The response does not say which limit."
 )
 
 // namedConditions are the SQLSTATEs whose condition svcdoctor may restate.
@@ -194,7 +208,30 @@ const (
 var namedConditions = map[string]string{
 	// Measured in Phase 7.3A against PostgreSQL 18.6: max_connections reached,
 	// authentication completed, session refused before ReadyForQuery.
-	"53300": sentenceNoConnectionSlot,
+	"53300": sentenceConnectionLimitReached,
+}
+
+// observedDetail appends a node's own recorded observations to a base sentence.
+//
+// It is the half of floorDetail that states what was seen rather than what could
+// not be attributed: the SQLSTATE verbatim, and the absence of the non-localized
+// severity field when that is what happened. A finding that already names the
+// endpoint's condition needs exactly those two and neither of floorDetail's
+// closing sentences — the attribution sentence would be false, and the named
+// condition would repeat the base.
+//
+// The SQLSTATE is rendered **verbatim and never translated**, for the reason
+// floorDetail gives. Deterministic by construction: the parts are appended in a
+// fixed order and nothing is collected from a map.
+func observedDetail(base string, node domain.Evidence) string {
+	parts := []string{base}
+	if code, ok := stringAttr(node, servicepostgres.AttrSQLState); ok && code != "" {
+		parts = append(parts, "The endpoint reported SQLSTATE "+code+".")
+	}
+	if native, ok := boolAttr(node, servicepostgres.AttrErrorIsNative); ok && !native {
+		parts = append(parts, sentenceNotNative)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // floorDetail assembles a floor finding's detail from the node's own record.
@@ -233,4 +270,45 @@ func floorDetail(base string, node domain.Evidence) string {
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+// projectAdvice runs one suggestion through the Phase 10.1a guardrails and
+// returns what a report can carry today.
+//
+// It is the same helper internal/diagnosis/kafka holds, deliberately copied
+// rather than shared. The two are four lines of composition over exported
+// generic functions, and the alternative — an exported helper on
+// internal/diagnosis — would put a *findings* constructor in the package whose
+// whole contract is that it knows no service's claims. ADR 0084 section 9 made
+// the same call for Kafka; nothing has changed to make one shared copy the
+// smaller thing.
+//
+// # Why the classification does not reach the report
+//
+// ADR 0082 section 2.1 puts kind, safety, rationale and self-collectability on
+// domain.Recommendation, additively, and Phase 10.3 does not move them: that is
+// a generic change touching every service's renderer and every golden report.
+// What it does do is refuse to write advice the classification would have
+// rejected — the producible-class check, the read-only requirement on next
+// evidence, the confidence gate and the no-executable-command validator all run
+// here, at construction.
+//
+// A rejected suggestion yields no recommendation at all. Emitting an
+// unclassified string because the classified one was refused would be the
+// guardrail deleting itself.
+func projectAdvice(
+	in diagnosis.AdviceInput, kind domain.FindingKind, confidence domain.Confidence,
+) []domain.Recommendation {
+	advice, err := diagnosis.NewAdvice(in)
+	if err != nil {
+		return nil
+	}
+	if err := diagnosis.AdmitAdvice(kind, confidence, advice); err != nil {
+		return nil
+	}
+	recommendation, err := domain.NewRecommendation(advice.Action())
+	if err != nil {
+		return nil
+	}
+	return []domain.Recommendation{recommendation}
 }

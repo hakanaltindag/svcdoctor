@@ -56,11 +56,20 @@ func TestMTG05TheFindingCodeCountIsUnchanged(t *testing.T) {
 	// KAFKA_ADVERTISED_TOPOLOGY_UNSUITABLE. Both are service-namespaced, so
 	// wantDiag is deliberately unchanged — a topology claim belongs to the
 	// service whose topology it is, and the generic namespace stays at one.
+	//
+	// 65 since Phase 10.3, which added two PostgreSQL codes against ADR 0085:
+	// POSTGRES_CONNECTION_LIMIT_REACHED and POSTGRES_ADMISSION_SCOPE. Both are
+	// service-namespaced for the same reason, and wantDiag stays at one again.
+	// The observation Phase 10.3 did **not** turn into a code — the endpoint's
+	// reported recovery state — is why PostgreSQL moved by two rather than by
+	// three: it is a renderer observation line, because it is a fact the
+	// endpoint stated and not a claim svcdoctor makes (ADR 0085 section 4).
 	const (
-		wantTotal    = 63
-		wantRabbitMQ = 11
-		wantKafka    = 15
-		wantDiag     = 1
+		wantTotal      = 65
+		wantRabbitMQ   = 11
+		wantKafka      = 15
+		wantPostgreSQL = 21
+		wantDiag       = 1
 	)
 
 	codes := declaredFindingCodes(t)
@@ -89,6 +98,12 @@ func TestMTG05TheFindingCodeCountIsUnchanged(t *testing.T) {
 		t.Errorf("%d Kafka finding codes, want %d.\n\n"+
 			"Phase 10.2 moved this 13 -> 15 against ADR 0084 and nothing else may "+
 			"move it silently.", got, wantKafka)
+	}
+	if got := byService["POSTGRES"]; got != wantPostgreSQL {
+		t.Errorf("%d PostgreSQL finding codes, want %d.\n\n"+
+			"Phase 10.3 moved this 19 -> 21 against ADR 0085 and nothing else may "+
+			"move it silently. PostgreSQL BASIC is feature-frozen; a new code needs "+
+			"a deliberate reopen recorded in docs/BACKLOG.md.", got, wantPostgreSQL)
 	}
 	if got := byService["DIAG"]; got != wantDiag {
 		t.Errorf("%d generic DIAG finding codes, want %d.\n\n"+

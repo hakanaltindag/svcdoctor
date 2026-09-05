@@ -20,58 +20,141 @@ import (
 // What they establish is that the wording survives contact with a real server.
 
 // TestSQLState53300NamesTheConditionAndInventsNoCause is the Phase 7.3B
-// correction.
+// correction, re-anchored by Phase 10.3 and made strictly harder.
 //
-// Measured against PostgreSQL 18.6 with max_connections exhausted: the endpoint
-// authenticated the connection, refused the session before ReadyForQuery, and
-// reported SQLSTATE 53300. svcdoctor printed that code *and* "could not
-// attribute this outcome to a specific cause" in the same finding — a
-// contradiction, and an understatement of evidence the product held.
+// Measured against PostgreSQL 18.6 with max_connections exhausted — which is
+// how that measurement was *produced* and not what the code proves; a role with
+// CONNECTION LIMIT 0 reaches the same five characters on a server with
+// connections to spare — the endpoint authenticated the connection, refused the
+// session before ReadyForQuery, and reported SQLSTATE 53300. Phase 7.3A found svcdoctor printing that code *and*
+// "could not attribute this outcome to a specific cause" in the same finding —
+// a contradiction, and an understatement of evidence the product held — and
+// Phase 7.3B fixed it by restating the condition in the floor's detail.
 //
-// ADR 0040 section 8.1 already made the attribution sentence conditional on the
-// same principle: understating the evidence is a different error from
-// overstating it and is still an error. This extends that gate to a code the
-// peer names for itself.
+// **Phase 10.3 moved the claim out of the floor and into a code of its own**
+// (ADR 0085 section 3), so the old assertion "the correction adds no code" no
+// longer describes the product. It was re-anchored rather than deleted, and
+// every epistemic ban it carried is not only kept but widened twice: the
+// forbidden substrings are now checked across the summary, the detail **and**
+// the recommendations, which the original checked in the detail alone, and a
+// second list bans *scope* overclaims beside the *cause* overclaims — 53300
+// proves that a limit applying to this session was reached, and not that the
+// endpoint had no connection left for anybody.
 func TestSQLState53300NamesTheConditionAndInventsNoCause(t *testing.T) {
 	f := only(t, allFindings(sessionSQLState(t, "53300")))
-	detail := f.Detail()
 
+	if got := f.Code(); got != CodeConnectionLimitReached {
+		t.Errorf("53300 produced code %q, want %s", got, CodeConnectionLimitReached)
+	}
+
+	detail := f.Detail()
 	if !strings.Contains(detail, "too_many_connections") {
 		t.Errorf("53300 does not name the endpoint's own condition.\n\ndetail: %s", detail)
 	}
-	if !strings.Contains(detail, "no connection slot was available") {
+	if !strings.Contains(detail, "a connection limit that applied to this attempted session") {
 		t.Errorf("53300 does not state what the endpoint refused for.\n\ndetail: %s", detail)
 	}
-	// The correction is the removal of a false sentence, not the addition of a
-	// true one. Both halves matter: leaving it in beside the new sentence would
-	// keep the contradiction.
+	// The 7.3B correction was the removal of a false sentence, not the addition
+	// of a true one, and the removal has to survive the move.
 	if strings.Contains(detail, sentenceUnattributable) {
 		t.Errorf("53300 still says svcdoctor could not attribute the outcome, "+
 			"while restating the condition the endpoint named.\n\ndetail: %s", detail)
 	}
 	// The SQLSTATE stays printed verbatim. It is the machine-readable fact and
-	// the new sentence is a restatement, not a replacement.
+	// the sentence beside it is a restatement, not a replacement.
 	if !strings.Contains(detail, "SQLSTATE 53300") {
 		t.Errorf("the SQLSTATE is no longer reported verbatim.\n\ndetail: %s", detail)
 	}
+	// It is HIGH on direct authority — the peer named the condition in a field
+	// its own protocol defines — and CONFIRMED, because svcdoctor is repeating
+	// what it was told rather than inferring it.
+	if f.Kind() != domain.FindingKindConfirmed || f.Confidence() != domain.ConfidenceHigh {
+		t.Errorf("53300 is %s at %s, want CONFIRMED at HIGH", f.Kind(), f.Confidence())
+	}
 
 	// Every one of these is a *cause*, and 53300 separates none of them. A
-	// second run a moment later may connect.
+	// second run a moment later may connect. The scan now covers everything a
+	// reader sees, because a cause smuggled into a recommendation is the same
+	// overclaim wearing a different field.
+	surfaces := []string{f.Summary(), detail}
+	for _, r := range f.Recommendations() {
+		surfaces = append(surfaces, r.Action())
+	}
 	for _, invented := range []string{
 		"max_connections", "too low", "leak", "leaking", "pool", "pooler",
 		"spike", "overload", "exhausted", "capacity", "increase", "raise",
 	} {
-		if strings.Contains(strings.ToLower(detail), invented) {
-			t.Errorf("53300 detail contains %q, which is a cause the code does not carry.\n\n"+
-				"53300 proves the endpoint had no slot at that instant. It does not "+
-				"prove why, for how long, or what to change.\n\ndetail: %s", invented, detail)
+		for _, surface := range surfaces {
+			if strings.Contains(strings.ToLower(surface), invented) {
+				t.Errorf("the 53300 finding contains %q, which is a cause the code does "+
+					"not carry.\n\n"+
+					"53300 proves a limit applying to this session was reached. It does "+
+					"not prove why, for how long, or what to change.\n\ntext: %s",
+					invented, surface)
+			}
 		}
 	}
 
-	// And it stays the session floor. A named condition is a wording change, not
-	// a new code or a new class.
-	if got := f.Code(); got != CodeSessionEstablishmentFailed {
-		t.Errorf("53300 produced code %q; the correction adds no code", got)
+	// And these are *scope* overclaims, which are a different error from a cause
+	// and were the one the first cut of Phase 10.3 made.
+	//
+	// 53300 is raised when a limit applicable to the session being admitted has
+	// been reached, and PostgreSQL has several. The integration fixture proves
+	// the gap is reachable rather than theoretical: `CONNECTION LIMIT 0` on a
+	// role yields 53300 on a server with connections to spare. So none of these
+	// sentences may appear, and — because a denial that names the thing puts the
+	// words in the report — the prose states its scope positively instead.
+	for _, overclaimed := range []string{
+		"no connection slot", "no slot", "slot free", "free slot",
+		"out of connections", "no connections left", "no connection left",
+		"every session", "all sessions", "any session", "globally",
+	} {
+		for _, surface := range surfaces {
+			if strings.Contains(strings.ToLower(surface), overclaimed) {
+				t.Errorf("the 53300 finding contains %q, which asserts an endpoint-wide "+
+					"property.\n\n"+
+					"53300 proves that a connection limit applicable to *this* attempted "+
+					"session was reached. It does not prove which limit, and it does not "+
+					"prove that another session would be refused.\n\ntext: %s",
+					overclaimed, surface)
+			}
+		}
+	}
+
+	// It carries the observation that would separate those causes, and it says
+	// svcdoctor cannot take it: PostgreSQL BASIC executes no SQL.
+	if len(f.Recommendations()) != 1 {
+		t.Fatalf("53300 carries %d recommendations, want exactly 1", len(f.Recommendations()))
+	}
+}
+
+// TestTheStartupFloorStillRestatesANamedCondition keeps the Phase 7.3B mechanism
+// alive where it is still reachable.
+//
+// 53300 arrives at the session step as RESOURCE_LIMIT_REACHED, which Phase 10.3
+// escalates. It can also arrive **before** authentication — the postmaster
+// refuses a connection slot without reading a startup packet — where the adapter
+// classifies it PROTOCOL_UNEXPECTED_RESPONSE, deliberately, because that step
+// proves nothing about authentication having completed. There the floor and its
+// namedConditions table are still what states the condition, and moving the
+// session claim must not have quietly orphaned them.
+func TestTheStartupFloorStillRestatesANamedCondition(t *testing.T) {
+	b := newBuilder(t)
+	b.startupNode(
+		domain.StateFail, domain.FailureProtocolUnexpectedResponse, "53300", boolPtr(true), "")
+
+	f := only(t, allFindings(b.freeze()))
+	if f.Code() != CodeStartupFailed {
+		t.Fatalf("code = %s, want %s", f.Code(), CodeStartupFailed)
+	}
+	if !strings.Contains(f.Detail(), "too_many_connections") ||
+		!strings.Contains(f.Detail(), "a connection limit that applied to the attempted session") {
+		t.Errorf("the startup floor no longer restates the named condition.\n\ndetail: %s",
+			f.Detail())
+	}
+	if strings.Contains(f.Detail(), sentenceUnattributable) {
+		t.Errorf("the startup floor names the condition and still declines to attribute "+
+			"it.\n\ndetail: %s", f.Detail())
 	}
 }
 

@@ -632,6 +632,84 @@ Every one is `CONFIRMED` / `HIGH`, and none is a `HYPOTHESIS`: each states a del
 narrow claim that is directly evidenced, and not knowing a root cause is grounds for making
 the claim narrower rather than for hedging the kind or the confidence. See ADR 0040 §6.2.
 
+### The two PostgreSQL server-authority findings
+
+Added by **ADR 0085** in Phase 10.3. Both are still `CONFIRMED` / `HIGH`, so the paragraph above
+stands: PostgreSQL produces no hypothesis.
+
+| Code | Anchor | Severity | `vantageDependent` |
+|---|---|---|---|
+| `POSTGRES_CONNECTION_LIMIT_REACHED` | `postgres.session` | ERROR | **false** |
+| `POSTGRES_ADMISSION_SCOPE` | the requested target, over every `postgres.startup` node | **INFO** | true |
+
+**`POSTGRES_CONNECTION_LIMIT_REACHED`** is the exemplar of the phase's whole point. PostgreSQL
+answers `53300` — `too_many_connections` — in a field its own protocol defines, so *the endpoint
+authoritatively rejected this attempted session with its `too_many_connections` condition* is
+`HIGH` on **direct authority**: the peer said so and svcdoctor is repeating it.
+
+Two things it does **not** carry, and the second is the one easy to get wrong.
+
+*It does not carry why.* A leak, a limit set low, a pool sized wrongly, a burst, and a condition
+that has already passed are all compatible with the same five characters, and the remedy differs
+for every one — so the finding carries a `NEXT_EVIDENCE` / `COMPARE` recommendation (*identify the
+connection limits applicable to this attempted session and compare their current usage with their
+configured limits*, `SelfCollectable: false`, because BASIC executes no SQL) and never a
+remediation. The identification step is part of the advice on purpose: the advice names **no**
+member of the applicable set, because sending an operator straight to one setting would assert by
+implication the thing the response does not say.
+"Increase the connection limit" is refused permanently.
+
+*It does not carry endpoint-wide scope.* `53300` is raised when **a** connection limit applicable
+to the session being admitted has been reached, and PostgreSQL has several — `max_connections`,
+the reserved-slot margins, a database's `CONNECTION LIMIT` and a role's — and the `ErrorResponse`
+identifies none of them. The repository's own integration fixture is the counterexample: a role
+with `CONNECTION LIMIT 0` yields `53300` on a server with connections to spare. So the finding
+says *a connection limit that applied to this attempted session had been reached* and *which
+limit was reached is not in the response*, and it never says that no slot was available, that the
+endpoint was out of connections, or that another session would have been refused. Widening the
+scope of an authoritative statement is the same error as inventing a cause for it.
+
+It replaces the session floor for this class, which used to restate the condition in prose. A
+consumer must not parse `detail` to recover semantics (§3.1 rule 13), and what was missing was a
+code. `vantageDependent` moved `true` → `false` with it, and that flag means **this claim is not
+inferred from a source-address-dependent observation** — the endpoint named the condition in its
+own protocol, and nothing is read off the address svcdoctor dialled from. It does *not* mean the
+condition is an endpoint-wide invariant: vantage dependence describes how a claim was derived,
+not how widely what it asserts holds. The floor's own restatement, which still serves
+`postgres.startup` and `postgres.authentication`, carries the same scope for the same reason.
+
+**`POSTGRES_ADMISSION_SCOPE`** is the completeness-and-contrast aggregate, and it is the
+PostgreSQL counterpart of the two Kafka topology findings. `POSTGRES_CONNECTION_NOT_PERMITTED`
+already says *this address was refused before any credential*, once per address; two facts are
+not in that conjunction and cannot be recovered from it — **whether the set was complete**, and
+**whether the addresses answered alike**. `pg_hba.conf` matches on address, so "one refused and
+one admitted" is a materially different diagnosis from "every address refused", and before this
+finding a dual-stack target with a rule for its A record and none for its AAAA record reported
+one ERROR and exit 1 while its selected path succeeded completely, with nothing saying so.
+
+Three categories, never two: refused, admitted, **undetermined**. It fires only with at least two
+addresses classified and at least one positively refused — with one address it would restate what
+the per-address finding already says — and only a complete set, with nothing undetermined *and*
+`Incomplete` false, may say "at all N addresses". It is `INFO` because severity is the impact of
+this finding's own claim and never a count-derived verdict (ADR 0034 §13), so it moves no exit
+code.
+
+### The observed role is not a finding, and that is a decision
+
+`postgres.in_hot_standby` is the closest thing svcdoctor has to `pg_is_in_recovery()` without
+executing SQL, and against a real Patroni cluster it tracked that function exactly. **No rule
+reads it and none may.** It reaches the operator as a terminal *observation line* — `recovery
+in recovery` — in the mechanism `internal/render/terminal` already carried for endpoint-reported
+facts, beside a note stating what the observation is and is not.
+
+The reasoning is ADR 0085 §4, and the short form is that a role finding would restate one
+attribute the report already carries, while ADR 0040 §19's rule stands: findings are for what a
+reader must act on, and without declared intent there is nothing to act on. A pooler forwards a
+cached value, so *"this endpoint is a replica"* is not even a supported observation; a standby is
+not a fault; and `default_transaction_read_only` was `off` on a real standby, so nothing here
+answers "can I write". `POSTGRES_PHASE46_DIAGNOSIS_STUDY.md` §5 rejected all three sentences by
+name and they stay rejected.
+
 Five properties of the set are worth reading before the record itself:
 
 - **At most one primary Phase 4.6 diagnosis per node.** Each non-passing `postgres.*` node

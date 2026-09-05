@@ -190,8 +190,15 @@ func (b *builder) sessionNode(
 
 func boolPtr(v bool) *bool { return &v }
 
-// rules is the wiring a caller would use, and the order is deliberately not the
-// anchor order: the engine sorts, so wiring order must not reach the output.
+// allFindings is the wiring a caller would use, and the order is deliberately
+// not the anchor order: the engine sorts, so wiring order must not reach the
+// output.
+//
+// **It must name every rule internal/app/postgres.go wires.** Phase 10.2 found
+// the Kafka integration harness running a convenient subset while claiming to
+// differ from production "in nothing but the graph", so this list is no longer
+// maintained by hand alone: TestTheFixturesRunEveryProductionRule parses the
+// composition root and fails if the two sets disagree.
 func allFindings(g domain.Graph) []domain.Finding {
 	var out []domain.Finding
 	out = append(out, Session(rctx(g))...)
@@ -199,6 +206,7 @@ func allFindings(g domain.Graph) []domain.Finding {
 	out = append(out, Startup(rctx(g))...)
 	out = append(out, TLS(rctx(g))...)
 	out = append(out, SSLRequest(rctx(g))...)
+	out = append(out, AdmissionScope(rctx(g))...)
 	domain.SortFindings(out)
 	return out
 }

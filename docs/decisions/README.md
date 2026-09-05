@@ -138,6 +138,34 @@ correct deployment. Finding codes move 61 → **63**, both `KAFKA_`; the observa
 because severity is never a count-derived cluster verdict, and the hypothesis cannot reach
 `HIGH` because it declares `AuthorityNone` and the ladder admits `HIGH` on nothing else.
 
+**0085 is the second service record, and it is PostgreSQL's — but its most interesting decision
+is the one it declines to make.** Phase 10.3 asked svcdoctor to distinguish authoritative server
+observations from inferred causes and from violated intent, and PostgreSQL is the exemplar
+because the server frequently states *what* happened in a field its own protocol defines while
+saying nothing about *why*. As with 0084, most of the candidates were already built: of the
+seven domains the phase weighed, five existed — `POSTGRES_CONNECTION_NOT_PERMITTED` already owns
+`pg_hba` admission, `DIAG_FAILURE_BOUNDARY` already owns transport-succeeded-then-server-refused,
+and the credential-rejection, credential-withheld and TLS claims were all in place. Two were
+built: **`POSTGRES_ADMISSION_SCOPE`**, the completeness-and-contrast aggregate over the addresses
+one target resolved to, `INFO` for the same reason 0084's is; and
+**`POSTGRES_CONNECTION_LIMIT_REACHED`**, which reopens **0040 §17** on the condition that section
+stated for itself — it declined the finding "for the same reason" 0039 §10 declined a capacity
+class, and Phase 8.1 satisfied that condition and added `RESOURCE_LIMIT_REACHED`. Codes move
+63 → **65**, both `POSTGRES_`.
+
+The third addition is **not a finding, deliberately**. `in_hot_standby` tracked
+`pg_is_in_recovery()` exactly against a real Patroni cluster, which makes it authoritative about
+*what the endpoint said* and about nothing else — a pooler forwards a cached value, and without
+declared intent a standby is not a fault (0083 §2.6). 0040 §20 named three reopen conditions and
+**none has fired**, so it becomes a terminal observation line in the mechanism
+`internal/render/terminal` already built for exactly this and whose doc comment already named
+"what replication role it holds". The finding layer refuses and the presentation layer shows the
+fact. Role *mismatch* is deferred with `ROLE_INTENT_NOT_AVAILABLE` and nothing is smuggled
+through a rule, a detail or a subject. And multi-endpoint role contrast is **unreachable rather
+than forbidden**: a PostgreSQL run continues exactly one path (0041), so split brain, dual
+primary and one-address-refused-while-its-sibling-accepts are graphs no producer makes — which is
+guarded structurally, by reading the composition root, rather than by forbidding a word.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

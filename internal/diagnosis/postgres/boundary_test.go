@@ -486,6 +486,9 @@ func TestNoCodeIsDeclaredOutsideTheAuthorizedSet(t *testing.T) {
 		"POSTGRES_TLS_HANDSHAKE_FAILED":                    true,
 		"POSTGRES_CREDENTIAL_NOT_CONFIGURED":               true,
 		"POSTGRES_SSL_NEGOTIATION_FAILED":                  true,
+		// Phase 10.3, authorized by ADR 0085 sections 2 and 3.
+		"POSTGRES_CONNECTION_LIMIT_REACHED": true,
+		"POSTGRES_ADMISSION_SCOPE":          true,
 	}
 
 	found := 0
@@ -547,6 +550,7 @@ func TestNoCodeMirrorsAFailureClass(t *testing.T) {
 		CodeStartupFailed, CodeCredentialsRejected, CodePeerVerificationFailed,
 		CodeDatabaseNotFound, CodeSessionEstablishmentFailed,
 		CodeCredentialNotConfigured, CodeSSLNegotiationFailed,
+		CodeConnectionLimitReached, CodeAdmissionScope,
 	} {
 		suffix := strings.TrimPrefix(string(code), "POSTGRES_")
 		if classes[suffix] {

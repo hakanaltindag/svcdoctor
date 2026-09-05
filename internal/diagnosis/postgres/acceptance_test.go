@@ -305,11 +305,21 @@ func TestAcceptanceMatrix(t *testing.T) {
 			graph: func(b *builder) {
 				b.startupNode(domain.StatePass, domain.FailureNone, "", nil, "sasl")
 				b.authNode(domain.StatePass, domain.FailureNone, "", nil, "")
-				// 53300 reaches RESOURCE_LIMIT_REACHED from Phase 8.1 (ADR 0069). The
-				// finding, severity and vantage below are deliberately unchanged.
+				// 53300 reaches RESOURCE_LIMIT_REACHED from Phase 8.1 (ADR 0069), and
+				// Phase 10.3 escalates that class out of the floor into a claim of
+				// its own (ADR 0085 section 3).
+				//
+				// The vantage flag moves with it, from true to **false**, and the
+				// move is the point rather than a side effect. A floor attributes
+				// no cause and so cannot exclude a source-keyed one; this finding
+				// restates a condition the endpoint named in its own protocol,
+				// which is not read off the address svcdoctor dialled from. That
+				// is a statement about how the claim was derived and not about how
+				// widely it holds, and it is the same ground the two sibling
+				// escalations stand on (ADR 0040 section 6.1).
 				b.sessionNode(domain.StateFail, domain.FailureResourceLimitReached, "53300", boolPtr(true), idAuth)
 			},
-			want: CodeSessionEstablishmentFailed, severity: domain.SeverityError, vantage: true,
+			want: CodeConnectionLimitReached, severity: domain.SeverityError, vantage: false,
 		},
 		{
 			row: "28b an 08P01 in the session window",

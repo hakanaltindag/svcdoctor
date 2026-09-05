@@ -173,6 +173,84 @@ var services = map[domain.ServiceID]serviceView{
 		// one.
 		outcomeReached:    "session established",
 		outcomeNotReached: "session NOT established",
+
+		// Phase 10.3. Two endpoint-reported facts, and they are here rather than
+		// in a finding on purpose — this is where ADR 0085 section 4 draws the
+		// line between *what the endpoint said* and *what svcdoctor claims*.
+		//
+		// A run reaches at most one session node, so at most one of each line is
+		// ever printed. Neither affects the outcome line, the summary status or
+		// an exit code, and no rule reads either attribute — which
+		// TestTheRulesReadOnlyTheAuthorizedAttributes and
+		// TestSessionFactsStayEvidenceAndNeverBecomeFindings both enforce, and
+		// which is why "svcdoctor connected to a standby" cannot become a
+		// problem here without somebody deciding it should be.
+		// **One line, and `server_version` is deliberately not the second.**
+		//
+		// PostgreSQL's ParameterStatus values are unbounded: `wire.SessionParameters`
+		// allowlists four *keys* and retains each one's value as the server's own
+		// string, with no length or character bound. A verbatim version line would
+		// therefore put peer-chosen bytes on an operator's terminal.
+		//
+		// Redis and RabbitMQ already render a verbatim version, and that is a
+		// pre-existing cross-service question rather than this phase's to answer —
+		// it needs one decision about sanitizing observation values at the renderer
+		// boundary, for every service at once. Phase 10.3 declines to widen the
+		// surface while that decision is outstanding, and the version is in the
+		// report's evidence either way.
+		observations: []observationLine{
+			{
+				step:  servicepostgres.StepSession,
+				key:   servicepostgres.AttrInHotStandby,
+				label: "recovery",
+				// A closed two-value map, and the closure is the point twice
+				// over. It renders the GUC's "on"/"off" as the English an
+				// operator can read without knowing the parameter's name; and
+				// because anything else yields the empty string that drops the
+				// line, a peer cannot put a value of its own choosing on a
+				// terminal through this path. That is the same discipline the
+				// Redis and RabbitMQ render functions follow, tightened,
+				// because this value is the one that would be misread as a
+				// verdict.
+				render: func(v domain.AttrValue) string {
+					switch v.String() {
+					case "on":
+						return "in recovery"
+					case "off":
+						return "not in recovery"
+					default:
+						return ""
+					}
+				},
+			},
+		},
+
+		notes: []conditionalNote{
+			{
+				step:  servicepostgres.StepSession,
+				key:   servicepostgres.AttrInHotStandby,
+				value: "on",
+				// It exists because the *silence* beside this line would be
+				// misread. An operator who sees "recovery: in recovery" and no
+				// finding has to be told that the absence of a finding is
+				// deliberate, and told what the observation is worth: it is what
+				// the endpoint reported about this session, it is not an
+				// identity, it is not a fault, and svcdoctor has no expectation
+				// to compare it against (ADR 0083 section 2.6, ADR 0085
+				// section 4).
+				//
+				// There is deliberately no matching note for "off". "Not in
+				// recovery" invites no action and no alarm, and a note beside it
+				// would be svcdoctor reassuring a reader about something it did
+				// not measure.
+				lines: []string{
+					"This endpoint reported the session as being in recovery.",
+					"That is what the endpoint said about this session and nothing more:",
+					"svcdoctor ran no query, and it holds no expectation about which role",
+					"this target should have, so this is neither a finding nor a fault.",
+				},
+			},
+		},
 	},
 	"kafka": {
 		journey: []domain.Step{

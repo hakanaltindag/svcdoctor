@@ -140,6 +140,7 @@ func postgresRules() []namedRule {
 		namedRule{"postgres/startup", diagnosispostgres.Startup},
 		namedRule{"postgres/authentication", diagnosispostgres.Authentication},
 		namedRule{"postgres/session", diagnosispostgres.Session},
+		namedRule{"postgres/admission-scope", diagnosispostgres.AdmissionScope},
 	)
 }
 
@@ -216,6 +217,8 @@ func TestFP02AResourceLimitProducesNoCapacityCause(t *testing.T) {
 		{"increase", "a capacity recommendation assumes a cause"},
 		{"application bug", "nothing about an application was measured"},
 		{"exhausted", "exhaustion is a cause; the refusal is the observation"},
+		{"no connection slot", "53300 is raised against whichever applicable limit " +
+			"was reached, so an endpoint-wide shortage does not follow"},
 	})
 }
 

@@ -76,8 +76,21 @@ func shapes(t *testing.T) map[domain.FindingCode]domain.Finding {
 	add(func(b *builder) {
 		b.startupNode(domain.StatePass, domain.FailureNone, "", nil, "sasl")
 		b.authNode(domain.StatePass, domain.FailureNone, "", nil, "")
-		// 53300 reaches RESOURCE_LIMIT_REACHED from Phase 8.1 (ADR 0069).
+		// 53300 reaches RESOURCE_LIMIT_REACHED from Phase 8.1 (ADR 0069), and
+		// Phase 10.3 escalates that class to a claim of its own (ADR 0085 §3).
 		b.sessionNode(domain.StateFail, domain.FailureResourceLimitReached, "53300", boolPtr(true), idAuth)
+	})
+	add(func(b *builder) {
+		// The session floor now needs a class the three escalations do not
+		// claim. 08P01 is pgBouncer's default for everything and is exactly
+		// that: a refusal svcdoctor cannot normalize.
+		b.startupNode(domain.StatePass, domain.FailureNone, "", nil, "sasl")
+		b.authNode(domain.StatePass, domain.FailureNone, "", nil, "")
+		b.sessionNode(domain.StateFail, domain.FailureProtocolUnexpectedResponse, "08P01", boolPtr(false), idAuth)
+	})
+	add(func(b *builder) {
+		// The admission scope, which needs two addresses and is inert on one.
+		twoAddressAdmission(b, admissionContrast)
 	})
 
 	return built
@@ -89,6 +102,7 @@ func allCodes() []domain.FindingCode {
 		CodeCredentialsRejected, CodePeerVerificationFailed, CodeMechanismUnavailable,
 		CodeUnsupportedBySvcdoctor, CodeCredentialWithheld, CodeAuthenticationFailed,
 		CodeDatabaseNotFound, CodeDatabaseConnectDenied, CodeSessionEstablishmentFailed,
+		CodeConnectionLimitReached, CodeAdmissionScope,
 	}
 }
 

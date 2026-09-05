@@ -32,3 +32,26 @@ CREATE ROLE rejectuser LOGIN PASSWORD 'pw-rejectuser';
 -- finding either in a shareable report is unambiguous, and both reach the graph
 -- as identity attributes on the startup node.
 CREATE ROLE svcdcanaryrole LOGIN PASSWORD 'svcd-canary-pw-9Q7x';
+
+-- Phase 10.3: the 53300 producer, made deterministic by configuration rather
+-- than by a race.
+--
+-- `CONNECTION LIMIT 0` means the server refuses **every** login for this role at
+-- InitializeSessionUserId — after authentication has completed and before
+-- ReadyForQuery, which is exactly the window ADR 0036 section 5 describes — and
+-- reports ERRCODE_TOO_MANY_CONNECTIONS. No connection is held open, no client
+-- races another, and nothing has to be cleaned up afterwards, so an interrupted
+-- run leaves the fixture exactly as it found it.
+--
+-- The alternative — lowering `max_connections` and opening sockets until the
+-- server runs out — would exhaust a shared server, depend on timing, and leak
+-- connections on any path that did not reach its own cleanup.
+--
+-- It is deliberately a limit on the **role**, and that is a semantic property of
+-- the fixture and not only a convenience. `53300` is raised whenever a connection
+-- limit applicable to the session being admitted has been reached, and PostgreSQL
+-- has several; this role reaches it while the server has connections to spare. So
+-- this fixture is the standing counterexample to any claim that `53300` proves the
+-- endpoint had no connection slot available, and the integration suite scans the
+-- rendered report for exactly those wordings (ADR 0085 section 3.2a).
+CREATE ROLE limituser LOGIN PASSWORD 'pw-limituser' CONNECTION LIMIT 0;
