@@ -489,6 +489,61 @@ are graphs no producer makes today. Evidence membership needs nothing new:
 `connectionOpenFinding(node)` already receives exactly the node whose identifier becomes the
 finding's sole `EvidenceRefs` entry.
 
+**0092 asked whether svcdoctor should plan its next observation, and answered by measuring the
+whole frontier rather than by arguing.** Phase 11.0 inventoried **67** diagnostic frontier cases
+covering all 65 finding codes and every non-finding state — `UNKNOWN`, `SKIPPED`, graph-blocked,
+budget-cut, cancelled, and every observation that is deliberately not a finding — and wrote **29**
+candidate case files. **Zero were admitted**, and the reason is the useful part: it is not that
+svcdoctor has no epistemic boundaries, but that at every boundary where two genuinely competing
+explanations remain and a discriminating observation exists, exactly one of three things is true —
+**the observation is not svcdoctor's to take** (operator intent, privileged configuration, or a
+network position it does not occupy), **svcdoctor already names it** as a `Discriminator` plus a
+classified `NEXT_EVIDENCE` recommendation with an honest `SelfCollectable` value, or **taking it
+would attack the endpoint, guess, or exceed a bound**. A planner needs svcdoctor to be able to say
+*"I cannot distinguish A from B; observation O would distinguish them, **and I could take O**"* —
+and the tree contains the first two clauses in real shipped findings and no instance of the third.
+
+**The record therefore freezes the criteria and lets the deferral fall out of them**, which is the
+ADR 0086 §2.0 split applied again: a semantic contract can be frozen from measurement of what
+exists; a mechanism cannot be frozen from measurement of what does not. What is frozen is the
+seven-condition definition of planning with its eight excluded shapes, the five-part
+competing-pair test with four permanently invalid pairs, the ten observation classes `O0`–`O9`,
+ordinal information gain with no score anywhere, the twenty-five admission gates, and two rules
+that exist because the arguments most likely to reopen this wrongly are the ones a reasonable
+engineer reaches for first. **The vantage ceiling**: a contrast between two network positions
+proves that *behaviour differs by network position* and nothing else — never a firewall, a route,
+a security group, a NetworkPolicy, a proxy or a server-side condition — so measured contrast is an
+authority and never causal authority, and a same-endpoint multi-vantage measurement is never
+modelled as two targets. **And intent is a premise**: what the operator expected is an input to
+diagnosis, not an observation of the target, so it may never be `SelfCollectable: true` and its
+arrival would give existing rules a second input rather than make svcdoctor a planner.
+
+**The two nominated candidates both failed, and they failed differently.** The alternate-vantage
+measurement has the best epistemics in the audit and fails **eight** of the twenty-five gates at
+once: `domain.VantageSource` has one value and `NewLocalVantage` is deliberately the only
+constructor, a report carries one vantage, the aggregate forbids merging, no execution channel
+exists, and the bounded claim it buys is one an operator with a second vantage establishes in ten
+seconds with a shell. The PostgreSQL admission contrast passes **all twenty-five** — and is still
+not selected, because selecting it would authorize building something that already exists: the
+finding states both competing explanations in its own detail and already carries a
+`NEXT_EVIDENCE` / `COMPARE` recommendation with a rationale and `SelfCollectable: false`. Three
+cheaper self-collectable routes were sought and **refuted rather than assumed** — a second session
+cannot exist because the refused address never reaches one, a credential-free identity contrast is
+asymmetric so agreement would have to be read as evidence of sameness, and the DNS answer set
+cannot tell one host's two address families from two hosts.
+
+**Model A is the minimum justified iteration model and it shipped in Phase 10.4B**, so the
+deferral costs nothing an operator can feel. **10.4C and 10.5B both remain closed**, and 10.4C's
+closure is now shown rather than asserted: the tree's two hypothesis-carrying codes have different
+subjects and, decisively, **different open questions** — *re-run with a larger budget* versus
+*compare against the expected addresses* — and two different observations cannot be one open
+question. Along the way the record **corrects ADR 0086 §1.2** (those two codes are at the *same*
+layer, both `LayerTopology`; the conclusion survives on the other two grounds), **measures** that
+on Go 1.26.6 a received TLS alert is `*tls.permanentError` and matches no exported error type — so
+three declared TLS failure classes stay unproducible without the text matching the probe forbids —
+and **records without fixing** that `docs/FINDINGS.md` has no entry for any of the nine `REDIS_*`
+codes.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

@@ -6,6 +6,11 @@
 **Amended:** Phase 10.5A — **ADR 0087 §2.5 supersedes row 1 of §2.1's table**, and nothing else
 in this record. The superseded cell is left standing below with a marker, so the reasoning that
 was wrong stays legible; this is the same practice ADR 0081's header records.
+**Amended:** Phase 11.0 — **ADR 0092 §8 corrects one clause of §1.2**: the two hypothesis-carrying
+Kafka codes are at the **same** layer, `domain.LayerTopology`, not different ones. The paragraph's
+conclusion is unaffected — differing subjects and differing open questions each independently
+prevent a set, and §2.2 frees a set from needing one layer anyway — and nothing else in this
+record is touched. The original sentence is left as written.
 **Refines:** ADR 0078 §2.1 and §2.6, ADR 0081 §2.1 and §2.4, ADR 0082 §2.1, §2.4 and §2.5.
 **Corrects:** ADR 0083 §2.1's field count (three → **four**).
 **Upholds:** ADR 0054 (owner before producer), ADR 0083 §2.2 (the false-positive policy).
@@ -74,7 +79,9 @@ next-best evidence.** Without them a consumer cannot tell a `NEXT_EVIDENCE` from
 hypotheses anywhere in the tree, and there is no accident in that.** Two hypothesis-producing
 codes exist. They have different subjects, different layers and different codes, and they are
 not alternatives — *"this advertised endpoint may be unreachable"* and *"the advertised topology
-may be unsuitable for this network"* can both be true at once. Everywhere a competing pair would
+may be unsuitable for this network"* can both be true at once. *(Phase 11.0 footnote:
+**"different layers" is wrong** — both codes set `domain.LayerTopology`. The other two grounds
+hold and each is independently sufficient; see ADR 0092 §8.)* Everywhere a competing pair would
 naturally arise — a TCP timeout, a `53300`, an `08P01` from a pooler — ADR 0083 §2.2's
 false-positive policy has already resolved it the other way: **one narrow `CONFIRMED` claim
 instead of N hypotheses.** §4.3 works three of them through.
