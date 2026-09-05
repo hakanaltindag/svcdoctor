@@ -159,6 +159,23 @@ does not yet support — and the second case is an ADR, not a workaround.
    change the claim and let the impact follow.
 7. **`kind` matches the evidence.** `HYPOTHESIS` when alternatives remain, with a
    discriminator that names the *observation* that would settle it — never a remediation.
+
+   **7a. A discriminator is one open question, and it is prose.** ADR 0086 §2.2 freezes what it
+   means for two hypotheses to be *indistinguishable* — competing explanations of one subject
+   that one observation would separate — and deliberately **does not** freeze how "the same open
+   question" is decided mechanically. `Discriminator` is human-facing text, so making it a
+   runtime grouping key would let a wording-only edit change what svcdoctor groups, which is the
+   coupling Phase 10.2A spent a phase removing; the identity mechanism is deferred to the phase
+   that has a real competing pair to decide it against (ADR 0086 §2.2a). What **is** permanent is
+   that fuzzy or semantic matching of a discriminator is forbidden, exactly as it is for
+   convergence prose.
+
+   Two things bind a rule author today. **Keep the sentence constant** across the explanations
+   one observation would settle — it costs nothing now and is what makes the later decision
+   cheap. And **never widen a claim to manufacture a pair**: a competing pair is usually a sign
+   the claim was drawn too wide, and the repository's own three worst candidates — a TCP timeout,
+   PostgreSQL `53300`, a pooler's `08P01` — were each resolved into one narrow `CONFIRMED` claim
+   instead (ADR 0086 §4.3). A set is never itself a finding, and no code exists for one.
 8. **`vantageDependent` is set whenever the claim depends on network position**, and set
    unconditionally where it always does.
 9. **`layer` is the claim's layer**, per section 3 above.

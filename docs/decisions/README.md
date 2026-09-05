@@ -166,6 +166,56 @@ than forbidden**: a PostgreSQL run continues exactly one path (0041), so split b
 primary and one-address-refused-while-its-sibling-accepts are graphs no producer makes — which is
 guarded structurally, by reading the composition root, rather than by forbidding a word.
 
+**0086 is the next-best-evidence record, and most of what it does is refuse to build things.**
+Phase 10.4A set out to design an engine that selects the observation which would best separate
+surviving hypotheses, and the first thing it did was count producers. Two finding codes in the
+whole tree are ever a `HYPOTHESIS`, both Kafka; `BasisBuilder.Miss` — the relation whose own doc
+comment calls it *"the input to a next-evidence recommendation"* — has **no producer at all**;
+and **no pair of competing hypotheses exists anywhere**, because everywhere one would arise
+(a TCP timeout, `53300`, a pooler's `08P01`) 0083 §2.2's false-positive policy has already
+resolved it into one narrow `CONFIRMED` claim instead. So a set-selection engine would have been
+built over an empty input, which is the shape 0054 refuses under *owner before producer*.
+
+What it found instead is a real gap on the **output** side: both service packages construct a
+fully classified, fully guarded `diagnosis.Advice` and then discard its `kind`, `safety`,
+`rationale` and `selfCollectable`, because `domain.Recommendation` still holds `action` alone.
+**Those four facts are next-best evidence**, and without them a report cannot say that a
+suggestion is an observation rather than a change. 0082 §2.1 decided that addition in Phase 10.0
+and nothing implemented it; 0086 makes it the substance of 10.4B, corrects 0083 §2.1's field
+count from three to **four**, and owes the guard 0082 §2.5 asked for *"once Phase 10.1 lands"*.
+
+**The record's own first cut had to be corrected, and the correction is the interesting part.**
+It froze a runtime identity for an indistinguishable set — same subject, different code,
+byte-identical discriminator — and planned the grouping function into the next phase, while the
+same record established there is nothing to group. Both halves are withdrawn. §2.0 now splits the
+record explicitly: **semantics are frozen, mechanism is deferred.** Frozen are what
+next-best evidence means, the seven epistemic positions and six forbidden collapses, the
+necessary conditions for indistinguishability, safety and reporting semantics, `Advice` →
+`Recommendation` preservation, the discriminator ↔ `NEXT_EVIDENCE` requirement, the no-ranking
+policy, the report-only iterative boundary, and the constraints binding any future set
+implementation. Deferred are the set data structure, the derivation, the identity mechanism, the
+grouping order and the renderer behaviour.
+
+**Byte equality survives as the minimum safe candidate, not as a rule**, and the reason is
+§2.2a: `Discriminator` is human-facing prose, so freezing it as a grouping *key* would let a
+wording-only edit change diagnostic behaviour — the coupling Phase 10.2A spent a phase removing
+when it found prose deciding convergence through a `RuleID` tie-break. ADR 0081 §2.2b's answer
+there was to make prose a **precondition that refuses** rather than a **key that selects**, and
+the same distinction applies here. Fuzzy matching stays forbidden permanently; the later choice
+is between exact equality, a typed key, and deriving identity from the missing `domain.Step` a
+rule already records — decided against a real pair, not in the abstract, and `DiscriminatorID`
+is deliberately not added now.
+
+There is no ranking at any tier; information gain is permitted only as a cardinality that may be
+shown and may never order anything; and a typed "svcdoctor could observe this with a credential
+it lacks" category is refused permanently as a privilege-escalation prompt inside a shareable
+document. Iterative diagnosis stays deferred to its own ADR, with the five things it would have
+to add written down. `SchemaVersion` stays **1** — authority quoted from `docs/REPORT_SCHEMA.md`
+§1 and 0083 §2.1 rather than inferred from additivity — and no finding code is added, because a
+set is a view over findings and not a claim of its own. The plan is three phases: **10.4A**
+freezes, **10.4B** plumbs and is forbidden to build a set engine, **10.4C** opens only when a
+service phase produces a genuine competing pair.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:
