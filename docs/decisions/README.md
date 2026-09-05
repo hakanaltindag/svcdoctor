@@ -216,6 +216,41 @@ set is a view over findings and not a claim of its own. The plan is three phases
 freezes, **10.4B** plumbs and is forbidden to build a set engine, **10.4C** opens only when a
 service phase produces a genuine competing pair.
 
+**0087 asked whether the three unused evidence relations have unwired producers, and the answer
+is no — but the archaeology corrected 0086 on the way.** 0086 §1.2 had counted `.Contradict`,
+`.Miss` and `.Block` at zero producers and left it there. Phase 10.5A asked the question a count
+cannot answer — *do existing rules already compute these facts and flatten them?* — and audited
+all 22 production rules. Fourteen candidate rows, **zero admitted**. Each of the three relations
+is latent for a *different* reason, and every reason is that the rule is written in the shape
+0081 §2.4 chose for it: contradiction fires as **suppression before a basis exists**, so recording
+it would mean emitting the finding the rule just declined to emit; every candidate "missing"
+observation is an `UNKNOWN` node with an identifier, which is 0086 §2.1 **position 4**, and `Miss`
+takes a `Step` precisely because a missing observation has none; and blocked is already legible to
+a consumer through the `blockedBy` edge the report has always serialized.
+
+Three things the tree did not previously record came out of it. **0086 §2.1 row 1 is superseded by
+0087 §2.5, explicitly and from both ends** — 0086 carries a forward marker at the row and in its
+header, so neither document leaves a reader guessing which is authoritative:
+it drew `EvidenceBasis.supporting` → `Finding.EvidenceRefs` as a projection, and that arrow
+**cannot** produce three findings the tree already publishes — `KAFKA_CREDENTIAL_WITHHELD`,
+`POSTGRES_CREDENTIAL_WITHHELD` and `POSTGRES_ADMISSION_SCOPE` each cite a graph-blocked node,
+correctly, because their claim's subject *is* the step that did not run, and `Freeze` check 3
+forbids that unconditionally. There are two citation surfaces with different admission rules, not
+one: `basis.Supporting()` ⊆ `EvidenceRefs`, and never the reverse. `Freeze` is not weakened — what
+changed is only the claim made about it. **Two guards in `AdmitConfidence` are vacuous**: the check that stops a false
+complete-contrast declaration reads `basis.missing`, and `Miss` has no producer — safe only
+because `AuthorityCompleteContrast` has none either, so the two must be armed in the same
+change-set. And **the ladder has no ground for the commonest claim in the tree**: 21 of 22 rules
+set `ConfidenceHigh` as a literal, and `DIAG_FAILURE_BOUNDARY` would fall to `MEDIUM` if routed
+through it truthfully — which is why activation is not output-neutral and why no third `Authority`
+was added in a phase forbidden to write production code.
+
+**BLOCKED is frozen as Model A** — a projection of `Graph.BlockedBy`, subordinate to it by
+`Freeze` check 4, never a second meaning — and the generic TLS rule's refusal to emit anything for
+a `SKIPPED` node is upheld as the answer to *"should a TLS finding carry a BLOCKED basis?"*: **no
+downstream claim is fabricated in order to populate a relation.** `docs/FINDINGS.md` §3.1 gains
+rule 20, the rule-author form of the citation-surface distinction. No Go file changed.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

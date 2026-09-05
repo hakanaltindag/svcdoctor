@@ -232,6 +232,27 @@ does not yet support — and the second case is an ADR, not a workaround.
     does not carry — a broker number, an address, a count — then two of your findings about one
     subject will *not* merge, and that is correct. If you want two rules to converge, have them
     share the constant that states the claim.
+20. **A blocked step may be cited only when it is what the claim is about.** Rule 11 says a
+    blocked step is never cited as a *cause*. This is its other half, and both are needed because
+    the repository does each of them today.
+
+    ```text
+    the claim is about the subject's condition   -> a blocked node is evidence for nothing.
+                                                    Cite its blocker, or make no claim at all.
+    the claim's subject IS the step that did      -> cite the blocked node, and cite its blocker
+    not run                                         so a reader can check why
+    ```
+
+    Three findings are instances of the second: `KAFKA_CREDENTIAL_WITHHELD` and
+    `POSTGRES_CREDENTIAL_WITHHELD` both state *why nothing was attempted*, and
+    `POSTGRES_ADMISSION_SCOPE` counts addresses at which *no admission decision was observed*. All
+    three cite a node the graph records as blocked, and all three are correct.
+
+    **The consequence for a rule author who reaches for `diagnosis.BasisBuilder`:**
+    `BasisBuilder.Freeze` refuses a blocked node in the supporting set unconditionally, so a rule
+    of the second shape cannot express itself through a basis today. That is a recorded limitation
+    rather than a verdict on the finding — see ADR 0087 §2.5. Build `EvidenceRefs` directly, as
+    those three do.
 
 **The check that catches the rest:** render the finding with the hostnames removed and ask
 whether an on-call engineer who has never read this repository knows what failed, how sure we

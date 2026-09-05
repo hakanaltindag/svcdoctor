@@ -3,6 +3,9 @@
 **Status:** Accepted
 **Date:** 2026-09-05
 **Phase:** 10.4A
+**Amended:** Phase 10.5A — **ADR 0087 §2.5 supersedes row 1 of §2.1's table**, and nothing else
+in this record. The superseded cell is left standing below with a marker, so the reasoning that
+was wrong stays legible; this is the same practice ADR 0081's header records.
 **Refines:** ADR 0078 §2.1 and §2.6, ADR 0081 §2.1 and §2.4, ADR 0082 §2.1, §2.4 and §2.5.
 **Corrects:** ADR 0083 §2.1's field count (three → **four**).
 **Upholds:** ADR 0054 (owner before producer), ADR 0083 §2.2 (the false-positive policy).
@@ -118,7 +121,7 @@ fixes where each one lives, so that no later phase invents a second home for one
 
 | # | Position | Representation today | Never becomes |
 |---|---|---|---|
-| 1 | evidence **supporting** a claim | `EvidenceBasis.supporting` → `Finding.EvidenceRefs` | — |
+| 1 | evidence **supporting** a claim | **Superseded by ADR 0087 §2.5: two citation surfaces, `basis.Supporting()` ⊆ `EvidenceRefs` and never the reverse.** Originally: `EvidenceBasis.supporting` → `Finding.EvidenceRefs` | — |
 | 2 | evidence **contradicting** it | `EvidenceBasis.contradicting`, rule-internal | a report field (ADR 0079 §2.4's negative explosion) |
 | 3 | observation **simply absent** | `EvidenceBasis.missing` (a `domain.Step`) | contradiction |
 | 4 | attempted, outcome **UNKNOWN** | a node with `StateUnknown` and an `EXEC_*` or capability class | contradiction, or FAIL |
@@ -144,6 +147,10 @@ interchangeable**. Each collapse already has a name and a guard:
 
 **Nothing in this record adds a representation for 1–6.** They are complete. Only 7 is
 incomplete, and only on the output side.
+
+**Phase 10.5A footnote.** That paragraph stands: no representation was missing. What row 1 got
+wrong was not *whether* position 1 had a representation but *how many* — it has two, admitting
+different sets, and three production findings live in the difference. See ADR 0087 §2.5.
 
 ### 2.2 "Indistinguishable": the meaning is frozen, the identity mechanism is not
 
