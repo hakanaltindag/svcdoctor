@@ -11,6 +11,15 @@
   **ADR 0069 §6, §8, §9.4**, ADR 0078–0083, ADR 0084 §4, §7, ADR 0085 §4, ADR 0086, ADR 0087,
   ADR 0088, ADR 0089
 - **Supersedes:** nothing. **Corrects:** ADR 0089 §1.2's inventory figures (§3).
+- **Amended in Phase 10.8A.1 — ADR 0091 supersedes §5, §6 and §11 in part**, and nothing else in
+  this record. Phase 10.8B's pre-implementation archaeology proved that `Finding.Detail` and
+  `Finding.Recommendations` are **canonical domain fields serialized into canonical JSON**, not
+  renderer-only presentation — so §6's *"additive in presentation and inert everywhere else"* is
+  wrong, and §5.4's LavinMQ compatibility claim is factually wrong (LavinMQ template **L3** and
+  integration scenario **LMQ-06** both produce `VHOST_CONNECTION_LIMIT`). The **audit, the winner,
+  the C1-A classification and every count below stand unchanged.** Superseded text is left standing
+  with markers so the reasoning that was wrong stays legible — the practice ADR 0069's and
+  ADR 0081's headers record. See ADR 0091 §2 for the exact five statements.
 - **Decision:** **ACTIVATE RABBITMQ PRESENTATION** — preserve, in operator-facing output, *which*
   capacity ceiling `rabbitmq.close_outcome` already records. Class 1: nothing is acquired, and
   **no diagnosis is created**. The existing diagnosis `RESOURCE_LIMIT_REACHED` is unchanged; the
@@ -226,6 +235,17 @@ The winner is the only candidate that is simultaneously high-value, structurally
 intent, safe across an implementation pair, deterministically fixturable, and already argued for in
 an Accepted record.
 
+> **Corrected by ADR 0091 §6 (Phase 10.8A.1).** *"Safe across an implementation pair"* is right,
+> but this record reached it by the wrong route: the audit claimed LavinMQ *"was never measured
+> producing any limit text"* and would therefore yield `UNSPECIFIED` with unchanged output.
+> **LavinMQ produces `VHOST_CONNECTION_LIMIT`** — template `L3` in
+> `internal/adapter/rabbitmq/wire/close.go:143-147`, measured live by **LMQ-06** against LavinMQ
+> 2.3.0. That is a legitimate shared outcome rather than a false enrichment, and it forces the rule
+> ADR 0091 §6 freezes: **the explanation is earned by the authoritative closed outcome, never by
+> product identity.** ADR 0091 §6.2 also corrects §6's fixture requirement below — the vhost
+> ceiling is **already** proven on real RabbitMQ (RAB-21, three versions) and real LavinMQ, so the
+> open gap is `NODE_CONNECTION_LIMIT` and `USER_CONNECTION_LIMIT`, two outcomes rather than three.
+
 ---
 
 ## 6. What Phase 10.8B may do, and may not
@@ -246,6 +266,14 @@ contrast.
 code from the same `FailureClass`; `RESOURCE_LIMIT_REACHED`'s semantics are untouched; and the
 existing impermanence sentence is retained verbatim. An outcome absent from the lookup renders
 today's text byte for byte, so the change is additive in presentation and inert everywhere else.
+
+> **Superseded in part by ADR 0091 §3 and §4 (Phase 10.8A.1): the last clause is wrong.**
+> `Finding.Detail` and `Finding.Recommendations` are canonical domain fields emitted by
+> `Finding.MarshalJSON`, so writing to them is **not** inert — canonical JSON bytes change for
+> every report carrying a mapped capacity outcome. The *schema* is unchanged and byte-identity
+> still holds for unmapped outcomes, which is the half this sentence got right. ADR 0091 §9 is the
+> replacement compatibility contract, and ADR 0091 §7 narrows *"and a scoped recommendation"*
+> above: **recommendations stay byte-identical by default.**
 
 **OUT OF SCOPE.** **Any new diagnostic rule, diagnostic inference or diagnostic claim** — the
 phase asserts nothing the report does not already assert. Any new `FindingCode`. Any severity,

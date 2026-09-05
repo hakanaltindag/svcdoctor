@@ -438,6 +438,57 @@ comment-versus-code defects are also recorded rather than patched: Redis's `auth
 renderer reads it and none ever has, and RabbitMQ's `close_outcome` claims rules read it when they
 read the derived class.
 
+**0091 is the correction 0090 earned by being specific enough to be wrong.** Phase 10.8B stopped
+before writing a line of code, because its mandatory pre-implementation archaeology disproved an
+assumption 0090 had frozen: **`Finding.Detail` and `Finding.Recommendations` are canonical domain
+fields**, declared in `findingJSON` and emitted by `Finding.MarshalJSON`, and
+`internal/render/json` reimplements nothing. So 0090 §6's *"additive in presentation and inert
+everywhere else"* is false — and the triple it asserted (*presentation activation* + *enrich Detail
+and Recommendation* + *canonical JSON unchanged*) is **internally inconsistent**. No implementation
+location resolves it: the findings renderer's own doc comment forbids generating prose there
+(*"a renderer rewording them would be making a diagnostic claim in a presentation layer"*), and the
+Result-block mechanism reads the graph rather than the finding's cited evidence. **svcdoctor has no
+operator-facing presentation layer for finding prose. The prose is canonical.**
+
+**The fix is a distinction 0090 never drew: schema change versus value change.** The field set, the
+object structure and both schema versions stay put — this is not ADR 0083 evolution — while the
+`detail` *value* becomes more specific and **canonical JSON bytes move** for the reports that carry
+a mapped capacity outcome, and stay byte-identical for every other. The frozen term is **canonical
+explanation enrichment**: *explanation* because it changes what the report says and never what it
+concludes, *canonical* because that text is domain data. The candidate is **not** reclassified —
+still C1-A, still no rule, no code, no confidence, no inference — and the precedent is already in
+the tree: `vhostNotFoundDetail(node)` varies canonical Detail from `AttrVHostDefaulted` because
+**0067 §3.1 requires it**. 0091 §5.1 states the five things that precedent proves and the four it
+does not.
+
+**Two factual corrections, both found by 10.8B and both in the direction of less work.** 0090
+claimed LavinMQ *"was never measured producing any limit text"* and would stay silent; **template
+`L3` maps LavinMQ's vhost ceiling to `VHOST_CONNECTION_LIMIT` and `LMQ-06` measures it live** on
+2.3.0. That is a legitimate shared outcome, not a false enrichment, and it forces the rule 0091 §6
+freezes: **the explanation is earned by the authoritative closed outcome, never by product
+identity** — no `if RabbitMQ`, and no outcome broadened merely because implementations are
+compatible. And the fixture demand shrinks: **`VHOST_CONNECTION_LIMIT` is already proven on real
+RabbitMQ across all three versions (`RAB-21`) and on real LavinMQ**, so the open gap is
+`NODE_CONNECTION_LIMIT` and `USER_CONNECTION_LIMIT` — two, not three. 0090's grep had searched
+`max_connections`; the fixtures spell it `max-connections`.
+
+**Two things are narrowed rather than widened.** 0090 authorized *"a detail clause **and a scoped
+recommendation**"* in one breath while justifying only the first; 0091 §7 splits them —
+`close_outcome` proves *which ceiling the peer named*, not *what the operator should change* — so
+**recommendations stay byte-identical by default** and changing one carries its own burden of
+proof. And §8.1 applies the PostgreSQL `53300` lesson: the code says `REACHED`, the evidence proves
+the peer **named a scope** while refusing **this attempt**, so `named`/`identified` are safe and
+`exhausted` never is. **Absence is not evidence either** — a truncated reply degrades to
+`UNSPECIFIED_TRUNCATED`, so a real ceiling can go unnamed.
+
+For 10.8B, canonical JSON byte change on mapped outcomes **stops being a stop condition and becomes
+the expected result**; byte-identity for unmapped outcomes becomes a thing to prove by test.
+Convergence must still be proven in four shapes, because 0081 §2.2b makes Detail a merge
+precondition — though `continueOneRabbitMQPath` continues at most one path, so the dangerous shapes
+are graphs no producer makes today. Evidence membership needs nothing new:
+`connectionOpenFinding(node)` already receives exactly the node whose identifier becomes the
+finding's sole `EvidenceRefs` entry.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

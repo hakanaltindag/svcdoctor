@@ -4,6 +4,12 @@
   **No production Go, no test Go, no fixture, no harness, no config.**
 - **Baseline:** `004313980291eca2b3bc50a5d6ab795afdcfd5da`, `HEAD == origin/main`, working tree clean
 - **Record:** ADR 0090
+- **Corrected 2026-09-06 by Phase 10.8A.1 / ADR 0091**, on three points of fact found by Phase
+  10.8B's pre-implementation archaeology: `Finding.Detail` is **canonical JSON**, so the enrichment
+  changes the report and the frozen term is now **canonical explanation enrichment**; **LavinMQ does
+  produce `VHOST_CONNECTION_LIMIT`**; and that outcome **already has real fixtures** on both
+  implementations. The audit, its counts, the winner and its **C1-A** class are unchanged. Markers
+  are inline below; see `PHASE108A1_CANONICAL_FINDING_EXPLANATION_CORRECTION.md`.
 - **Outcome:** **ACTIVATE RABBITMQ PRESENTATION** — preserve, in operator-facing output, *which*
   capacity ceiling `rabbitmq.close_outcome` already records. Class 1: nothing is acquired, no
   diagnostic rule is added, no `FindingCode` is added, no inference is made, no confidence is
@@ -910,6 +916,25 @@ subject ref, which renders `broker.internal:-1` for exactly that case (ADR 0035 
   vhost-access-refused — so LavinMQ yields `UNSPECIFIED` and simply gets no extra sentence. The
   degradation is silent and safe, which is the property that makes this presentable across an
   implementation pair rather than only diagnosable on one.
+
+  > **CORRECTED 2026-09-06 (Phase 10.8A.1, ADR 0091 §6). This paragraph, the "Intermediary
+  > boundary" row above and the "Real producibility" row below are wrong.** LavinMQ **does**
+  > produce `VHOST_CONNECTION_LIMIT`: template **L3** at
+  > `internal/adapter/rabbitmq/wire/close.go:143-147`, measured live by **LMQ-06**
+  > (`test/integration/lavinmq/scenarios_test.go:183-208`) against LavinMQ 2.3.0. The Phase 8.0C
+  > study table this relied on listed only the two conditions 8.0C *measured*; L3 was
+  > source-derived then, and the LavinMQ fixture has since measured it.
+  >
+  > The conclusion survives in a stronger form: it is presentable across the implementation pair
+  > **because both reach the same closed outcome through the same byte-equality discipline**, not
+  > because one stays silent. That forces ADR 0091 §6's rule — **the explanation is earned by the
+  > authoritative outcome, never by product identity**, and no product-name branch exists.
+  >
+  > **Fixture status, re-measured.** `VHOST_CONNECTION_LIMIT` is **PROVEN_REAL and committed** on
+  > real RabbitMQ (**RAB-21**, `test/integration/rabbitmq/vhost_test.go:104-137`, provisioned on
+  > all three versions) and on real LavinMQ (**LMQ-06**). Only `NODE_CONNECTION_LIMIT` and
+  > `USER_CONNECTION_LIMIT` remain unproven. This audit's grep searched `max_connections` and
+  > `CONNECTION_LIMIT`; the fixtures spell it `max-connections` and name the vhost `limited`.
 - **Real producibility.** `PROVEN_REAL` for the values —
   `docs/validation/RABBITMQ_PHASE80_CONTRACT_STUDY.md:125`: *"All three connection limits were
   reproduced live on 4.2.0."* — but `PROVEN_ONLY_UNIT` in the committed suite: no integration
@@ -1302,7 +1327,13 @@ reached* — succeeds, and is bounded by the claim: svcdoctor says *the endpoint
 record. LavinMQ therefore yields `UNSPECIFIED`, the new sentence does not appear, and the output
 is byte-identical to today's. **The degradation is silent and correct**, which is why this is
 presentable across an implementation pair — and why no compatibility claim is created from one
-implementation. *A proxy in front of RabbitMQ.* It would have to emit the sentence byte for byte,
+implementation.
+
+> **CORRECTED 2026-09-06 (Phase 10.8A.1, ADR 0091 §6).** Wrong for the vhost ceiling: LavinMQ
+> reaches `VHOST_CONNECTION_LIMIT` through template **L3**, measured by **LMQ-06**, and therefore
+> **does** receive that explanation. The silent-degradation argument still holds for the node and
+> user ceilings, which LavinMQ does not produce. The correct LavinMQ tests are that it *does* get
+> the vhost explanation and gets **neither** of the other two — not a blanket negative contrast. *A proxy in front of RabbitMQ.* It would have to emit the sentence byte for byte,
 including svcdoctor's own vhost and username, to be classified; if it does, the claim
 *"the endpoint refused and named this ceiling"* is still exactly true of the endpoint svcdoctor
 talked to.
@@ -1337,6 +1368,15 @@ confidence, no exit-code movement, no failure class, no schema change, no new ev
 network request, no renderer file. The claim `RESOURCE_LIMIT_REACHED` already publishes is
 unchanged and unweakened — the phase only stops the prose from discarding a bounded distinction
 the evidence already carries.
+
+> **CORRECTED 2026-09-06 (Phase 10.8A.1, ADR 0091 §3, §4, §7).** Every clause above is true except
+> the implication. `Finding.Detail` and `Finding.Recommendations` are **canonical domain fields
+> emitted by `Finding.MarshalJSON`**, so this is not renderer-adjacent work: **canonical JSON bytes
+> change** for reports carrying a mapped capacity outcome. The *schema*, the field set and both
+> schema versions are unchanged, and unmapped outcomes stay byte-identical — ADR 0091 §9 is the
+> replacement contract. Two further narrowings: **recommendations stay byte-identical by default**
+> (ADR 0091 §7), and the frozen term is **canonical explanation enrichment** rather than
+> "presentation" (ADR 0091 §5). The candidate stays **C1-A**.
 
 ### 9.2 The three attributes blocked on one decision
 
