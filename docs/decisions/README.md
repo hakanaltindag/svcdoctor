@@ -593,6 +593,62 @@ Kubernetes-diagnosis example is a **second** manifest with its own three-resourc
 single-namespace Role, and 0062's real point — *"it does not become an agent"* — is reaffirmed
 rather than weakened.
 
+**0094 turns 0093's scope decision into an implementation contract, and it closed both blockers by
+measuring rather than by arguing.** Phase 12.1A drove client-go with a kubeconfig whose exec plugin
+writes a sentinel file and found that **nothing executes** at `clientcmd.Load`, at
+`ClientConfig()` or at `NewForConfig()`, and that the plugin runs **only on the first API
+request**. That converts 0072 §13's refusal from *"we will not call the code path"* into a
+structural contract with a proven boundary: parse the kubeconfig, inspect the resolved `AuthInfo`
+and `Cluster` — where `Exec`, `AuthProvider`, `Impersonate`, `TokenFile`, `ClientKey` and
+`ProxyURL` are all already visible as typed values — and **refuse the target before any request is
+issued**, guarded by a sentinel-file negative test. A second measurement showed `auth-provider`
+failing closed for free, because no `plugin/pkg/client/auth/**` package is imported. A third showed
+impersonation and `proxy-url` propagating into `rest.Config` **with no error**, which is why both
+are refused rather than reported.
+
+**client-go is authorized behind a nine-package allowlist, and the cost is written down rather
+than minimized:** 2 modules to 46–47, a 10,310,258-byte binary to about 36 MB, and `os/exec` and
+`net/http` linked where neither is today. The full `Clientset` is refused as a **capability
+surface**, and so are the dynamic client, informers, listers, cache, watch, controller-runtime and
+every kubectl package. One honest correction to 0093: **narrowing the import surface saves one
+module and 0.55 MB**, so it is a reachability decision and no document may sell it as a dependency
+saving. And `test/security/dependency_test.go`'s stated principle — *"prevented in the only durable
+way, by choosing dependencies that have none"* — is contradicted by 45 transitive dependencies, so
+the implementing phase must amend **the reasoning**, not merely the count.
+
+**The semantics are frozen from the API reference and two of them changed the design.** `ready`
+nil means **true**, `serving` nil means **true**, `terminating` nil means **false** — and `ready`
+*is* the shortcut for *serving and not terminating*, so the effective-ready test reads `ready`
+**alone**; consulting a second condition would re-derive what Kubernetes publishes and would
+silently change meaning under `publishNotReadyAddresses`. Because proxies may still route to
+`serving && terminating` endpoints when every endpoint is terminating, *"no ready endpoint"* is
+**not** *"no traffic"*, which is a second independent reason the wording is **publishes, never
+reachable**. An **empty selector map is selector-less, not match-all**, so the selector finding is
+structurally unreachable there. And the API ceiling is **1000 endpoints per slice**, not the 100
+that 0093 derived its budgets from — corrected, and the budgets re-derived.
+
+**Four findings, and the shape of each is decided rather than left to the implementer:**
+`SERVICE_NOT_FOUND` and `API_ACCESS_DENIED` are **acquisition** claims, `SELECTS_NO_PODS` and
+`NO_READY_ENDPOINT` are **semantic** ones; all four are CONFIRMED at `AuthorityDirect`/HIGH with no
+discriminator; the denied-read finding carries a **closed operation enum** rather than a message, on
+the 0069 §6 division; and both universal claims require a **proven-complete enumeration**, so a
+budget, a page ceiling, a remaining `continue`, a `410` or a cancellation makes a set **incomplete
+and never zero** — Kafka 10.2's rule in a third domain. A `401` earns **no** code at all.
+
+**Two things were narrowed against 0093 and both are recorded.** Pod state went from
+*observation-only* to **not retained**, because no admitted finding consumes a Pod field — which
+also dissolved 0093's open renderer question, since without per-Pod and per-endpoint nodes the
+report is a single-path journey `serviceView` already renders. And **client certificates became an
+admitted authentication mode**, forced by the fixture strategy: `kind` and `kubeadm` kubeconfigs
+authenticate with them. That **fires 0072 §14 condition 1**, narrowly and explicitly — the private
+key is `security.Secret`, the certificate and CA bundle are public — and takes `Reveal` and
+`SecretFor` from **4 to 5**, one per service, invariant intact.
+
+`SchemaVersion` stays **1**, no closed vocabulary gains a member, failure classes stay **42**, and
+0093's `Factory.DefaultPort` mismatch is closed rather than deferred: the factory declares **443**
+and derives the API server host from the context it was already given. **Zero open blockers**, and
+the implementation is split three ways so that no phase is one giant Kubernetes commit.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

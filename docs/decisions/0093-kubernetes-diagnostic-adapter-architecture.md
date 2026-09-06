@@ -16,6 +16,15 @@
   presentation layer shows the fact), ADR 0090 §7 (unconsumed is not debt), **ADR 0092** (the
   planning-admission contract, the vantage ceiling, intent as a premise, the time-series limit)
 - **Supersedes:** **ADR 0062 §9's "No Kubernetes API access" clause, in part and conditionally** — see §9.
+- **Amended in Phase 12.1A — ADR 0094 closes both of this record's architecture blockers and
+  narrows two of its statements**, and nothing else here changes. **B1** is closed by measurement:
+  client-go executes an exec credential plugin only at the **first API request**, so a refusal
+  issued after `clientcmd.Load` and before any request is structural. **B2** is closed by
+  authorization with a nine-package import allowlist and a recorded cost. The two narrowings:
+  **Pod state is not retained at all** rather than retained as observation — no admitted finding
+  consumes a Pod field, which also dissolves §4's renderer question — and **client certificates
+  are an admitted authentication mode**, forced by `kind`'s own kubeconfig. Both are strictly
+  narrower or strictly required; the MVP-D boundary is unchanged.
 - **Decision:** **ARCH A** — Kubernetes is a normal service adapter that diagnoses Kubernetes
   objects. **MVP-D**: one `namespace + Service` target, three object kinds, **four** finding codes,
   Pod state as **observation only**, and **no** Events, logs, metrics, NetworkPolicy solver, CNI
@@ -299,6 +308,10 @@ requires `DefaultPort() uint16`, `NewRegistry` rejects a zero default port, and 
 required — and **a Kubernetes target has neither in the operator's sense**. That asymmetry is real
 and is recorded rather than papered over; Redis and RabbitMQ both shipped as leaf commands before
 `run --config` existed.
+
+*(Phase 12.1A marker: **resolved and no longer open.** ADR 0094 §2.9 retains no per-Pod and no
+per-endpoint evidence node, so the report is a single-path journey and `serviceView` needs **no
+change at all**.)*
 
 **The renderer needs one decision.** `terminal.serviceView` models a linear per-path journey plus
 **one** repeated child level, and Kubernetes has no journey and **two** child kinds. Using the

@@ -403,6 +403,11 @@ credential of their own and no dependency.
 
 1. **A fifth service whose credential is not a username and a password** — a token, a
    client certificate, or a mechanism with two secrets — reopens §2's shape.
+   *(Phase 12.1A: **this condition has fired.** ADR 0094 §2.3 admits a Kubernetes bearer token and
+   a client certificate with its private key, so §2's shape is reopened **narrowly** — the private
+   key is secret material carried by `security.Secret`; the certificate and CA bundle are public
+   and are not. §13's refusal of an `exec:` provider is **upheld, not reopened**: ADR 0094 §2.2
+   refuses a kubeconfig `exec:` stanza before any request is issued.)*
 2. **A measured need for a secret provider that performs I/O of its own** reopens §13, with
    its own security review, and would be the first time svcdoctor authenticates to something
    in order to diagnose something else.
