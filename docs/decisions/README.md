@@ -544,6 +544,55 @@ three declared TLS failure classes stay unproducible without the text matching t
 and **records without fixing** that `docs/FINDINGS.md` has no entry for any of the nine `REDIS_*`
 codes.
 
+**0093 is the first record about a domain svcdoctor has never touched, and it was decided by one
+measurement rather than by taste.** Phase 12.0 asked whether Kubernetes can be added without
+svcdoctor becoming `kubectl describe` with nicer formatting, a cluster inventory, a monitoring
+system, a log or metrics collector, an eBPF agent or a mesh analyzer. The answer is **yes, and only
+for a narrow slice**, because Kubernetes's own API reference says that
+`ContainerStateWaiting.reason` and `ContainerStateTerminated.reason` are **free-form strings**:
+`OOMKilled`, `CrashLoopBackOff` and `ImagePullBackOff` are kubelet and container-runtime
+conventions, not API contract, and `CrashLoopBackOff` is not even a Pod phase. Every attractive
+Pod-level finding keys on one of them, and what survives the free-text prohibition this repository
+already applies to Redis and RabbitMQ is one column of `kubectl get pods`. **The one Kubernetes
+reason vocabulary that *is* a contract enum is `metav1.StatusReason`** — which is exactly why two
+of the four admitted findings are about API status and none is about a container.
+
+**What survives is the other half: what Kubernetes *publishes* as a backend.** Answering it needs
+no free text at all and requires six steps a `kubectl` command does not perform — find slices by
+the `kubernetes.io/service-name` label rather than by name; enumerate *all* of them, because
+multiple per Service are normal and dual-stack guarantees at least two; know that **`ready: nil`
+means true, not false**; keep `serving` and `terminating` distinct with their own nil defaults;
+deduplicate endpoints that legitimately appear in more than one slice; and prove the enumeration
+was complete. That is the completeness-and-contrast work 0084 and 0085 already built for Kafka and
+PostgreSQL, in a third domain.
+
+**So the scope is deliberately small: ARCH A, MVP-D.** One `namespace + Service` target, three
+object kinds, **four** finding codes, **two** rules, Pod state as observation only, and **no**
+schema, graph or `RuleContext` change. Events, logs, metrics, a NetworkPolicy solver, CNI
+internals, eBPF, service mesh, Ingress, Node lists, Secrets, ConfigMap contents and annotations are
+all **out**, most of them as decisions rather than deferrals. The frozen wording is **publication,
+never reachability** — *"what does Kubernetes currently publish as ready"*, not *"can clients reach
+this"* — which is 0092 §2.4's vantage ceiling applied to a control plane. **Kubernetes credentials
+reach the API server and nothing else**, and that needs no new rule: the API server has a host and
+a port, so 0028's endpoint binding refuses a Pod IP structurally.
+
+**Two blockers are handed to 12.1A, and both were measured rather than suspected.** Importing
+`client-go` takes the module count from **2 to 46–47** and the binary from **10.3 MB to about
+36 MB** — and it links **`os/exec`**, which no production file imports today and which four
+separate guards forbid. Avoiding `clientcmd` does **not** help: the exec credential plugin is
+reachable from `rest` itself. That collides with **0072 §13**, which refuses config-driven process
+execution with the reopen condition *"None. This is a decision, not a deferral"* — while EKS, GKE
+and AKS all generate exec-based kubeconfigs. So the guarantee can only be behavioural, and 12.1A
+must choose between refusing `exec:` stanzas plus external token materialization, or reopening
+0072 §13 with its own security review.
+
+**0093 supersedes one clause of 0062 §9, conditionally and narrowly.** That record states *"No
+Kubernetes API access… the examples set `automountServiceAccountToken: false`"*, and one command
+would make it false. Everything else in 0062 stands, the existing manifests are untouched, a
+Kubernetes-diagnosis example is a **second** manifest with its own three-resource two-verb
+single-namespace Role, and 0062's real point — *"it does not become an agent"* — is reaffirmed
+rather than weakened.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

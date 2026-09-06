@@ -8,6 +8,15 @@ semver release has been published.**
 
 Read that wording literally, because the distinctions in it are the whole point.
 
+**Amended in Phase 12.0 — ADR 0093 §9 supersedes §9's "No Kubernetes API access" clause in
+part and conditionally**, and nothing else in this record. The supersession applies **only** to
+a future `diagnose kubernetes` command; every other command still calls no API and still needs
+no ServiceAccount. The manifests in `examples/kubernetes/` are **unchanged**,
+`automountServiceAccountToken: false` included — a Kubernetes-diagnosis example would be a
+second, clearly separate manifest with its own minimal `Role`. §9's real point, that svcdoctor
+**does not become an agent** and inherits no platform's API permissions, is reaffirmed rather
+than weakened. The superseded text is left standing below with a marker.
+
 **Accepted** applies to every decision below. **Runtime implemented** means the
 image, its security properties and the Kubernetes execution model exist and are
 validated.
@@ -267,6 +276,10 @@ answer while obscuring that it already answered.
 and resolves names; it does not craft packets. `NET_RAW`, `NET_ADMIN` and
 `SYS_ADMIN` are not needed and must not be granted. No `hostNetwork`, no
 `hostPID`, no `hostIPC`, never privileged.
+
+*(Phase 12.0 marker: **superseded in part and conditionally by ADR 0093 §9** — for a future
+`diagnose kubernetes` command only. The paragraph stands unchanged for every other command,
+and the examples are untouched.)*
 
 **No Kubernetes API access.** svcdoctor never calls the API, so it needs no
 ServiceAccount permissions, no Role and no RoleBinding, and the examples set
