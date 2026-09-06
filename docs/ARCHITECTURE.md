@@ -1156,6 +1156,41 @@ does not exist, and ADR 0052's `outcome` and `topology` lines are Phase 6.4. No 
 see §5.8 and the Phase 6.2a gate. No new `FindingCode`, no new `FailureClass`, no schema
 change, no dependency, and `Reveal` stays at two production call sites.
 
+### 5.10 The Kubernetes adapter boundary, and why it is shaped differently
+
+`internal/adapter/kubernetes` is the fifth adapter and the first that does **not** own its
+transport (**ADR 0094**). Every difference from the other four follows from that one fact,
+and each is a deliberate consequence rather than an exception:
+
+- **It never touches the transport chain.** The other four receive connections generic
+  transport established and measured. Kubernetes' transport belongs to `client-go`, which
+  performs DNS, TCP and TLS inside a library svcdoctor does not drive. So L1, L2 and L3
+  carry no evidence for a Kubernetes run, and depguard denies this adapter the four
+  transport probes precisely so that half-owning the connection is impossible.
+- **L4 is unused too**, because the Kubernetes API has no separate capability-discovery
+  step. The five nodes are L0, L5 and three at L6. Neither absence breaks the failure
+  boundary, which needs only *a* PASS at a strictly lower layer, and L0 provides one.
+- **The library lives in one subpackage**, exactly as `kmsg` does — but the name is
+  `client`, not `wire`, because it assembles a connection rather than encoding bytes.
+  `internal/adapter/kubernetes/client` is the sole importer of every `k8s.io` package in the
+  repository, behind a ten-path allowlist, and nothing above it sees a library type.
+- **The one `Reveal` is therefore not in a `wire` package.** The last layer svcdoctor
+  controls is the one that builds the `rest.Config` and hands it the credential. Creating an
+  empty `wire` directory to satisfy a naming rule would make the guard say less rather than
+  more, so `.golangci.yml` and `test/security` both name the package and the invariant stays
+  what it always was: **one production reveal per service**.
+- **It reads and concludes nothing.** The adapter normalizes three API reads into counts,
+  booleans and closed enums; no Kubernetes API struct leaves the client package, and no
+  finding is produced there.
+
+Two rules that hold for every adapter hold here with more force. **Service-specific values
+are attributes, never `FailureClass` values** — the Kubernetes Service type, the selector
+shape and the endpoint counts are all attributes, and only `metav1.StatusReason` and the HTTP
+status are normalized into the generic vocabulary, because a status *message* is text
+whoever answers chooses. And **a set is not an inventory**: there is no per-Pod and no
+per-endpoint node, because no admitted finding consumes a single Pod field and retaining
+identity for a rendering nobody's diagnosis depends on is the debt ADR 0090 §7 refuses.
+
 ## 6. Diagnosis
 
 Diagnosis consumes normalized evidence only.

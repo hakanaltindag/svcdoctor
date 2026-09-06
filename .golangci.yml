@@ -129,6 +129,106 @@ linters:
             - errors
             - strconv
 
+        # The Kubernetes library reaches exactly one package.
+        #
+        # ADR 0094 section 2.10. A control-plane client is a large capability
+        # surface — every group and every verb, plus kubeconfig semantics,
+        # credential plugins and a transport — and confining it to one directory
+        # is what keeps "no other layer can reach it" a property of the build.
+        #
+        # It is written as one negated glob rather than as a denial repeated for
+        # every protected package, and that difference is load-bearing: an
+        # enumeration of protected directories leaves a new top-level package
+        # unprotected on the day it is created, which is exactly how
+        # `cli-composes-and-does-not-conclude` came to be missing Redis's wire
+        # package for two phases. This form protects a package that does not
+        # exist yet.
+        #
+        # Test files inside the client package are covered by the same negation:
+        # a hermetic Kubernetes API test has to build corev1 and discoveryv1
+        # fixtures, and doing so is not reaching past the boundary — it is
+        # exercising it. The complementary property, that no *production* package
+        # outside this one imports k8s.io, is asserted independently in
+        # test/security/kubernetes_boundary_test.go.
+        kubernetes-library-has-one-importer:
+          files:
+            - "**/internal/**"
+            - "!**/internal/adapter/kubernetes/client/**"
+          deny:
+            - pkg: k8s.io
+              desc: >-
+                only internal/adapter/kubernetes/client may import a Kubernetes
+                library; every other layer consumes svcdoctor's own normalized
+                values (ADR 0094 §2.10)
+
+        # Inside that package, the permitted surface is an allowlist.
+        #
+        # ADR 0094 section 2.1 enumerated **ten import paths** — on nine rows of
+        # PHASE121A §4.4's table, because one row admits `k8s.io/api/core/v1` and
+        # `k8s.io/api/discovery/v1` together — and enumerated the refusals with
+        # them: the full `Clientset`,
+        # `dynamic`, the API discovery client, informers, listers, tools/cache,
+        # workqueue, tools/watch, leaderelection, portforward, remotecommand,
+        # transport/spdy, **every** plugin/pkg/client/auth package,
+        # controller-runtime, every k8s.io/kubectl package, and every code
+        # generator.
+        #
+        # It is an allowlist for the reason the SASL core's is: the permitted set
+        # is small, known and argued, and the forbidden set is everything that
+        # exists or ever will. A deny list would also be wrong mechanically —
+        # depguard matches a denial by prefix, so denying `client-go/kubernetes`
+        # to refuse the Clientset would take the two typed group clients with it.
+        #
+        # Test files are exempt, because a hermetic Kubernetes API test has to
+        # build corev1 and discoveryv1 fixtures and drive an httptest server, and
+        # doing so exercises the boundary rather than crossing it. The
+        # complementary property — that the *production* import set is exactly
+        # this list — is asserted independently by
+        # TestTheKubernetesClientImportsAreExactlyTheAllowlist, which parses this
+        # package's own sources.
+        kubernetes-client-surface-is-narrow:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/kubernetes/client/**"
+            - "!**/*_test.go"
+          allow:
+            # The ten, and nothing else. Nine allowlist rows: the two k8s.io/api
+            # packages share one, being the two object groups this adapter reads.
+            - k8s.io/client-go/rest
+            - k8s.io/client-go/tools/clientcmd
+            - k8s.io/client-go/tools/clientcmd/api
+            - k8s.io/client-go/kubernetes/typed/core/v1
+            - k8s.io/client-go/kubernetes/typed/discovery/v1
+            - k8s.io/api/core/v1
+            - k8s.io/api/discovery/v1
+            - k8s.io/apimachinery/pkg/apis/meta/v1
+            - k8s.io/apimachinery/pkg/api/errors
+            - k8s.io/apimachinery/pkg/labels
+            # svcdoctor's own: the credential type this package binds and
+            # reveals, and the vocabulary its normalized values are named in.
+            - github.com/hakanaltindag/svcdoctor/internal/security
+            - github.com/hakanaltindag/svcdoctor/internal/service/kubernetes
+            # The standard library this package uses, and no more. net/http is
+            # here for one thing — the Proxy function that makes an ambient
+            # HTTP_PROXY unable to change this run's vantage. crypto/x509 is here
+            # to classify a verification failure from a typed error rather than
+            # from a message. **crypto/tls is deliberately absent**: client-go
+            # assembles the TLS configuration from CertData and KeyData, so this
+            # package never holds a connection it could interrogate.
+            - context
+            - crypto/x509
+            - errors
+            - fmt
+            - net/http
+            - net/url
+            - os
+            - path/filepath
+            - slices
+            - strconv
+            - strings
+            - time
+            - unicode/utf8
+
         # Diagnosis is a pure function over frozen evidence.
         # docs/ARCHITECTURE.md section 6, ADR 0002.
         diagnosis-is-pure:
@@ -446,11 +546,12 @@ linters:
 
       # The one place security.Reveal may be called: a service adapter's wire
       # package, which is the last layer before the socket and holds no state
-      # between exchanges. As of Phase 4.4b there are exactly two calls, one per
-      # service — internal/adapter/kafka/wire/saslauthenticate.go and
-      # internal/adapter/postgres/wire/scram.go — and this exclusion is what
-      # makes them legal there and illegal everywhere else. Verified in both
-      # directions against deliberate violations in every phase that touched it.
+      # between exchanges. The invariant is **one production call site per
+      # service**, and it has been that since Phase 4.4b — this comment said
+      # "exactly two calls" until Phase 12.1B, by which point Redis, RabbitMQ and
+      # Kubernetes had made it five. This exclusion is what makes them legal in a
+      # wire package and illegal everywhere else. Verified in both directions
+      # against deliberate violations in every phase that touched it.
       #
       # **Narrowed in Phase 4.4b**, and the reason is worth recording. This
       # exclusion previously named no `text`, so it exempted wire packages from
@@ -465,6 +566,21 @@ linters:
       # authority and nothing else, which is the technique the channel rules
       # already use.
       - path: internal/adapter/[^/]+/wire/
+        linters:
+          - forbidigo
+        text: 'security.Reveal turns a masked secret'
+
+      # The fifth authorized reveal, and the first that is not in a `wire`
+      # package. Kubernetes has no wire protocol of svcdoctor's own: client-go
+      # owns the transport, so the last layer before the socket is the package
+      # that assembles the rest.Config. ADR 0094 section 6.2 froze the site as
+      # internal/adapter/kubernetes/client, one function, one call — and named
+      # adding it to this list as the mechanism that makes the site deliberate.
+      #
+      # Granted by message text, exactly as the four wire grants above are, so
+      # this package gains the reveal authority and none of the channel
+      # authorities: naming a TLS or plaintext channel constant here still fails.
+      - path: internal/adapter/kubernetes/client/
         linters:
           - forbidigo
         text: 'security.Reveal turns a masked secret'

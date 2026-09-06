@@ -107,6 +107,11 @@ shareable report replaces it with `target-001`, numbered in declared order.
 A hostname, an IPv4 literal or an IPv6 literal. Write IPv6 unbracketed, and put the port in
 `port:`.
 
+**A `kubernetes` target writes neither, and both are refused there.** Its API server is derived
+from the kubeconfig context the target already names, or is the API Service's own name in-cluster,
+so a written `host` or `port` would be read by nothing — and a field that looks configured and is
+not is worse than one that is absent.
+
 **An address is not a name.** A target given a literal resolves nothing and records nothing about
 resolution: its report holds no name-resolution node at all, so a DNS finding is structurally
 unreachable for it rather than suppressed.
@@ -183,11 +188,112 @@ The service's own configuration. Every field is optional.
 | `kafka` | `sasl_mechanism` | none | `PLAIN` or `SCRAM-SHA-256`, uppercase |
 | `redis` | — | — | Redis has no service-owned configuration |
 | `rabbitmq` | `vhost` | `/` | The virtual host to open |
+| `kubernetes` | `kubeconfig` | none | Path to exactly one kubeconfig file. Required unless `in_cluster` |
+| | `context` | none | The kubeconfig context. **Required** with `kubeconfig`, forbidden with `in_cluster` |
+| | `in_cluster` | `false` | Authenticate as the pod's own ServiceAccount. Mutually exclusive with `kubeconfig` |
+| | `namespace` | none | **Required.** Never taken from the context, never `default` |
+| | `service_name` | none | **Required.** The one Service this target is about |
 
 `sasl_mechanism` has no default and svcdoctor never picks one: a default would be a silent
 decision about the framing that carries your password. Any other registered name is proposed to
 the broker and reported as one svcdoctor cannot perform — sending no credential and no byte
 derived from one.
+
+### `kubernetes` targets
+
+```yaml
+targets:
+  - id: payments-api
+    type: kubernetes
+    config:
+      kubeconfig: /etc/svcdoctor/kubeconfig
+      context: prod-eu
+      namespace: payments
+      service_name: payments-api
+```
+
+**Diagnosis is not active yet.** A `kubernetes` target is decoded, validated and executed, and it
+produces a report containing the evidence it gathered — the API access, the Service, the Pod set
+and the endpoint publication. It produces **no findings**: interpreting those nodes is the next
+phase's work, so a Kubernetes target currently reports what was observed and concludes nothing.
+
+**One Service is one target.** There is no selector, no Pod, no workload, no wildcard, no regular
+expression, no list of Services and no all-namespaces mode. Each of those is a field that does not
+exist rather than a value that is rejected.
+
+**Nothing is defaulted.** `KUBECONFIG` is not consulted, `~/.kube/config` is not a fallback, a
+merge list is not supported, and the file's own `current-context` is never used — a defaulted
+context makes one configuration read a different cluster on a different machine, and its failure
+mode is indistinguishable from a real finding.
+
+**In-cluster mode is explicit and is never a fallback.** A mounted ServiceAccount token must never
+cause svcdoctor to acquire an identity nobody asked for.
+
+**Five kubeconfig constructs are refused, before anything is sent:**
+
+| Construct | Why |
+|---|---|
+| `exec` | A configuration file must not make svcdoctor run a local program. No flag enables it |
+| `auth-provider` | The cloud providers shipped as auth-providers execute local commands, and none is registered in this build |
+| `as`, `as-groups`, `as-uid`, `as-user-extra` | A diagnostic that silently acts as another principal produces a report whose authority cannot be reconstructed |
+| `proxy-url` | A proxy changes the network position every claim in the report is scoped to |
+| `insecure-skip-tls-verify` | svcdoctor presents a credential to the API server and will not do so over a channel it cannot verify |
+
+`username`/`password` is refused too: basic authentication is deprecated in Kubernetes and is not a
+supported mode. So is a context whose user declares no credential at all — svcdoctor does not read
+a Kubernetes API anonymously.
+
+Each of these is a **configuration error**, reported before any network operation and exiting 2.
+
+**EKS, GKE and AKS kubeconfigs use exec plugins by default**, so those clusters are reachable only
+through in-cluster identity or a token materialized outside the file. That is the price of not
+running programs a file names.
+
+**Four authentication modes, and only these:** a bearer token the target's own `credentials:`
+block names; a kubeconfig `tokenFile`, which svcdoctor reads itself; a client certificate and key;
+and the in-cluster ServiceAccount. Exactly **one** credential may be declared between the target
+and the selected kubeconfig user — two is an ambiguity svcdoctor refuses rather than ranks.
+
+The `tls:` block is refused entirely for a `kubernetes` target: the API server's trust material
+comes from the kubeconfig's own `certificate-authority`, or from the projected ServiceAccount CA.
+So is `credentials.username`, because no supported mode carries one — a bearer token and a client
+certificate each *are* the identity.
+
+**The RBAC it needs is a namespaced `Role` with three resources and two verbs:**
+
+```yaml
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list"]
+```
+
+No `ClusterRole`, no cluster-scoped grant, and no `watch`, `create`, `patch`, `update`, `delete`,
+`impersonate`, `escalate`, `bind`, `pods/log`, `pods/exec`, `secrets`, `configmaps`, `events`,
+`nodes` or `namespaces`. **A label selector narrows the request; it does not narrow the grant** —
+svcdoctor holds `pods:list` and `endpointslices:list` for the whole namespace.
+
+**A Kubernetes credential authorizes the API server and nothing else.** It does not authorize a
+Pod IP, a cluster IP, an endpoint address, a node address, or any PostgreSQL, Kafka, Redis or
+RabbitMQ endpoint. No discovered endpoint inherits it, and svcdoctor connects to none of them.
+
+**Exactly three API requests are made**, server-side filtered and issued in order: `GET` the
+Service, `LIST` Pods by that Service's own selector, `LIST` EndpointSlices by
+`kubernetes.io/service-name`. There is no watch, no discovery call, no version negotiation and no
+retry of any kind — a `429` or a `5xx` ends the read and the set becomes **incomplete**, because
+retrying would turn one bounded diagnosis into a small monitoring loop.
+
+**A budget reached is never "nothing found".** Pages are bounded at 500 objects each, 8 pages per
+list, 4,000 Pods, 256 EndpointSlices and 10,000 endpoints. Reaching any of them — or a `410`, a
+failed request or a cancellation — makes that set **incomplete**, marks the run incomplete and
+exits 4. An empty *complete* set and an incomplete one are different facts, and only the first
+supports a conclusion.
 
 ## Credentials
 

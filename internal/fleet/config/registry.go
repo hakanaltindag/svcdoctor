@@ -53,9 +53,28 @@ type Common struct {
 
 // Factory is what a service registers so the generic core can handle its targets.
 //
-// Four small methods, and none of them performs I/O, opens a connection, reads
-// an environment variable or resolves a credential. A factory turns bytes into a
-// validated value and does nothing else in this phase.
+// Three small methods. None of them opens a connection, resolves a name, reads
+// an environment variable or resolves a credential: a factory turns bytes into a
+// validated value.
+//
+// # It may read a file the target itself names, and one service does
+//
+// This comment read *"none of them performs I/O"* from Phase 9.1A until Phase
+// 12.1B, when a service arrived whose authority is a file. A Kubernetes target
+// names a kubeconfig, and three things follow from that file: whether the target
+// is usable at all, which cluster it reads, and — critically — whether it carries
+// a construct svcdoctor refuses, such as an `exec` credential plugin.
+//
+// Deferring those to execution would make a kubeconfig that makes svcdoctor run a
+// local program into *one target's execution failure at exit 4* rather than a
+// configuration error at exit 2 with nothing dialled. That is the same defect
+// Phase 9.1C found in the credential path and fixed for the same reason, so the
+// sentence is amended rather than the rule bent around.
+//
+// The boundary that did not move: **internal/fleet/config still opens exactly one
+// file, the configuration document.** A service factory lives in its own package
+// and may read what its own target names — which is what internal/fleet/services
+// already does at preflight, where trustsource.Load reads `tls.ca_file`.
 type Factory interface {
 	// Kind is the value of a target's `type` field. It is the registration key
 	// and must be unique.
@@ -75,6 +94,40 @@ type Factory interface {
 	// It receives an opaque ServiceNode rather than a YAML node, which is what
 	// keeps the YAML dependency inside internal/fleet/config (ADR 0071 §3.3).
 	Decode(node *ServiceNode, common Common) (ServiceConfig, error)
+}
+
+// EndpointDeriver is implemented by a factory whose targets name no host.
+//
+// # Why an optional interface rather than a fifth Factory method
+//
+// Four of the five services registered today are asked about an endpoint an
+// operator typed, and for them `host` is the target's most important field. One
+// is not: its endpoint is **derived** from material the target already names, so
+// writing a host there would be a value nobody reads — and ADR 0060's discipline
+// is that an inert input is refused rather than accepted, because an operator
+// who wrote it believes it did something.
+//
+// Putting the question on every Factory would make four services answer a
+// question only one has, and would mean editing four files to add a fifth
+// service — which is the coupling the registry exists to remove. An optional
+// interface asks it of the one service that has an answer, stays service-neutral
+// here, and needs no edit anywhere else.
+//
+// # What the generic contract still requires
+//
+// **The host requirement is satisfied, not relaxed.** A derived endpoint is
+// validated by exactly the same checks a written one is, and a factory that
+// derives nothing usable fails its target. What changes is where the value comes
+// from, and nothing downstream — preflight, credential binding, the runner — can
+// tell the difference.
+type EndpointDeriver interface {
+	Factory
+
+	// DerivedEndpoint returns the endpoint a decoded configuration resolves to.
+	//
+	// It is called once, immediately after Decode, with that service's own
+	// validated value. An error is a configuration error and refuses the target.
+	DerivedEndpoint(config ServiceConfig) (host string, port uint16, err error)
 }
 
 // Registry maps a service kind to its factory.

@@ -109,14 +109,30 @@ check that makes credential use auditable — so denying the import would ban th
 safety check along with the escape hatch. The boundary is "which package may turn
 a secret into bytes", and that is a call-level rule.
 
-**There are exactly two call sites, one per service:**
+**There is exactly one call site per service, and there are five:**
 
 | Service | Call site |
 |---|---|
-| Kafka | `internal/adapter/kafka/wire/saslauthenticate.go`, in `plainAuthBytes` |
-| PostgreSQL | `internal/adapter/postgres/wire/scram.go`, in `authenticateSCRAM` |
+| Kafka | `internal/adapter/kafka/wire/authenticate.go` |
+| PostgreSQL | `internal/adapter/postgres/wire/scram.go` |
+| Redis | `internal/adapter/redis/wire/auth.go` |
+| RabbitMQ | `internal/adapter/rabbitmq/wire/connection.go` |
+| Kubernetes | `internal/adapter/kubernetes/client/authority.go`, in `applyCredential` |
 
-Two is the number ADR 0027 sized the rule for. A third fails `make check` and CI.
+**One per service is the invariant, and it has been since Phase 4.4b.** This table
+read *"exactly two"* until Phase 12.1B, by which point Redis, RabbitMQ and
+Kubernetes had made it five; the count moves with the service list and the rule
+does not. A sixth site for an existing service fails `make check` and CI.
+
+**Kubernetes is the first site outside a `wire` package, and that is a property of
+the service rather than a relaxation.** The four protocol adapters own their
+bytes, so their last layer before the socket is a wire package. Kubernetes owns
+none — `client-go` writes the request — so the last layer svcdoctor controls is
+the package that assembles the connection and hands it the credential. Creating an
+empty `wire` directory there to satisfy a naming rule would make the guard say
+less rather than more, so `.golangci.yml` names the package in the same exclusion
+that grants the four, by message text, and it gains the reveal authority and none
+of the channel authorities. See **ADR 0094 §6.2**.
 
 The guard was installed in the phase *before* the first credential byte,
 deliberately: a rule added afterwards has to be argued against working code. It
@@ -573,6 +589,150 @@ same socket:
 > write. Retrying means re-running the chain, which re-measures what is about to
 > be authenticated over. See ADR 0030 §10.
 
+
+## Kubernetes API access
+
+The Kubernetes adapter is the only part of svcdoctor that talks to a control
+plane, and it is confined to one package —
+`internal/adapter/kubernetes/client` — which is the sole importer of every
+`k8s.io` library in the repository. `depguard` enforces that at lint time and
+`test/security/kubernetes_boundary_test.go` enforces it independently, so an edit
+to the lint configuration does not silently remove it.
+
+### Configuration must not be able to run a program
+
+**A kubeconfig `exec:` stanza is refused, permanently.** ADR 0072 §13 refuses
+arbitrary code execution driven by a configuration file with the reopen condition
+*"None. This is a decision, not a deferral."*, and no flag enables it — none is
+created, named or reserved.
+
+The refusal happens **before the first API request**, which is where it has to
+happen: Phase 12.1A measured that `client-go` invokes an exec plugin lazily, from
+the transport, on the first request — not at parse, not at client construction.
+The order is fixed:
+
+```text
+read the kubeconfig -> clientcmd.Load -> inspect the selected cluster and user
+    -> REFUSE if any prohibited construct is present
+    -> (only then) build rest.Config, build clients, issue requests
+```
+
+svcdoctor goes one step further than refusing. `clientcmd` is used **only to
+parse**, and the `rest.Config` is assembled by hand from the validated fields, so
+`ExecProvider` and `AuthProvider` are never populated on any path — a refusal that
+somehow failed to fire could not produce a configuration capable of executing
+anything.
+
+**The negative test is a sentinel file**, not an error assertion: a kubeconfig
+whose plugin would write a file, and the file must not exist afterwards. A test
+that only checked for an error would pass on a build that refused the target
+*after* running the program.
+
+**No refusal repeats what it refused.** The message names the construct — `exec`,
+`auth-provider`, `proxy-url` — and never its command, arguments, environment names
+or values, executable path or provider configuration, because those are strings
+whoever wrote the file controls and their only destination would be an operator's
+terminal or a shared report. The same rule covers `proxy-url`, whose userinfo can
+carry credentials.
+
+### Every construct that silently changes authority or vantage is refused
+
+`exec` · `auth-provider` of any name · `as`/`as-groups`/`as-uid`/`as-user-extra` ·
+`proxy-url` · `insecure-skip-tls-verify` · `username`/`password` · a context with
+no credential at all.
+
+Impersonation and `proxy-url` were measured to propagate into a usable
+`rest.Config` **with no error**, so leaving them to fail later would have been
+indistinguishable from accepting them.
+
+**Ambient `HTTP_PROXY` and `HTTPS_PROXY` are neutralized rather than trusted.**
+`rest.Config.Proxy` is set to a function that selects no proxy, because leaving it
+nil hands routing to `net/http`'s environment support — and a report whose network
+vantage was decided by a variable the report never saw is wrong in a way nobody
+can see (ADR 0092 §2.4).
+
+**A plaintext API server URL is refused.** Every supported mode ends with a bearer
+token in a request header or a private key in a handshake, and an `http://` server
+is not a channel svcdoctor verified.
+
+### Credential authority is the API server, and nothing else
+
+> A Kubernetes credential authorizes exactly one thing: the API server this target
+> selected.
+
+It does not authorize a Pod IP, a Service cluster IP, an EndpointSlice address, a
+node address, a discovered hostname, or any Kafka, PostgreSQL, Redis or RabbitMQ
+endpoint. **No discovered endpoint inherits it**, and svcdoctor connects to none of
+them — there is no active probing of any address a Kubernetes read returns.
+
+This is structural rather than a rule to remember. Whichever of the four modes is
+selected, the material is held by a `security.Credential` bound to the API
+server's `security.Endpoint`, so ADR 0028's existing check refuses it anywhere
+else with no new mechanism. It is proven by asking the constructed credential for
+its secret at a Pod IP, a cluster IP, an IPv6 endpoint and another service's
+endpoint, and requiring all four to be refused.
+
+### Files, and which ones may be read
+
+The kubeconfig, a `tokenFile`, a client certificate and key, a CA bundle, and
+in-cluster the two standard projected paths. **No path discovered from remote API
+data is ever opened**: a path inside a Kubernetes object is data, not an
+instruction. Symlinks are followed, as they are for `--password-file`, and any
+message names the **resolved** path so a symlink cannot make svcdoctor claim a
+file it did not read. **No filesystem path reaches canonical evidence at all.**
+
+svcdoctor reads a `tokenFile` and the projected ServiceAccount token **itself**;
+`rest.Config.BearerTokenFile` is never set. That declines client-go's
+token-refreshing transport deliberately — a refresh is a reread on a schedule
+svcdoctor does not control, inside a process that runs once and exits.
+
+### What a Kubernetes report contains, and what it cannot
+
+Seventeen normalized values: an authentication **mode category**, the context name,
+the namespace, the Service name, its type, whether it is headless, whether it has
+a selector and how many keys that selector holds, and counts of Pods, slices,
+endpoints, ready endpoints, terminating endpoints and slices excluded by the
+owner-UID guard — each paired with whether its enumeration was complete.
+
+Never: a token, a private key, a certificate, a credential path, a kubeconfig
+path, a proxy URL, a label key or value, an annotation, a Pod name, phase,
+condition, container state, image, node name or IP, an endpoint address or
+hostname, a `targetRef` name, a cluster IP, a `resourceVersion`, a `metadata.uid`,
+the API server's URL, or **any `Status.Message`, condition message or status
+message**. The last of those is structural: API errors are classified from the
+HTTP status and `metav1.StatusReason` only, so a hostile status string carrying
+ANSI, CRLF or a token-shaped value has no path into a normalized value — it is not
+escaped, it is not read.
+
+### Known limit: response byte size is not bounded
+
+A list `limit` bounds the **number of objects** in a page, not the response's
+**byte size**. A single Pod carrying large annotations can be hundreds of
+kilobytes, and 500 of them is not a byte bound; client-go's typed clients expose
+no per-response body ceiling, so obtaining one would mean replacing the transport.
+
+What **is** bounded: objects per page (500), pages per list (8), Pods (4,000),
+EndpointSlices (256), endpoints (10,000) and total round trips (17). The byte
+exposure is bounded in practice by the page size and by svcdoctor retaining
+seventeen normalized values and discarding every decoded object immediately. This is
+recorded as a limitation rather than claimed away; a byte ceiling needs a
+transport svcdoctor controls (ADR 0094 §9.3).
+
+### The dependency, stated rather than minimized
+
+client-go brings about 36 modules into a process that holds plaintext credentials,
+and the binary goes from 10.3 MB to about 38 MB with `os/exec` and `net/http`
+newly linked. It is accepted because the alternative — hand-written Kubernetes
+authentication, kubeconfig semantics, TLS assembly and API decoding — is a worse
+security bet, and it is accepted **explicitly**, with every module enumerated in
+`test/security/dependency_test.go` and the import surface confined to nine
+packages.
+
+`os/exec` being linked is not the same fact as svcdoctor executing a plugin: it is
+reachable from `client-go/rest` itself, and compliance is defined behaviourally by
+the sentinel test above. No `plugin/pkg/client/auth` **provider** package is
+linked at all, which is why `auth-provider` fails closed twice — refused at parse,
+and inert because no provider is registered.
 
 ## Discovered endpoints
 

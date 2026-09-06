@@ -685,11 +685,24 @@ func TestRevealHasOneProductionCallSitePerService(t *testing.T) {
 	// not widen the contract — `internal/adapter/rabbitmq/wire` has its own
 	// package-local guard asserting the same count of one, so the file is pinned
 	// from both sides.
+	// Phase 12.1B added the Kubernetes entry, and it is the first that is not in
+	// a `wire` package. That is a property of the service rather than a
+	// relaxation: the four protocol adapters own their bytes, so their last layer
+	// before the socket is a wire package, and Kubernetes owns none — client-go
+	// writes the request, and the last layer svcdoctor controls is the package
+	// that assembles the connection and hands it the credential. Creating an
+	// empty `wire` directory there to satisfy a naming rule would make this guard
+	// say less rather than more.
+	//
+	// The property that did not move is the one that matters: **exactly one site
+	// per service**, named here, each opening a secret immediately before it is
+	// used and storing it nowhere.
 	authorized := map[string]bool{
-		"internal/adapter/postgres/wire/scram.go":      true,
-		"internal/adapter/kafka/wire/authenticate.go":  true,
-		"internal/adapter/redis/wire/auth.go":          true,
-		"internal/adapter/rabbitmq/wire/connection.go": true,
+		"internal/adapter/postgres/wire/scram.go":         true,
+		"internal/adapter/kafka/wire/authenticate.go":     true,
+		"internal/adapter/redis/wire/auth.go":             true,
+		"internal/adapter/rabbitmq/wire/connection.go":    true,
+		"internal/adapter/kubernetes/client/authority.go": true,
 	}
 
 	found := map[string]int{}
@@ -750,9 +763,11 @@ func TestRevealHasOneProductionCallSitePerService(t *testing.T) {
 		total += count
 		if !authorized[path] {
 			t.Errorf("%s calls security.Reveal %d time(s).\n\n"+
-				"Only a service adapter's wire package may open a secret, immediately "+
-				"before the value goes on the socket. See ADR 0027 and ADR 0056 section 12.",
-				path, count)
+				"Only a service's own credential boundary may open a secret, immediately "+
+				"before the value is used: a wire package for the four services that own "+
+				"their bytes, and internal/adapter/kubernetes/client for the one whose "+
+				"transport belongs to a library. See ADR 0027, ADR 0056 §12 and ADR 0094 "+
+				"§6.2.", path, count)
 			continue
 		}
 		if count != 1 {
@@ -769,7 +784,8 @@ func TestRevealHasOneProductionCallSitePerService(t *testing.T) {
 
 	if total != len(authorized) {
 		t.Errorf("found %d production security.Reveal call site(s), want exactly %d "+
-			"(one per service, each in its wire package)", total, len(authorized))
+			"(one per service, each in that service's own credential boundary)",
+			total, len(authorized))
 	}
 }
 

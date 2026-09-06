@@ -14,6 +14,7 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/fleet/secret"
 	"github.com/hakanaltindag/svcdoctor/internal/fleet/services"
 	fleetkafka "github.com/hakanaltindag/svcdoctor/internal/fleet/services/kafka"
+	fleetkubernetes "github.com/hakanaltindag/svcdoctor/internal/fleet/services/kubernetes"
 	fleetpostgres "github.com/hakanaltindag/svcdoctor/internal/fleet/services/postgres"
 	fleetrabbitmq "github.com/hakanaltindag/svcdoctor/internal/fleet/services/rabbitmq"
 	fleetredis "github.com/hakanaltindag/svcdoctor/internal/fleet/services/redis"
@@ -216,10 +217,11 @@ func applyRunOverrides(cfg config.Config, overrides runFlagOverrides) (config.Co
 //
 // # This is the single composition point
 //
-// The four services are named here, once, and nowhere else in the execution
-// path. That is ADR 0009's explicit registration: a fifth service adds one entry
-// to each registry below and requires no edit to the scheduler, the aggregate,
-// the renderer or the exit mapping.
+// The services are named here, once, and nowhere else in the execution path.
+// That is ADR 0009's explicit registration, and Phase 12.1B is the measurement
+// that it held: Kubernetes was added as **one entry in each registry below** and
+// required no edit to the scheduler, the aggregate, the renderer or the exit
+// mapping.
 func (a *App) executeRun(ctx context.Context, cfg config.Config) (domain.RunReport, error) {
 	// The vantage is a platform fact, collected once for the whole run so that
 	// every target's report names the same one — which is what makes the reports
@@ -241,6 +243,7 @@ func (a *App) executeRun(ctx context.Context, cfg config.Config) (domain.RunRepo
 		fleetkafka.Factory{Env: env},
 		fleetredis.Factory{Env: env},
 		fleetrabbitmq.Factory{Env: env},
+		fleetkubernetes.Factory{Env: env},
 	)
 	if err != nil {
 		return domain.RunReport{}, err
@@ -287,6 +290,7 @@ func fleetConfigRegistry() *config.Registry {
 		fleetkafka.Factory{},
 		fleetredis.Factory{},
 		fleetrabbitmq.Factory{},
+		fleetkubernetes.Factory{},
 	)
 	if err != nil {
 		// Unreachable: the four kinds are distinct constants with non-zero

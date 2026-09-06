@@ -137,7 +137,16 @@ func validateTarget(block targetBlock, registry *Registry) (Target, error) {
 		return Target{}, registry.unsupportedService(block.Type)
 	}
 
-	if err := checkHostSyntax(block.Host); err != nil {
+	// A service that derives its own endpoint is asked for it after Decode, and
+	// its targets must not write one: a host nobody reads is exactly the inert
+	// input ADR 0060 refuses, because an operator who wrote it believes it chose
+	// something. Every other target is checked here, unchanged.
+	deriver, derives := factory.(EndpointDeriver)
+	if derives {
+		if err := refuseWrittenEndpoint(block); err != nil {
+			return Target{}, err
+		}
+	} else if err := checkHostSyntax(block.Host); err != nil {
 		return Target{}, err
 	}
 
@@ -190,10 +199,21 @@ func validateTarget(block targetBlock, registry *Registry) (Target, error) {
 			"%w: service %q returned no configuration and no error", ErrConfig, block.Type)
 	}
 
+	// The derived endpoint is validated by exactly the checks a written one gets.
+	// Nothing downstream — preflight, credential binding, the runner — can tell
+	// the two apart, which is the point: the host requirement is satisfied here,
+	// not relaxed.
+	host := block.Host
+	if derives {
+		if host, port, err = deriveEndpoint(deriver, serviceConfig); err != nil {
+			return Target{}, withLine(err, block.Config.Line())
+		}
+	}
+
 	return Target{
 		ID:          block.ID,
 		Service:     block.Type,
-		Host:        block.Host,
+		Host:        host,
 		Port:        port,
 		Timeout:     timeout,
 		StepTimeout: stepTimeout,
@@ -238,6 +258,47 @@ func checkHostSyntax(host string) error {
 		}
 	}
 	return nil
+}
+
+// refuseWrittenEndpoint refuses the two fields a derived-endpoint target has no
+// use for.
+//
+// The message names the target's own `type` rather than any service this package
+// knows about, so the generic core still holds no service name.
+func refuseWrittenEndpoint(block targetBlock) error {
+	if block.Host != "" {
+		return newError(CategoryInvalidField, fmt.Sprintf(
+			"a host has no effect for a %q target: its API endpoint is derived from the "+
+				"configuration the target already names, and a written host would be read by "+
+				"nothing", block.Type)).at("host")
+	}
+	if block.Port != nil {
+		return newError(CategoryInvalidField, fmt.Sprintf(
+			"a port has no effect for a %q target: its API endpoint is derived from the "+
+				"configuration the target already names", block.Type)).at("port")
+	}
+	return nil
+}
+
+// deriveEndpoint asks the factory for its endpoint and validates the answer.
+//
+// A factory that returns an unusable endpoint fails its target rather than
+// producing one the rest of the run would have to cope with. checkHostSyntax is
+// the same function a written host goes through, called on purpose: two
+// validations of one field is how the two spellings drift apart.
+func deriveEndpoint(deriver EndpointDeriver, config ServiceConfig) (string, uint16, error) {
+	host, port, err := deriver.DerivedEndpoint(config)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := checkHostSyntax(host); err != nil {
+		return "", 0, err
+	}
+	if port == 0 {
+		return "", 0, newError(CategoryInvalidField,
+			"the service derived no port for this target").at("config")
+	}
+	return host, port, nil
 }
 
 // resolvePort applies the service default and refuses an out-of-range value.

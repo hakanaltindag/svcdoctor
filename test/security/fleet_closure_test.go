@@ -386,30 +386,53 @@ func repoPath(t *testing.T, rel string) string {
 
 // TestMTG07TheAuthorityCallSiteCountsAreUnchanged is the mechanical count.
 //
-//	security.Reveal          4, one per service, each in that service's wire package
-//	Credential.SecretFor     4, one per adapter
+//	security.Reveal          5, one per service
+//	Credential.SecretFor     5, one per adapter
 //
 // Both are counted from the tree rather than asserted from memory, and both name
 // where each site is, so a diff that moves one is visible.
+//
+// # The invariant is one per service, and it was never "four"
+//
+// It read 4 from Phase 9.0 until Phase 12.1B, which is the number of services
+// there were. The property ADR 0028 and ADR 0030 fixed is **one production reveal
+// per service**, and a fifth service moves the count without weakening anything.
+//
+// # Kubernetes is the first site outside a `wire` package, and that is structural
+//
+// The four protocol services each own their bytes, so the last layer before the
+// socket is a `wire` package. Kubernetes owns none: client-go writes the request,
+// and the last layer svcdoctor controls is the package that assembles the
+// connection. Requiring a `wire` directory there would mean creating an empty one
+// to satisfy a naming rule, which would make the guard say less rather than more.
+//
+// So the rule below is stated as what it always meant — **each site is in that
+// service's own credential boundary** — with the two shapes enumerated and the
+// Kubernetes one named, exactly as `.golangci.yml`'s forbidigo exclusion is.
 func TestMTG07TheAuthorityCallSiteCountsAreUnchanged(t *testing.T) {
 	reveal := callSitesOf(t, "security", "Reveal")
 	secretFor := methodCallSitesOf(t, "SecretFor")
 
-	if len(reveal) != 4 {
-		t.Errorf("security.Reveal has %d production call sites, want 4:\n%s",
+	if len(reveal) != 5 {
+		t.Errorf("security.Reveal has %d production call sites, want 5:\n%s",
 			len(reveal), strings.Join(reveal, "\n"))
 	}
-	if len(secretFor) != 4 {
-		t.Errorf("SecretFor has %d production call sites, want 4:\n%s",
+	if len(secretFor) != 5 {
+		t.Errorf("SecretFor has %d production call sites, want 5:\n%s",
 			len(secretFor), strings.Join(secretFor, "\n"))
 	}
 
-	// Each Reveal site is in a wire package, which is the only place ADR 0027
-	// permits one.
+	// The credential boundary of each service: a wire package for the four that
+	// own their bytes, and the Kubernetes client for the one that does not.
+	const kubernetesBoundary = "internal/adapter/kubernetes/client/"
 	for _, site := range reveal {
-		if !strings.Contains(site, "/wire/") {
-			t.Errorf("security.Reveal is called outside a wire package, at %s", site)
+		if strings.Contains(site, "/wire/") || strings.HasPrefix(site, kubernetesBoundary) {
+			continue
 		}
+		t.Errorf("security.Reveal is called outside a credential boundary, at %s.\n\n"+
+			"The permitted places are a service adapter's wire package and %s, which is "+
+			"Kubernetes' equivalent because client-go owns the transport there.",
+			site, kubernetesBoundary)
 	}
 }
 

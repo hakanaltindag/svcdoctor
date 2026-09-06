@@ -15,7 +15,7 @@
   (the vantage ceiling, intent as a premise, the time-series limit, the refusal list)
 - **Reopens, narrowly and explicitly:** **ADR 0072 §14 condition 1** — a credential that is a
   client certificate. §4.3.
-- **Decision:** **CLIENT_GO_AUTHORIZED** behind a nine-package allowlist; **exec auth REFUSED**
+- **Decision:** **CLIENT_GO_AUTHORIZED** behind a ten-path allowlist; **exec auth REFUSED**
   with a measured refusal point; four authentication modes; explicit kubeconfig, context and
   namespace; a three-resource namespaced RBAC minimum; bounded pagination whose exhaustion is
   **incomplete and never zero**; frozen EndpointSlice nil semantics; and **exactly four**
@@ -50,6 +50,10 @@ completeness table. This record holds the decision.
 `.../clientcmd/api` (the parse and inspection C2 depends on) · `client-go/kubernetes/typed/core/v1`
 · `client-go/kubernetes/typed/discovery/v1` · `k8s.io/api/core/v1` and `k8s.io/api/discovery/v1` ·
 `apimachinery/pkg/apis/meta/v1` · `apimachinery/pkg/api/errors` · `apimachinery/pkg/labels`.
+*(That is **ten import paths**. This record and `PHASE121A…§4.4` both said "nine-package
+allowlist" until the Phase 12.1B review pass; nine is the row count of §4.4's table, one row of
+which admits `k8s.io/api/core/v1` and `k8s.io/api/discovery/v1` together. **The permitted set is
+unchanged and nothing was added**: the correction is to the count, not to the allowlist.)*
 
 **Refused, and each refusal is build-enforced:** the full `kubernetes` `Clientset` /
 `kubernetes.Interface` · `dynamic` · the API-`discovery` client · `informers` · `listers` ·
@@ -259,8 +263,8 @@ universal claim over it is withheld.
 
 **Response byte size is a recorded known limitation**, not a blocker: `limit` bounds objects, not
 bytes, and client-go's typed clients expose no per-response body ceiling. The exposure is bounded
-in practice by the page size and by svcdoctor retaining sixteen fields and discarding every
-decoded object immediately.
+in practice by the page size and by svcdoctor retaining seventeen fields and discarding every
+decoded object immediately. *(Corrected from "sixteen" in the Phase 12.1B review pass; see §2.9.)*
 
 ### 2.6 C7 — EndpointSlice semantics, frozen
 
@@ -398,8 +402,12 @@ the Pod read still runs**. A selector-less or `ExternalName` Service runs neithe
 neither semantic finding. The Pod set and the slice set are **siblings under the Service node, not
 a chain**, which is what makes the graph a DAG rather than a list.
 
-**Sixteen normalized attributes, all closed types, no maps, no raw Kubernetes structs, no free
-text.** A count is authoritative **only** when its set's completeness flag is true; otherwise it is
+**Seventeen normalized attributes, all closed types, no maps, no raw Kubernetes structs, no free
+text.** *(This read "Sixteen" until the Phase 12.1B review pass. **Only the count was wrong.**
+`PHASE121A…§11.1`'s table — the sole enumeration anywhere, and what this sentence summarizes —
+lists **seventeen** rows, each naming its consumer; that record's own heading says "fifteen" and
+its closing sentence says "sixteen". No source enumerates fifteen or sixteen items. The frozen
+set is unchanged and no attribute was added, removed or moved by the correction.)* A count is authoritative **only** when its set's completeness flag is true; otherwise it is
 *observed so far*.
 
 **No per-Pod evidence node exists.** MVP-D retains **no Pod name, UID, label, phase, readiness,

@@ -125,7 +125,7 @@ anything stronger.
 
 Raw REST was weighed on its merits rather than dismissed. svcdoctor already has a YAML decoder,
 `crypto/tls`, `encoding/json` and a secret model, and the first scope needs **three** read
-operations over **fifteen** fields — so decoding is genuinely small. The reason it loses is not
+operations over **seventeen** fields — so decoding is genuinely small. The reason it loses is not
 size:
 
 - **The exec and auth-provider refusals require parsing the same structures client-go parses.**
@@ -162,7 +162,10 @@ an ADR."* Editing the count while leaving the reasoning would make the guard lie
 
 ### 4.4 The import allowlist, frozen
 
-**Permitted, and nothing else:**
+**Permitted, and nothing else** — **ten import paths on nine rows**, because the two
+`k8s.io/api` object groups share one. *(Both records described this as a "nine-package
+allowlist" until the Phase 12.1B review pass. The count was the row count; the set below is
+unchanged.)*
 
 | Package | For |
 |---|---|
@@ -583,7 +586,7 @@ available without replacing the transport.
 
 > **Frozen as a known limitation rather than a blocker.** First scope bounds objects and round
 > trips, not bytes. The exposure is bounded in practice by the page size and by the fact that
-> svcdoctor retains **fifteen fields** and discards every decoded object immediately (§13).
+> svcdoctor retains **seventeen fields** and discards every decoded object immediately (§13).
 > Phase 12.1B records it in `docs/SECURITY.md` as a known limit; a byte ceiling is a later decision
 > with its own record.
 
@@ -929,7 +932,11 @@ and none is authorized.**
 
 ## 11. Evidence, data minimization and privacy
 
-### 11.1 The normalized attribute set — fifteen fields, and every one is required
+### 11.1 The normalized attribute set — seventeen fields, and every one is required
+
+*(The heading read "fifteen" and the sentence below the table read "Sixteen keys" until the Phase
+12.1B review pass. **The table is the enumeration and it was never wrong**: seventeen rows, each
+naming its consumer. The two counts were clerical and are corrected; the set is unchanged.)*
 
 | Node | Attribute | Type | Required by |
 |---|---|---|---|
@@ -951,7 +958,7 @@ and none is authorized.**
 | | `k8s.slice_excluded_by_owner_uid_count` | int | the §7.3 race guard, made auditable |
 | | `k8s.slice_externally_managed` | bool | V8, recorded only when true |
 
-**Sixteen keys, closed types, no maps, no raw Kubernetes structs, no free text.** A count is
+**Seventeen keys, closed types, no maps, no raw Kubernetes structs, no free text.** A count is
 authoritative **only** when its set's `*_complete` attribute is true; otherwise it is
 *observed so far* and the renderer must say so.
 

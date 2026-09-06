@@ -9,6 +9,11 @@ learn.
 One command diagnoses one endpoint; one configuration file diagnoses many. No APM,
 OpenTelemetry collector, sidecar or agent is required for a diagnostic run.
 
+A fifth target type, `kubernetes`, reads one Service's backend publication from the Kubernetes
+API. It is available in a configuration file, it has **no diagnosis yet** — it reports what it
+observed and draws no conclusion — and it has no command of its own. See
+[Kubernetes](#kubernetes-target-no-diagnosis-yet).
+
 ```sh
 svcdoctor diagnose postgres --host db.prod.internal --user app --password-file /run/secrets/db
 svcdoctor run --config services.yaml
@@ -456,10 +461,46 @@ contract above.
 BASIC is bounded on purpose: it learns what svcdoctor can observe *while acting as the client
 for this run*. Inspecting a server's operational state is a separate future body of work.
 
+### Kubernetes target: no diagnosis yet
+
+A `kubernetes` target names one namespace and one Service, and svcdoctor makes exactly three
+Kubernetes API requests for it: `GET` the Service, `LIST` the Pods that Service's own selector
+matches, and `LIST` the EndpointSlices Kubernetes associates with it. It reports what those
+reads returned — the Service's type and selector shape, how many Pods matched, how many
+endpoints are published and how many of those Kubernetes marks ready — **and whether each
+enumeration was complete**.
+
+**It produces no findings.** Turning those observations into statements is the next phase's
+work, so today a Kubernetes target answers *what was observed* and nothing more. Reaching a page
+or object budget makes a set incomplete rather than empty, and svcdoctor will not report an
+incomplete enumeration as "none".
+
+It connects to no Pod, no cluster IP and no endpoint address, so it makes no claim about
+reachability at all: it reports what Kubernetes **publishes**. Its credential authorizes the API
+server and nothing else.
+
+The minimum access it needs is a namespaced `Role` with three resources and two verbs —
+`services: [get]`, `pods: [list]`, `endpointslices: [list]`. No `ClusterRole`, no cluster-scoped
+grant, no `watch`, and nothing that reads a Secret, a ConfigMap, an event, a log or a node.
+
+**A kubeconfig `exec` credential plugin is refused, permanently**, along with `auth-provider`,
+impersonation, `proxy-url` and `insecure-skip-tls-verify` — each before any network request, as a
+configuration error. A configuration file must not be able to make svcdoctor run a local program.
+EKS, GKE and AKS generate exec-based kubeconfigs by default, so those clusters are reachable only
+through in-cluster identity or a token materialized outside the file.
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the fields and
+[docs/SECURITY.md](docs/SECURITY.md) for the boundary.
+
 ### Not implemented
 
 These are deliberate boundaries, not defects:
 
+- no Kubernetes findings, no Kubernetes command, and no real-cluster validation — the target
+  type is acquisition only, and no distribution is graded in `docs/COMPATIBILITY.md`
+- no Kubernetes Pod, container, event, log, metric, Secret, ConfigMap, annotation or label
+  inspection, no Ingress, Gateway, NetworkPolicy or service-mesh analysis, and no node,
+  namespace or cluster-scoped read of any kind
 - no `inspect` command — the namespace is reserved, its output contract deferred
 - no Kafka SASL mechanism beyond `PLAIN` and `SCRAM-SHA-256`: no `SCRAM-SHA-512`, no
   `SCRAM-SHA-256-PLUS`, no channel binding, no `OAUTHBEARER`, no `GSSAPI`, no `AWS_MSK_IAM`,
@@ -509,13 +550,24 @@ semantics and normalize wire responses into evidence. Diagnosis runs over a froz
 graph and performs no I/O — when evidence is missing it emits `UNKNOWN` or `SKIPPED` rather
 than going to look. Renderers create no findings and compute no severity.
 
-svcdoctor has **two runtime dependencies**, each confined to a single package and each with
-no transitive dependencies of its own:
+svcdoctor has **three decided runtime dependencies**, each confined to a single package:
 
 - `github.com/twmb/franz-go/pkg/kmsg` (BSD-3-Clause) — Kafka protocol encoding, used only by
-  the Kafka adapter's wire package.
+  the Kafka adapter's wire package. No transitive dependencies of its own.
 - `go.yaml.in/yaml/v3` (MIT and Apache-2.0) — multi-target configuration decoding, used only
-  by `internal/fleet/config`.
+  by `internal/fleet/config`. No transitive dependencies of its own.
+- `k8s.io/client-go` with `k8s.io/api` and `k8s.io/apimachinery` (Apache-2.0) — the Kubernetes
+  API client, used only by `internal/adapter/kubernetes/client`, behind a ten-path import
+  allowlist that refuses the full clientset, the dynamic and discovery clients, informers,
+  listers, caches, watches and every authentication plugin.
+
+**The third is the exception and is stated as one.** The first two were chosen partly because
+they bring nothing with them; client-go brings **35 further modules**, taking `go.mod` from 2
+requirements to 40 and the binary from 10.3 MB to 38.5 MB. It was accepted because the
+alternative — hand-written Kubernetes authentication, kubeconfig semantics, TLS assembly and API
+decoding, in the one package that talks to a control plane — is a worse security bet than the
+modules are. Every module is enumerated by name in `test/security/dependency_test.go`, so one
+arriving underneath is a line somebody has to add.
 
 ## Claim discipline
 

@@ -96,6 +96,26 @@ func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 		// wire packages are -- it holds this service's only Reveal.
 		"github.com/hakanaltindag/svcdoctor/internal/adapter/rabbitmq":   true,
 		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/rabbitmq": true,
+		// Phase 12.1B. A fifth service, and the first whose entries differ from
+		// the other four's in three ways, each of which says something:
+		//
+		//   - **no diagnosis package**, because Phase 12.1B wires no rule at all.
+		//     The two Kubernetes rules and their four finding codes are 12.1C's,
+		//     which is what makes that phase's diff the entire behavioural change
+		//     (ADR 0094 §2.12). An entry here would be the first sign that
+		//     interpretation had leaked in early.
+		//   - **internal/service/kubernetes is present**, unlike Redis's and
+		//     RabbitMQ's, because this composition names the service identifier
+		//     from the vocabulary rather than writing it twice.
+		//   - **internal/adapter/kubernetes/client is allowed**, and it is the
+		//     first non-`wire` package holding a Reveal. Kubernetes has no wire
+		//     protocol of svcdoctor's own — client-go owns the transport — so the
+		//     package that assembles the connection is the last layer before the
+		//     socket. The composition root reaches it for the target type and the
+		//     acquisition entry point, and for nothing else.
+		"github.com/hakanaltindag/svcdoctor/internal/adapter/kubernetes":        true,
+		"github.com/hakanaltindag/svcdoctor/internal/adapter/kubernetes/client": true,
+		"github.com/hakanaltindag/svcdoctor/internal/service/kubernetes":        true,
 	}
 
 	for _, name := range productionFiles(t) {

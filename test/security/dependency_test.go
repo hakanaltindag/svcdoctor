@@ -29,6 +29,25 @@ import (
 // This is deliberately a **count and a whitelist**, not a policy engine. A new
 // dependency should be a decision someone records, and the way to record it is
 // to change this list and say why in the commit.
+//
+// # The principle changed in Phase 12.1B, and the sentence had to change with it
+//
+// This file used to state that a transitive dependency appearing under one of
+// these "is prevented in the only durable way, by choosing dependencies that have
+// none." That was true of both modules it described, and it stopped being true
+// the moment ADR 0094 authorized client-go, which brings 36 of its own.
+//
+// The principle now reads: **prefer dependencies with none; where that is
+// impossible the exception is recorded in an ADR, and every module it drags in is
+// enumerated here rather than summarized.** Editing the count and leaving the old
+// sentence would have made this guard lie, which is why ADR 0094 section 2.1
+// required the reasoning to be amended and not merely the number.
+//
+// The exception is accepted with its cost written down rather than minimized:
+// about 36 modules now run in the same process as a plaintext credential, and the
+// reason that is the better bet is that the alternative — hand-written Kubernetes
+// authentication, kubeconfig semantics, TLS assembly and API decoding — is a
+// larger correctness and security burden than the modules are.
 
 // allowedModules is every non-standard-library module svcdoctor may build
 // against, with the reason it is here.
@@ -55,15 +74,93 @@ var allowedModules = map[string]string{
 	// in a file whose purpose is to say which credential authorizes which endpoint
 	// is the config-file form of a truncated secret.
 	"go.yaml.in/yaml/v3": "multi-target configuration decoding (ADR 0071)",
+
+	// ADR 0094 §2.1, authorized in Phase 12.1A and added in Phase 12.1B.
+	// Apache-2.0, all three.
+	//
+	// **Importable by exactly one package** — internal/adapter/kubernetes/client —
+	// which depguard and TestOnlyTheKubernetesClientImportsClientGo enforce from
+	// two directions, and behind a ten-path allowlist inside that: rest,
+	// clientcmd and clientcmd/api, the typed core/v1 and discovery/v1 clients,
+	// k8s.io/api's core/v1 and discovery/v1, and apimachinery's meta/v1,
+	// api/errors and labels.
+	//
+	// **Refused, and the refusals are build-enforced:** the full `Clientset`, the
+	// dynamic client, the API discovery client, informers, listers, tools/cache,
+	// workqueue, tools/watch, leaderelection, portforward, remotecommand,
+	// transport/spdy, **every** plugin/pkg/client/auth package, controller-runtime,
+	// every k8s.io/kubectl package, and every code generator.
+	//
+	// It was authorized on correctness rather than convenience. The exec and
+	// auth-provider refusals require parsing the very structures clientcmd parses,
+	// and a hand-rolled kubeconfig parser that missed a field shape would refuse
+	// nothing, silently.
+	//
+	// It is also the reason go.mod's `go` directive reads 1.26.0 rather than 1.26:
+	// all three declare `go 1.26.0`, and a main module's directive may not be lower
+	// than its dependencies'. The two are the same language version.
+	"k8s.io/client-go":    "Kubernetes API client, one package only (ADR 0094)",
+	"k8s.io/api":          "Kubernetes API types (ADR 0094)",
+	"k8s.io/apimachinery": "Kubernetes API machinery, errors and label selectors (ADR 0094)",
+
+	// client-go's own transitive closure, written out rather than summarized.
+	//
+	// **None of these is imported by svcdoctor source**, and none may be: the
+	// depguard rule denies every k8s.io path outside one package, and the module
+	// boundary test denies the rest by name. They are here because `go mod tidy`
+	// records them and because a build graph nobody enumerated is one nobody
+	// audited — which is the whole reason this file exists.
+	//
+	// A release of client-go that adds one is a line somebody has to add here,
+	// with the count moved deliberately in the same change.
+	"github.com/davecgh/go-spew":           "client-go transitive: value formatting",
+	"github.com/emicklei/go-restful/v3":    "client-go transitive: OpenAPI route model",
+	"github.com/fxamacker/cbor/v2":         "client-go transitive: CBOR serializer",
+	"github.com/go-logr/logr":              "client-go transitive: logging facade",
+	"github.com/go-openapi/jsonpointer":    "client-go transitive: OpenAPI",
+	"github.com/go-openapi/jsonreference":  "client-go transitive: OpenAPI",
+	"github.com/go-openapi/swag":           "client-go transitive: OpenAPI",
+	"github.com/google/gnostic-models":     "client-go transitive: OpenAPI models",
+	"github.com/google/uuid":               "client-go transitive: UUID values",
+	"github.com/josharian/intern":          "client-go transitive: string interning",
+	"github.com/json-iterator/go":          "client-go transitive: JSON decoding",
+	"github.com/mailru/easyjson":           "client-go transitive: JSON decoding",
+	"github.com/modern-go/concurrent":      "client-go transitive: json-iterator support",
+	"github.com/modern-go/reflect2":        "client-go transitive: json-iterator support",
+	"github.com/munnerz/goautoneg":         "client-go transitive: content negotiation",
+	"github.com/spf13/pflag":               "client-go transitive: flag types",
+	"github.com/x448/float16":              "client-go transitive: CBOR support",
+	"go.yaml.in/yaml/v2":                   "client-go transitive: kubeconfig YAML",
+	"golang.org/x/net":                     "client-go transitive: HTTP/2 transport",
+	"golang.org/x/oauth2":                  "client-go transitive: token transport types",
+	"golang.org/x/sys":                     "client-go transitive: syscall support",
+	"golang.org/x/term":                    "client-go transitive: terminal detection",
+	"golang.org/x/text":                    "client-go transitive: text encoding",
+	"golang.org/x/time":                    "client-go transitive: rate limiting types",
+	"google.golang.org/protobuf":           "client-go transitive: protobuf runtime",
+	"gopkg.in/evanphx/json-patch.v4":       "client-go transitive: JSON patch",
+	"gopkg.in/inf.v0":                      "client-go transitive: arbitrary-precision decimals",
+	"gopkg.in/yaml.v3":                     "client-go transitive: YAML",
+	"k8s.io/klog/v2":                       "client-go transitive: logging",
+	"k8s.io/kube-openapi":                  "client-go transitive: OpenAPI",
+	"k8s.io/utils":                         "client-go transitive: shared helpers",
+	"sigs.k8s.io/json":                     "client-go transitive: case-sensitive JSON decoding",
+	"sigs.k8s.io/randfill":                 "client-go transitive: fuzz helpers for API types",
+	"sigs.k8s.io/structured-merge-diff/v6": "client-go transitive: apply semantics",
+	"sigs.k8s.io/yaml":                     "client-go transitive: YAML/JSON conversion",
 }
 
 // TestTheModuleGraphIsExactlyWhatWasDecided pins go.mod's requirements.
 //
 // It reads go.mod rather than `go list -m all`, so it needs no network, no
 // module cache and no build, and it therefore says something narrow and exact:
-// **these are the modules this repository declares.** A transitive dependency
-// appearing under one of them would be a separate finding and is prevented in
-// the only durable way, by choosing dependencies that have none.
+// **these are the modules this repository declares.**
+//
+// Since Phase 12.1B that includes client-go's transitive closure, because `go mod
+// tidy` writes every one of them into go.mod as an `// indirect` requirement. So
+// the list below is the whole build graph and not a summary of it: a new module
+// arriving underneath client-go — a release that grows a dependency — appears
+// here as a line somebody has to add, with a reason.
 func TestTheModuleGraphIsExactlyWhatWasDecided(t *testing.T) {
 	required := requiredModules(t)
 
@@ -92,10 +189,17 @@ func TestTheModuleGraphIsExactlyWhatWasDecided(t *testing.T) {
 
 // wantDependencyCount is the headline number.
 //
-// It was **1** from Phase 3.1 to Phase 9.0 and became **2** in Phase 9.1A, when
-// ADR 0071 §3.3's authorized YAML decoder landed. Both changes are the only two
-// times this number has moved, and each is recorded in the ADR that moved it.
-const wantDependencyCount = 2
+// It was **1** from Phase 3.1 to Phase 9.0, became **2** in Phase 9.1A when
+// ADR 0071 §3.3's authorized YAML decoder landed, and became **40** in Phase
+// 12.1B when ADR 0094 §2.1's authorized Kubernetes client did. Each move is
+// recorded in the ADR that made it.
+//
+// The third move is the only one that is large, and it is stated rather than
+// softened: three of the thirty-eight new modules were decided on, and the other
+// thirty-five arrived underneath them. Narrowing the import surface to ten
+// packages saved one module and 0.55 MB — a reachability and hygiene decision —
+// and **no document may present that as a dependency-cost reduction.**
+const wantDependencyCount = 40
 
 // TestTheDependencyCountIsExact states the headline number on its own.
 //
@@ -136,8 +240,14 @@ func TestTheGuardCanFail(t *testing.T) {
 	if len(requiredModules(t)) == 0 {
 		t.Fatal("no requirements parsed from go.mod; the assertions above are vacuous")
 	}
-	if _, ok := allowedModules["github.com/twmb/franz-go/pkg/kmsg"]; !ok {
-		t.Error("the one known dependency is absent from the allowlist")
+	for _, decided := range []string{
+		"github.com/twmb/franz-go/pkg/kmsg",
+		"go.yaml.in/yaml/v3",
+		"k8s.io/client-go",
+	} {
+		if _, ok := allowedModules[decided]; !ok {
+			t.Errorf("the decided dependency %s is absent from the allowlist", decided)
+		}
 	}
 }
 
