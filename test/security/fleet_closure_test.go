@@ -64,11 +64,25 @@ func TestMTG05TheFindingCodeCountIsUnchanged(t *testing.T) {
 	// reported recovery state — is why PostgreSQL moved by two rather than by
 	// three: it is a renderer observation line, because it is a fact the
 	// endpoint stated and not a claim svcdoctor makes (ADR 0085 section 4).
+	// 69 since Phase 12.1C, which added four Kubernetes codes against ADR 0094
+	// section 2.7: KUBERNETES_SERVICE_NOT_FOUND, KUBERNETES_API_ACCESS_DENIED,
+	// KUBERNETES_SERVICE_SELECTS_NO_PODS and
+	// KUBERNETES_SERVICE_NO_READY_ENDPOINT. All four are service-namespaced, so
+	// wantDiag is unchanged for a fourth time: an acquisition finding about a
+	// Kubernetes API read belongs to Kubernetes, and the generic namespace stays
+	// at one.
+	//
+	// **Four is the whole budget.** A 401 deliberately earns no code — it is
+	// authentication rather than authorization, and DIAG_FAILURE_BOUNDARY
+	// localizes it — and neither does a 410, a 5xx, a timeout or a reset. Those
+	// are acquisition failures carrying an existing FailureClass on their own
+	// node (ADR 0094 section 2.8).
 	const (
-		wantTotal      = 65
+		wantTotal      = 69
 		wantRabbitMQ   = 11
 		wantKafka      = 15
 		wantPostgreSQL = 21
+		wantKubernetes = 4
 		wantDiag       = 1
 	)
 
@@ -104,6 +118,13 @@ func TestMTG05TheFindingCodeCountIsUnchanged(t *testing.T) {
 			"Phase 10.3 moved this 19 -> 21 against ADR 0085 and nothing else may "+
 			"move it silently. PostgreSQL BASIC is feature-frozen; a new code needs "+
 			"a deliberate reopen recorded in docs/BACKLOG.md.", got, wantPostgreSQL)
+	}
+	if got := byService["KUBERNETES"]; got != wantKubernetes {
+		t.Errorf("%d Kubernetes finding codes, want %d.\n\n"+
+			"Phase 12.1C moved this 0 -> 4 against ADR 0094 section 2.7 and nothing else "+
+			"may move it. A fifth first-scope Kubernetes code needs a bounded operator "+
+			"question no admitted finding answers, whose discriminating value comes from "+
+			"an API-contract enumeration rather than from a message.", got, wantKubernetes)
 	}
 	if got := byService["DIAG"]; got != wantDiag {
 		t.Errorf("%d generic DIAG finding codes, want %d.\n\n"+

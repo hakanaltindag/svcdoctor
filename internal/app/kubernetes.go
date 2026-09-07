@@ -7,6 +7,8 @@ import (
 
 	adapterkubernetes "github.com/hakanaltindag/svcdoctor/internal/adapter/kubernetes"
 	"github.com/hakanaltindag/svcdoctor/internal/adapter/kubernetes/client"
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
+	diagnosiskubernetes "github.com/hakanaltindag/svcdoctor/internal/diagnosis/kubernetes"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	"github.com/hakanaltindag/svcdoctor/internal/security"
 	servicekubernetes "github.com/hakanaltindag/svcdoctor/internal/service/kubernetes"
@@ -110,14 +112,23 @@ func (p KubernetesParams) validate() error {
 // address, so **no claim in the resulting report is about reachability** and the
 // Kubernetes credential authorizes exactly one thing — the API server.
 //
-// # No rule is wired, and that is Phase 12.1B's boundary
+// # Three rules are wired, and they conclude only what the evidence carries
 //
-// This root produces evidence and **zero findings**. The two Kubernetes rules and
-// their four finding codes are Phase 12.1C's, which is what makes that phase's
-// diff the entire behavioural change (ADR 0094 §2.12). A report from here is a
-// truthful, complete evidence graph with nothing concluded from it — which is
-// exactly what a `SummaryStatus` of OK means and has always meant: *no ERROR or
-// CRITICAL target-side problem was proven*.
+// Phase 12.1B produced evidence and **zero findings**; Phase 12.1C wires the two
+// Kubernetes rules and the generic failure boundary, which is what makes that
+// phase's diff the entire behavioural change (ADR 0094 §2.12).
+//
+// **No transport rule is wired, and that is the shape rather than an omission.**
+// The other four composition roots add `transport/dns`, `transport/tcp` and
+// `transport/tls`, because their runs measure those stages themselves. A
+// Kubernetes run measures none of them: transport belongs to the client library
+// (ADR 0093 §2.10), the graph holds no `dns.lookup`, `tcp.connect` or
+// `tls.handshake` node, and wiring a rule whose steps cannot appear would be
+// three rules that are silent by construction rather than by measurement.
+//
+// A `SummaryStatus` of OK still means what it has always meant — *no ERROR or
+// CRITICAL target-side problem was proven* — and not that the Service has
+// backends, that every read ran, or that anything is reachable.
 //
 // # Errors, and what is not one
 //
@@ -161,16 +172,46 @@ func DiagnoseKubernetes(ctx context.Context, params KubernetesParams) (Result, e
 	// that has one answer.
 	incomplete := acquisition.Incomplete() || ctx.Err() != nil
 
-	report, err := buildKubernetesReport(graph, acquisition, params, startedAt)
+	// Each rule is wired in under a stable identity; see the note in
+	// diagnosePostgres for why the identity is written here rather than exported
+	// from the rule's own package.
+	registry, err := diagnosis.NewRuleSet().
+		// The generic failure boundary, wired first because it is the only rule
+		// here that is about the shape of the whole graph rather than about one
+		// stage. It restates measured states and infers nothing (ADR 0079), and
+		// it is what localizes the API outcomes that deliberately earn no
+		// Kubernetes finding of their own — a 401, a 5xx, a timeout, a reset
+		// (ADR 0094 §2.8).
+		Add("diag/failure-boundary", diagnosis.FailureBoundary).
+		// What svcdoctor could obtain: KUBERNETES_SERVICE_NOT_FOUND and
+		// KUBERNETES_API_ACCESS_DENIED.
+		Add("kubernetes/acquisition", diagnosiskubernetes.Acquisition).
+		// What Kubernetes records: KUBERNETES_SERVICE_SELECTS_NO_PODS and
+		// KUBERNETES_SERVICE_NO_READY_ENDPOINT.
+		Add("kubernetes/backends", diagnosiskubernetes.Backends).
+		Freeze()
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{report: report, incomplete: incomplete}, nil
+
+	outcome := diagnosis.NewEngine(registry).Evaluate(diagnosis.RuleContext{
+		Graph:      graph,
+		Vantage:    params.Vantage,
+		Incomplete: incomplete,
+	})
+
+	report, err := buildKubernetesReport(
+		graph, outcome.Findings(), acquisition, params, startedAt)
+	if err != nil {
+		return Result{}, err
+	}
+	// A discarded rule makes the run incomplete; see diagnosePostgres.
+	return Result{report: report, incomplete: incomplete || outcome.Failed()}, nil
 }
 
 // buildKubernetesReport assembles the canonical report.
 func buildKubernetesReport(
-	graph domain.Graph, acquisition client.Result,
+	graph domain.Graph, findings []domain.Finding, acquisition client.Result,
 	params KubernetesParams, startedAt time.Time,
 ) (domain.Report, error) {
 	service, err := domain.NewServiceID(servicekubernetes.ServiceID)
@@ -203,6 +244,7 @@ func buildKubernetesReport(
 		Target:   target,
 		Vantage:  params.Vantage,
 		Graph:    graph,
+		Findings: findings,
 		Security: reportSecurity,
 	})
 	if err != nil {

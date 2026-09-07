@@ -86,33 +86,54 @@ func testVantage(t *testing.T) domain.Vantage {
 	return vantage
 }
 
-// TestAKubernetesRunProducesNoFindingAtAll is Phase 12.1B's boundary.
+// TestAKubernetesRunReportsWhatTheAPIAnswered is Phase 12.1C's boundary, and it
+// replaces Phase 12.1B's.
 //
-// # Why this is asserted rather than assumed
+// # It was the opposite assertion one phase ago
 //
-// ADR 0094 section 2.12 splits the work so that Phase 12.1C's diff is the entire
-// behavioural change: this phase lands the acquisition with byte-identical output
-// for every existing service and **no finding for the new one**. A rule wired
-// early — even the generic failure boundary — would make that false and would
-// move the split.
+// Until Phase 12.1C this was `TestAKubernetesRunProducesNoFindingAtAll`: ADR
+// 0094 section 2.12 split the work so that 12.1B landed acquisition with
+// byte-identical output for every existing service and **no finding for the new
+// one**, which made 12.1C's diff the entire behavioural change. That premise is
+// now deliberately gone, so the assertion is turned around rather than deleted.
 //
-// It is the assertion that would fail first if diagnosis leaked into the adapter.
-func TestAKubernetesRunProducesNoFindingAtAll(t *testing.T) {
+// What it states now is the shape of that change on the simplest reachable
+// scenario: a Service the API server reports as absent yields exactly two
+// findings — the Kubernetes claim and the generic boundary that localizes it —
+// on the same five-node graph, and the summary moves off OK for the first time.
+func TestAKubernetesRunReportsWhatTheAPIAnswered(t *testing.T) {
 	target := kubernetesFixture(t, notFoundHandler())
 	result := runKubernetes(t, target)
 
-	if got := len(result.Report().Findings()); got != 0 {
-		t.Errorf("a Kubernetes run produced %d findings, want 0.\n\n"+
-			"Phase 12.1B is acquisition. Interpreting these nodes — including saying that "+
-			"the Service does not exist — is Phase 12.1C's work.", got)
+	codes := map[domain.FindingCode]bool{}
+	for _, finding := range result.Report().Findings() {
+		codes[finding.Code()] = true
 	}
-	// The evidence is there; only the conclusion is absent.
+	for _, want := range []domain.FindingCode{
+		"KUBERNETES_SERVICE_NOT_FOUND", "DIAG_FAILURE_BOUNDARY",
+	} {
+		if !codes[want] {
+			t.Errorf("a Service the API reported absent produced no %s; got %v", want, codes)
+		}
+	}
+	if got := len(codes); got != 2 {
+		t.Errorf("produced %d distinct finding codes, want 2: %v.\n\n"+
+			"The Pod and EndpointSlice reads did not run, and a step that did not run is "+
+			"neither proven to work nor proven to fail.", got, codes)
+	}
+
+	// The evidence is unchanged by 12.1C; only the conclusions are new.
 	if got := len(result.Report().Graph().Nodes()); got != 5 {
 		t.Errorf("the graph holds %d nodes, want 5", got)
 	}
-	if got := result.Report().Summary().Status(); got != domain.SummaryStatusOK {
-		t.Errorf("summary status is %s, want OK: no finding means no proven problem, which "+
-			"is exactly what OK has always meant", got)
+	if got := result.Report().Summary().Status(); got != domain.SummaryStatusProblemsFound {
+		t.Errorf("summary status is %s, want PROBLEMS_FOUND: the Service read produced an "+
+			"ERROR finding, and the generic summary derives the status from it with no "+
+			"Kubernetes special case", got)
+	}
+	if result.Incomplete() {
+		t.Error("a 404 is an answer, so the run is complete; only svcdoctor's own budget " +
+			"stopping the measurement makes it incomplete")
 	}
 }
 
@@ -283,10 +304,18 @@ func TestAnUnreachableAPIServerStillProducesAReport(t *testing.T) {
 	if access.FailureClass() == domain.FailureNone {
 		t.Error("an unreachable API server produced no failure class")
 	}
-	// Still no finding: saying what an unreachable control plane means is
-	// Phase 12.1C's work.
-	if got := len(result.Report().Findings()); got != 0 {
-		t.Errorf("produced %d findings, want 0", got)
+	// **No Kubernetes finding**, and that is ADR 0094 section 2.8's admission
+	// rule holding. A control plane that could not be reached is an acquisition
+	// failure carrying an existing failure class on its own node; it is not one
+	// of the four claims about somebody's Service, and DIAG_FAILURE_BOUNDARY is
+	// what localizes it.
+	for _, finding := range result.Report().Findings() {
+		if strings.HasPrefix(string(finding.Code()), "KUBERNETES_") {
+			t.Errorf("an unreachable API server produced %s.\n\n"+
+				"Only a structured NotFound on the Service read and a structured Forbidden "+
+				"on one of the three reads earn a Kubernetes code. Every other API outcome "+
+				"is an acquisition failure on its node.", finding.Code())
+		}
 	}
 }
 

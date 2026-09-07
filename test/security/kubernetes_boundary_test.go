@@ -3,6 +3,8 @@ package security_test
 import (
 	"go/ast"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -306,42 +308,100 @@ func TestTheKubernetesAdapterNeverProducesAFinding(t *testing.T) {
 	}
 }
 
-// TestNoKubernetesFindingCodeExistsYet pins the count from the other direction.
+// kubernetesFindingCodes is the whole first-scope Kubernetes claim budget.
 //
-// The four codes are named exactly rather than matched by prefix, because
+// They are named exactly rather than matched by prefix, because
 // `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT` are the two variables
 // the kubelet injects and the in-cluster path legitimately reads them. A prefix
-// match found those and would have had to be weakened; naming the four says
-// precisely what must not exist yet.
-func TestNoKubernetesFindingCodeExistsYet(t *testing.T) {
-	codes := []string{
-		"KUBERNETES_SERVICE_NOT_FOUND",
-		"KUBERNETES_API_ACCESS_DENIED",
-		"KUBERNETES_SERVICE_SELECTS_NO_PODS",
-		"KUBERNETES_SERVICE_NO_READY_ENDPOINT",
-	}
+// match finds those, and weakening the guard to tolerate them would weaken it
+// against the thing it is for.
+var kubernetesFindingCodes = map[string]string{
+	"KUBERNETES_SERVICE_NOT_FOUND":         "internal/diagnosis/kubernetes/acquisition.go",
+	"KUBERNETES_API_ACCESS_DENIED":         "internal/diagnosis/kubernetes/acquisition.go",
+	"KUBERNETES_SERVICE_SELECTS_NO_PODS":   "internal/diagnosis/kubernetes/backends.go",
+	"KUBERNETES_SERVICE_NO_READY_ENDPOINT": "internal/diagnosis/kubernetes/backends.go",
+}
 
+// TestTheKubernetesFindingCodesAreExactlyTheFourFrozenOnes pins the budget from
+// both directions.
+//
+// # It replaces a guard rather than deleting one
+//
+// Until Phase 12.1C this test was `TestNoKubernetesFindingCodeExistsYet`, and it
+// asserted that none of the four existed anywhere in the tree. Phase 12.1C
+// removes that premise deliberately, by wiring the rules — so the assertion is
+// turned around rather than dropped, exactly as
+// `test/security/rabbitmq_contract_freeze_test.go` was turned around at Phase
+// 8.2. A guard that only ever said "not yet" is worth nothing the day it comes
+// true.
+//
+// What it now states is the half that stays permanent: **these four and no
+// fifth**, each declared in the diagnosis package that owns it and nowhere else.
+// ADR 0094 section 7's reopen condition for a fifth is a bounded operator
+// question no admitted finding answers, whose discriminating value comes from an
+// API-contract enumeration rather than from a message — which is a decision with
+// its own record, not an edit to this map.
+func TestTheKubernetesFindingCodesAreExactlyTheFourFrozenOnes(t *testing.T) {
 	scanned := 0
-	found := []string{}
+	found := map[string][]string{}
+
 	for _, pkg := range allProductionPackages(t) {
 		for _, path := range productionFilesIn(t, pkg) {
 			scanned++
 			for _, literal := range stringLiterals(parseFile(t, path)) {
-				for _, code := range codes {
-					if literal == code {
-						found = append(found, relative(t, path)+": "+literal)
-					}
+				// A finding code is one screaming-snake-case token and nothing
+				// else. Matching the shape rather than the prefix alone is what
+				// keeps an error message that *opens* with one of these names
+				// from being read as a declaration of it — the in-cluster path
+				// has two such sentences.
+				if !isKubernetesCodeShaped(literal) {
+					continue
 				}
+				// The two kubelet-injected variables are not finding codes and
+				// the in-cluster path legitimately names them.
+				if literal == "KUBERNETES_SERVICE_HOST" ||
+					literal == "KUBERNETES_SERVICE_PORT" {
+					continue
+				}
+				found[literal] = append(found[literal], relative(t, path))
 			}
 		}
 	}
+
 	if scanned == 0 {
 		t.Fatal("no source was scanned; this guard would pass vacuously")
 	}
-	if len(found) != 0 {
-		t.Errorf("a KUBERNETES_ finding code exists in Phase 12.1B:\n%s\n\n"+
-			"Finding codes go 65 -> 69 in Phase 12.1C, and every one of them arrives with "+
-			"the rule that produces it.", strings.Join(found, "\n"))
+	if len(found) == 0 {
+		t.Fatal("no KUBERNETES_ literal was found at all; the four finding codes are " +
+			"Phase 12.1C's whole behavioural change and this guard would pass vacuously")
+	}
+
+	for code, paths := range found {
+		want, frozen := kubernetesFindingCodes[code]
+		if !frozen {
+			t.Errorf("%s is declared in %v and is not one of the four codes ADR 0094 "+
+				"section 2.7 froze.\n\n"+
+				"The budget is four. A fifth needs a bounded operator question no admitted "+
+				"finding answers, whose discriminating value comes from an API-contract "+
+				"enumeration rather than from a message (ADR 0094 section 7).",
+				code, paths)
+			continue
+		}
+		for _, path := range paths {
+			if path != want {
+				t.Errorf("%s is named in %s; it belongs in %s, where the rule that "+
+					"produces it lives.\n\n"+
+					"A finding code named outside its own diagnosis package is the first "+
+					"sign that something other than a rule is deciding what svcdoctor "+
+					"claims.", code, path, want)
+			}
+		}
+	}
+	for code := range kubernetesFindingCodes {
+		if _, declared := found[code]; !declared {
+			t.Errorf("%s is frozen by ADR 0094 section 2.7 and is declared nowhere; "+
+				"every one of the four arrives with the rule that produces it", code)
+		}
 	}
 }
 
@@ -408,5 +468,208 @@ func TestNoKubernetesSourceReadsAStatusMessage(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("no Kubernetes source was scanned; this guard would pass vacuously")
+	}
+}
+
+// isKubernetesCodeShaped reports whether a literal has a finding code's shape.
+//
+// `KUBERNETES_` followed by upper-case letters, digits and underscores, to the
+// end. A space, a lower-case letter or any punctuation makes it prose.
+func isKubernetesCodeShaped(literal string) bool {
+	if !strings.HasPrefix(literal, "KUBERNETES_") {
+		return false
+	}
+	for i := 0; i < len(literal); i++ {
+		c := literal[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// --- Phase 12.1C: the diagnosis boundary -------------------------------------
+
+// kubernetesRulePackage is the only package that may hold a Kubernetes rule.
+const kubernetesRulePackage = "internal/diagnosis/kubernetes"
+
+// TestTheKubernetesRulesImportNothingBelowDiagnosis is K-P12.
+//
+// # Why an allowlist rather than a denylist
+//
+// A rule reads a frozen graph and nothing else. Listing what it may import means
+// an import nobody anticipated is refused by default, where a denylist refuses
+// only what somebody thought of — and the imports that would matter most here
+// are precisely the ones a future author would reach for without thinking: the
+// adapter, to re-read an object; client-go, to ask the API server one more
+// question; internal/security, to look at a credential.
+//
+// `depguard`'s `diagnosis-is-pure` list states the same property at lint time.
+// This is the independent statement of it, and it catches the case a lint
+// configuration cannot: an edit to `.golangci.yml` itself.
+func TestTheKubernetesRulesImportNothingBelowDiagnosis(t *testing.T) {
+	permitted := map[string]bool{
+		"fmt": true,
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis":          true,
+		"github.com/hakanaltindag/svcdoctor/internal/domain":             true,
+		"github.com/hakanaltindag/svcdoctor/internal/service/kubernetes": true,
+	}
+
+	scanned := 0
+	for _, path := range productionFilesIn(t, kubernetesRulePackage) {
+		scanned++
+		for _, imported := range parseFile(t, path).Imports {
+			importPath := strings.Trim(imported.Path.Value, `"`)
+			if !permitted[importPath] {
+				t.Errorf("%s imports %s, which is not on the allowlist.\n\n"+
+					"Diagnosis consumes normalized evidence. An adapter import could "+
+					"re-read a Kubernetes object, a k8s.io import could open a socket, an "+
+					"internal/security import could reach a credential, and net or os "+
+					"could perform I/O — none of which a rule may do (ADR 0094 §2.12).",
+					relative(t, path), importPath)
+			}
+		}
+	}
+	if scanned == 0 {
+		t.Fatalf("no production source was found in %s; this guard would pass vacuously",
+			kubernetesRulePackage)
+	}
+}
+
+// TestNoKubernetesRuleActivatesAnEvidenceRelation is K-P11.
+//
+// ADR 0087's outcome is **DEFER**: `EvidenceBasis`'s `Contradict`, `Miss` and
+// `Block` relations have zero producers, and two guards in `AdmitConfidence` are
+// vacuous in a way that is safe only while `AuthorityCompleteContrast` has none
+// either — so the two must be armed in one change-set, which Phase 12.1C is not.
+//
+// `Finding.EvidenceRefs` is deliberately **not** a relation producer, and the
+// distinction is the whole point: it means "evidence backing this finding",
+// never a SUPPORT edge (ADR 0087 §2.1, docs/FINDINGS.md §3.1 rule 20).
+func TestNoKubernetesRuleActivatesAnEvidenceRelation(t *testing.T) {
+	forbidden := map[string]string{
+		"BasisBuilder":              "the basis machinery has no producer and arming one is a decision",
+		"EvidenceBasis":             "the same",
+		"AuthorityCompleteContrast": "ADR 0094 §10.6 chose AuthorityDirect for all four; complete-contrast would arm a vacuous AdmitConfidence guard",
+		"AdmitConfidence":           "ADR 0094 §10.6 records that routing through the ladder is not output-neutral, and the four rules set the literal as 21 of the other 22 do",
+	}
+
+	scanned := 0
+	for _, path := range productionFilesIn(t, kubernetesRulePackage) {
+		scanned++
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for marker, why := range forbidden {
+			if strings.Contains(string(source), marker) {
+				t.Errorf("%s names %s: %s", relative(t, path), marker, why)
+			}
+		}
+	}
+	if scanned == 0 {
+		t.Fatalf("no production source was found in %s; this guard would pass vacuously",
+			kubernetesRulePackage)
+	}
+}
+
+// TestTheKubernetesDiagnosisReachesNoCredential.
+//
+// A rule has nothing to reveal — `RuleContext` carries a graph, a vantage and a
+// boolean, and there is no credential in any of them — so this states the
+// property at the source, where a future author would have to write the name
+// before the type could stop them.
+//
+// The global counts are pinned separately and stay where Phase 12.1B left them:
+// five `Reveal` sites and five `SecretFor` sites, one per service.
+func TestTheKubernetesDiagnosisReachesNoCredential(t *testing.T) {
+	scanned := 0
+	for _, path := range productionFilesIn(t, kubernetesRulePackage) {
+		scanned++
+		source, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, marker := range []string{
+			"Reveal", "SecretFor", "security.", "Credential", "Secret",
+		} {
+			if strings.Contains(string(source), marker) {
+				t.Errorf("%s names %s; diagnosis holds no credential and needs none",
+					relative(t, path), marker)
+			}
+		}
+	}
+	if scanned == 0 {
+		t.Fatalf("no production source was found in %s; this guard would pass vacuously",
+			kubernetesRulePackage)
+	}
+}
+
+// TestTheKubernetesCompositionRootWiresExactlyThreeRules.
+//
+// ADR 0094 §2.10 froze the production rule count at 22 → 24: **one acquisition
+// rule and one publication rule**, plus the generic failure boundary every
+// composition root already wires.
+//
+// It also pins the two things that are deliberately *absent*. No transport rule
+// is wired, because a Kubernetes run measures no DNS, TCP or TLS stage of its
+// own — transport belongs to the client library — and a rule whose steps cannot
+// appear would be silent by construction rather than by measurement. And no
+// fourth Kubernetes rule exists.
+func TestTheKubernetesCompositionRootWiresExactlyThreeRules(t *testing.T) {
+	// Read from the syntax tree rather than from the file's text. The chained
+	// builder puts `Add(` at the start of a line, so a text scan for `.Add("`
+	// finds nothing — and a text scan for `transport/dns` finds the doc comment
+	// that explains why no transport rule is wired. A call expression is the
+	// thing that wires a rule, and prose is not one.
+	path := filepath.Join(repositoryRoot(t), "internal/app/kubernetes.go")
+	file := parseFile(t, path)
+
+	var wired []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 2 {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Add" {
+			return true
+		}
+		literal, ok := call.Args[0].(*ast.BasicLit)
+		if !ok {
+			return true
+		}
+		wired = append(wired, strings.Trim(literal.Value, `"`))
+		return true
+	})
+
+	// The walk visits a method chain outermost-first, so the collected order is
+	// the reverse of the written one. Both are sorted before comparing, because
+	// wiring order does not reach the output at all: Phase 10.2A made RuleID
+	// unable to influence any merged field, and permuting the rule set is a
+	// permanent property test (ADR 0081 section 2.6a). What is asserted here is
+	// the *set*.
+	slices.Sort(wired)
+	want := []string{
+		"diag/failure-boundary",
+		"kubernetes/acquisition",
+		"kubernetes/backends",
+	}
+	if len(wired) != len(want) {
+		t.Fatalf("the Kubernetes composition root wires %v, want exactly %v.\n\n"+
+			"ADR 0094 section 2.10 froze 22 -> 24: one acquisition rule and one "+
+			"publication rule, beside the generic boundary. A transport rule is "+
+			"deliberately absent because a Kubernetes run measures no transport stage "+
+			"of its own — transport belongs to the client library — so a rule whose "+
+			"steps cannot appear would be silent by construction rather than by "+
+			"measurement.", wired, want)
+	}
+	for i, id := range want {
+		if wired[i] != id {
+			t.Errorf("the wired set holds %q where %q was expected; the set is %v",
+				wired[i], id, wired)
+		}
 	}
 }

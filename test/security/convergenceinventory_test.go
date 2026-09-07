@@ -48,6 +48,7 @@ var diagnosisPackages = []string{
 	"internal/diagnosis/postgres",
 	"internal/diagnosis/redis",
 	"internal/diagnosis/rabbitmq",
+	"internal/diagnosis/kubernetes",
 }
 
 // knownConvergentCodes is every finding code reachable from more than one rule,

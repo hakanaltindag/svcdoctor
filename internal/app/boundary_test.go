@@ -96,13 +96,14 @@ func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 		// wire packages are -- it holds this service's only Reveal.
 		"github.com/hakanaltindag/svcdoctor/internal/adapter/rabbitmq":   true,
 		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/rabbitmq": true,
-		// Phase 12.1B. A fifth service, and the first whose entries differ from
-		// the other four's in three ways, each of which says something:
+		// Phase 12.1B, completed by 12.1C. A fifth service, and the first whose
+		// entries differ from the other four's in three ways, each of which says
+		// something:
 		//
-		//   - **no diagnosis package**, because Phase 12.1B wires no rule at all.
-		//     The two Kubernetes rules and their four finding codes are 12.1C's,
-		//     which is what makes that phase's diff the entire behavioural change
-		//     (ADR 0094 §2.12). An entry here would be the first sign that
+		//   - **internal/diagnosis/kubernetes arrived in 12.1C and not in
+		//     12.1B**, because 12.1B wired no rule at all. That split is what
+		//     made 12.1C's diff the entire behavioural change (ADR 0094 §2.12),
+		//     and an entry here before it would have been the first sign that
 		//     interpretation had leaked in early.
 		//   - **internal/service/kubernetes is present**, unlike Redis's and
 		//     RabbitMQ's, because this composition names the service identifier
@@ -115,6 +116,7 @@ func TestTheRunImportsOnlyTheLayersItComposes(t *testing.T) {
 		//     acquisition entry point, and for nothing else.
 		"github.com/hakanaltindag/svcdoctor/internal/adapter/kubernetes":        true,
 		"github.com/hakanaltindag/svcdoctor/internal/adapter/kubernetes/client": true,
+		"github.com/hakanaltindag/svcdoctor/internal/diagnosis/kubernetes":      true,
 		"github.com/hakanaltindag/svcdoctor/internal/service/kubernetes":        true,
 	}
 

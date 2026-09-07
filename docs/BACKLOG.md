@@ -5149,6 +5149,112 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 12.1C — Kubernetes Service findings and diagnosis: DIAGNOSIS COMPLETE, CLI PENDING
+
+The diagnosis half is complete and closed. **The phase is not contract-complete**: ADR 0094
+§2.10 and §2.12 and `PHASE121A…§12.1`/`§14` assign **the CLI case** — `svcdoctor diagnose
+kubernetes` — to this phase by name, and it is absent. Nothing about F1–F4 depends on it, and
+every finding is exercised end to end through `svcdoctor run --config`.
+
+**Phase 12.1C.1 froze that command's public surface and produced no Go code.** Ten flags, zero of
+them a new decision: five DERIVED from the five frozen target fields, `--token-file`
+EXPLICITLY_FROZEN by `PHASE121A…§6.1` mode A, `--token-stdin` DERIVED from ADR 0049's *file or
+pipe* pair applied to that noun, and `--timeout`/`--output`/`--shareable` SHARED unchanged. **No
+`--step-timeout`, no acquisition-budget flag, no TLS flag, no `--user`, no `--host`.** Implementation
+is authorized against
+`docs/validation/PHASE121C1_KUBERNETES_LEAF_CLI_CONTRACT_FREEZE.md`.
+
+Frozen by ADR 0094 §2.7 in Phase 12.1A, implemented here. `internal/diagnosis/kubernetes` holds
+**two rules** producing **four codes**, and the composition root wires them beside the generic
+failure boundary. Finding codes **65 → 69**, production rules **22 → 24**. `SchemaVersion` 1,
+`RunSchemaVersion` 1, failure classes 42, `RuleContext` fields 3, `Reveal` 5, `SecretFor` 5,
+modules 40, exit codes 5, renderer files changed **0**.
+
+The whole behavioural change is that the four admitted findings now participate in the existing
+generic exit policy. There is no Kubernetes branch in any generic package, no new flag, no new
+config field, no new dependency, no new `k8s.io` import path and no relation producer. Diagnosis
+adds **zero** API requests, measured at a request-counting server. **No CLI command was added,
+and that is the open blocker rather than a property of the change.**
+
+### F3 and F4 are contractually disjoint, re-derived from source
+
+The user review re-opened this. Read against the committed frozen text alone, **every source
+that speaks to it says disjoint and none says otherwise**: `PHASE121A…§10.3` makes F4 require
+*"at least one Pod was selected (so F3 and F4 are disjoint)"*, `PHASE120…§17.1` says K8 and K10
+*"never both fire for one condition"*, ADR 0094 §2.7's table licenses no joint shape, and
+`PHASE121A…§10.9`'s six convergence shapes do not include the pair. For a run whose Pod set is
+complete at zero and whose slice set is complete at zero ready, **F3 fires alone**. The
+implementation already does this, so **no production change was required**;
+`TestTestKP09TheTwoSemanticClaimsAreDisjoint` drives all 36 branch combinations and
+`admission_test.go`'s *"no pod and no slice"* pins the case.
+
+**Coexistence carries no causal claim in either direction, and none is possible**: no graph
+edge, no relation, no prose and no recommendation says one finding explains another.
+
+### A second, narrower contract question was reconciled rather than guessed
+
+It is not the coexistence question and cannot produce coexistence: it concerns a Pod branch that
+was **denied or incomplete**, where F3 is not admitted at all.
+
+`PHASE121A…§10.3` lists F4's precondition as *"at least one Pod was selected (so F3 and F4 are
+disjoint)"*. Read literally that would also withhold F4 whenever the Pod branch was **denied or
+incomplete**, and `§10.8` says the opposite in a table it states normatively — *"Pod set
+incomplete → no F3. **The slice branch is unaffected**"*, symmetrically with *"EndpointSlice set
+incomplete → no F4. **The Pod branch is unaffected**"* — under the rule that one branch failing
+never erases the other branch's independent evidence.
+
+The two are reconciled by implementing the parenthetical, which is the condition's own stated
+purpose: **F4 is withheld exactly when F3 was admitted.** That is byte-for-byte the literal
+reading wherever the Pod set is complete, which is the only case in which "at least one Pod was
+selected" can be established at all. See `internal/diagnosis/kubernetes/backends.go`, whose doc
+comment carries the reasoning.
+
+### The mutation closure found five real guard gaps
+
+42 planted, 42 caught, 0 survivors — but the first run caught **37 of 42**, and not one of the
+five survivors was an equivalent mutation.
+
+Four were state checks that were **equivalent to nothing** because no scenario exercised them:
+a Service node that failed while carrying a full shape, a Pod or slice node that did not pass
+while claiming completeness, and a refusal class carried as a `FAIL` rather than an `UNKNOWN`.
+The last of those is the sharpest — `AUTHZ_NOT_PERMITTED` is a **shared** class that PostgreSQL
+records as `FAIL` for `POSTGRES_CONNECTION_NOT_PERMITTED`, where it means something else
+entirely — and a rule reading the class without the state would be reading a class whose state
+means something else. Six malformed scenarios were added and all four are now caught.
+
+The fifth is the one worth remembering. **A recommendation reading *"Change this Service's
+selector to match the intended workload"* survived every structural check**: it is a well-formed
+`NEXT_EVIDENCE`/`COMPARE` with `SelfCollectable: false`, and it is a remediation in the only
+sense that matters to the operator reading it. The recommendation text is now pinned byte for
+byte and imperatives are refused by name.
+
+### The fuzzer found a defect in a test, and the fix is stronger than the check it replaced
+
+The first fuzz target asserted that the fuzzed Service type did not appear in the prose, and the
+fuzzer refuted it in nine seconds with `"clu"` — a substring of *"the cluster"* in a frozen
+detail. **The rules were right and the check was wrong**: a substring scan over English cannot
+tell an interpolation from a coincidence, and lengthening the minimum only moves the
+coincidence. It is now **membership in a closed set** computed from the deterministic matrix,
+which is exact and collision-free. 19,097,795 executions, no crash.
+
+### Two prose defects were found by the phase's own claim-ceiling test
+
+Both details **named the claims they refuse to make in order to deny them** — *"It does not say
+that the Service was deleted…"*, *"It does not say that the selector is wrong…"*. Phase 10.3
+already ruled on that shape for PostgreSQL's `53300`: naming a claim to deny it puts the words
+in the report, and a substring scan cannot tell a quotation from an assertion. Both are now
+stated positively.
+
+### Open items
+
+| Item | Condition |
+|---|---|
+| **A `401` against the API server exits 0, and so does an unreachable control plane. This is a CONTRACT-CONFORMANT KNOWN LIMITATION and not an ADR deviation.** ADR 0094 §10.4 deliberately gives a `401` no Kubernetes code — it is authentication, and `DIAG_FAILURE_BOUNDARY` localizes it — and that boundary is INFO, so no ERROR finding exists, `SummaryStatus` is OK, the run is complete, and the generic mapping returns 0. **Every other service has a credential-rejection finding at ERROR; Kubernetes has none.** The behaviour is unchanged by 12.1C — before it the same invocation exited 0 with no finding at all — and it is measured and pinned by `TestTheKubernetesExitBehaviourIsTheGenericOne` rather than left to be discovered | Closing it needs a **fifth finding code**, which ADR 0094 §7 makes a decision with its own record: a bounded operator question no admitted finding answers, whose discriminating value comes from an API-contract enumeration. Phase 12.1D should weigh it against a real cluster, where the shape is easy to produce |
+| **A refused read leaves the run incomplete, so exit 4 outranks F2's WARN.** A `403` on a list is `Attempted` and not `Complete`, so `Result.Incomplete()` is true. The WARN never decides the invocation's status | Not a defect: incompleteness qualifies every conclusion, which is what `docs/SCOPE.md`'s precedence says it should do. Recorded because a reader expecting exit 0 for a WARN-only run will not get it |
+| **`svcdoctor diagnose kubernetes` is not added yet; its contract is frozen and implementation is authorized.** ADR 0094 §2.10 and §2.12, `PHASE121A…§12.1` and `§14` (KAC-040) all assign **the CLI case** to Phase 12.1C by name, so 12.1C is **not contract-complete**. The phase brief instructed *"No new CLI command. No new flags."* twice and this tree follows the brief; on a source reconciliation the frozen contract wins. A Kubernetes target is reachable through `svcdoctor run --config`, which is how every test in this phase drives it, and all four findings are fully exercised end to end, so nothing about F1–F4 depends on it | **Closed by Phase 12.1C.1.** All three previously-open decisions are answered from source: stdin is **REQUIRED** as `--token-stdin` (ADR 0049's pair is the contract and ADR 0072 §4/§14 make it leaf-generic); **no** budget flag and **no** `--step-timeout` (`app.KubernetesParams` has no step-timeout field and no caller sets `client.Budgets`, so either would be inert — ADR 0060); and the command may exist ungraded, with `docs/COMPATIBILITY.md` unchanged. Ten flags, zero new decisions. See `docs/validation/PHASE121C1_KUBERNETES_LEAF_CLI_CONTRACT_FREEZE.md` for the surface, the conflict matrix, the refused surface and the twenty required tests |
+| **No Kubernetes distribution is graded.** `docs/COMPATIBILITY.md` is unchanged and mentions none | Phase 12.1D: `kind` fixtures, the seven scenarios, the two-version matrix. A hermetic suite may not grade a distribution |
+| **The terminal renders a Kubernetes report through the zero `serviceView`** — an empty journey, no outcome line, no advertisement level — and the findings block, which is service-neutral. That is ADR 0094 §12.3's *"no renderer change"* holding, and the output is correct rather than merely unchanged | Reopens only if a real-cluster reader finds the journey unreadable. A Kubernetes row in the `services` table would be a table row, never a branch |
+
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED
 
 *Renumbered from Phase 6 in Phase 6.0c, when the Kafka BASIC sequence took the Phase 6

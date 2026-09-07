@@ -208,9 +208,20 @@ mutate A10 "unsupported config version accepted" internal/fleet/config/document.
 assert "	case false:" in s' \
   ./internal/fleet/config 'TestMTC15AndC16ConfigVersion'
 
+# **The anchor was re-pointed in Phase 12.1C, and the drift is worth recording.**
+#
+# It read `if err := checkHostSyntax(block.Host)`, which Phase 12.1B turned into
+# `} else if …` when a Kubernetes target — which writes no host — gained the
+# derive-or-check branch. The `.replace` silently became a no-op, the `assert`
+# then failed, and this plant reported itself **unplantable**: a survivor for the
+# best possible reason and the worst possible one.
+#
+# It is anchored on `refuseWrittenEndpoint` instead, which is inside the same
+# function, is not part of the branch that moved, and is the line a host-reading
+# mutation would have to sit beside either way.
 mutate A11 "arbitrary environment interpolation added" internal/fleet/config/load.go \
   's = s.replace("import (\n\t\"errors\"\n\t\"fmt\"\n\t\"math\"\n\t\"time\"\n)", "import (\n\t\"errors\"\n\t\"fmt\"\n\t\"math\"\n\t\"os\"\n\t\"time\"\n)", 1)
-s = s.replace("	if err := checkHostSyntax(block.Host); err != nil {", "	block.Host = os.ExpandEnv(block.Host)\n	if err := checkHostSyntax(block.Host); err != nil {", 1)
+s = s.replace("	deriver, derives := factory.(EndpointDeriver)", "	block.Host = os.ExpandEnv(block.Host)\n	deriver, derives := factory.(EndpointDeriver)", 1)
 assert "os.ExpandEnv" in s' \
   ./test/security 'TestOnlyTheResolverReadsTheEnvironment'
 

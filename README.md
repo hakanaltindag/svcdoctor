@@ -10,9 +10,8 @@ One command diagnoses one endpoint; one configuration file diagnoses many. No AP
 OpenTelemetry collector, sidecar or agent is required for a diagnostic run.
 
 A fifth target type, `kubernetes`, reads one Service's backend publication from the Kubernetes
-API. It is available in a configuration file, it has **no diagnosis yet** — it reports what it
-observed and draws no conclusion — and it has no command of its own. See
-[Kubernetes](#kubernetes-target-no-diagnosis-yet).
+API and answers **four bounded questions** about it. It is available in a configuration file and
+has no command of its own. See [Kubernetes](#kubernetes-target).
 
 ```sh
 svcdoctor diagnose postgres --host db.prod.internal --user app --password-file /run/secrets/db
@@ -461,7 +460,7 @@ contract above.
 BASIC is bounded on purpose: it learns what svcdoctor can observe *while acting as the client
 for this run*. Inspecting a server's operational state is a separate future body of work.
 
-### Kubernetes target: no diagnosis yet
+### Kubernetes target
 
 A `kubernetes` target names one namespace and one Service, and svcdoctor makes exactly three
 Kubernetes API requests for it: `GET` the Service, `LIST` the Pods that Service's own selector
@@ -470,14 +469,35 @@ reads returned — the Service's type and selector shape, how many Pods matched,
 endpoints are published and how many of those Kubernetes marks ready — **and whether each
 enumeration was complete**.
 
-**It produces no findings.** Turning those observations into statements is the next phase's
-work, so today a Kubernetes target answers *what was observed* and nothing more. Reaching a page
-or object budget makes a set incomplete rather than empty, and svcdoctor will not report an
-incomplete enumeration as "none".
+It answers exactly one question, and nothing wider:
+
+> What does the Kubernetes API currently show about this declared Service's existence, the read
+> access this run's identity holds, the result of the Service's own selector, and the ready
+> endpoints Kubernetes publishes for it?
+
+Four findings, and there is no fifth:
+
+| Code | Severity | What it says |
+|---|---|---|
+| `KUBERNETES_SERVICE_NOT_FOUND` | ERROR | the API reported that no Service of this name exists in this namespace |
+| `KUBERNETES_API_ACCESS_DENIED` | WARN | the API denied this run's identity one of the three reads, so that measurement was not made |
+| `KUBERNETES_SERVICE_SELECTS_NO_PODS` | ERROR | this Service's selector matched no Pod, over a **complete** list |
+| `KUBERNETES_SERVICE_NO_READY_ENDPOINT` | ERROR | Kubernetes published no ready endpoint, over a **complete** set |
+
+Every one of them is scoped to *the time of these API observations*, and none attributes a cause.
+A denied read is **never** reported as emptiness: the set it would have produced is *unavailable*,
+which is a different fact. Reaching a page or object budget makes a set **incomplete rather than
+empty**, and svcdoctor will not report an incomplete enumeration as "none".
 
 It connects to no Pod, no cluster IP and no endpoint address, so it makes no claim about
-reachability at all: it reports what Kubernetes **publishes**. Its credential authorizes the API
-server and nothing else.
+reachability at all: it reports what Kubernetes **publishes**. A published endpoint that is
+terminating is not a dead one, and svcdoctor says so rather than implying otherwise. Its
+credential authorizes the API server and nothing else.
+
+**A `401 Unauthorized` produces no Kubernetes finding**, deliberately: it is authentication
+rather than authorization, and the run reports where observation stopped instead. Such a run
+exits 0 today. Every other API error — a `5xx`, a timeout, a `410 Gone` mid-pagination — is
+recorded on its own evidence node and produces no finding either.
 
 The minimum access it needs is a namespaced `Role` with three resources and two verbs —
 `services: [get]`, `pods: [list]`, `endpointslices: [list]`. No `ClusterRole`, no cluster-scoped
@@ -496,8 +516,12 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the fields and
 
 These are deliberate boundaries, not defects:
 
-- no Kubernetes findings, no Kubernetes command, and no real-cluster validation — the target
-  type is acquisition only, and no distribution is graded in `docs/COMPATIBILITY.md`
+- no real-cluster validation — no distribution is graded in `docs/COMPATIBILITY.md`
+- no `svcdoctor diagnose kubernetes` command **yet**: a `kubernetes` target is configured in a
+  file today, which reaches every one of the four findings above. This one is pending rather
+  than deliberate
+- no fifth Kubernetes finding: no cluster-health, workload, reachability or root-cause claim,
+  and no recommendation that tells anyone to change anything
 - no Kubernetes Pod, container, event, log, metric, Secret, ConfigMap, annotation or label
   inspection, no Ingress, Gateway, NetworkPolicy or service-mesh analysis, and no node,
   namespace or cluster-scoped read of any kind

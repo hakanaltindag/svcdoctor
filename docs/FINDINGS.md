@@ -967,3 +967,146 @@ backend-qualified vhost denial are proven from the RabbitMQ source and were **no
 live, so each may set a normalized attribute and neither may produce a restating sentence. That
 is the `namedConditions` rule PostgreSQL already lives under — a restatement requires having
 watched a real endpoint produce it — applied before the table exists (ADR 0069 §8).
+
+## 9. The four Kubernetes findings
+
+Frozen by **ADR 0094 §2.7** in Phase 12.1A and implemented in Phase 12.1C by
+`internal/diagnosis/kubernetes`, whose **two** rules produce exactly these and nothing else.
+
+Kubernetes answers a bounded question and svcdoctor asks no wider one:
+
+> **What does the Kubernetes API currently show about this declared Service's existence, the
+> read access this run's identity holds, the result of the Service's own selector, and the
+> ready endpoints Kubernetes publishes for it?**
+
+| Code | Kind | Severity | Confidence | Owner step | Rule |
+|---|---|---|---|---|---|
+| `KUBERNETES_SERVICE_NOT_FOUND` | CONFIRMED | ERROR | HIGH | `k8s.service` | `kubernetes/acquisition` |
+| `KUBERNETES_API_ACCESS_DENIED` | CONFIRMED | **WARN** | HIGH | any of the three reads | `kubernetes/acquisition` |
+| `KUBERNETES_SERVICE_SELECTS_NO_PODS` | CONFIRMED | ERROR | HIGH | `k8s.pod_set` | `kubernetes/backends` |
+| `KUBERNETES_SERVICE_NO_READY_ENDPOINT` | CONFIRMED | ERROR | HIGH | `k8s.endpoint_publication` | `kubernetes/backends` |
+
+All four are **`AuthorityDirect` at HIGH** and none carries a `Discriminator`. Each restates
+what an authoritative source stated, so **no hypothesis is created merely because Kubernetes is
+eventually consistent**: eventual consistency bounds a claim's *scope* — *"at the time of these
+API observations"* — not its *kind*. Every layer is **L6**, and each claim takes it from the
+node it cites rather than from a constant, so a claim and its evidence cannot disagree.
+
+**Two categories, never collapsed** (ADR 0094 §2.8). F1 and F2 are **acquisition** findings —
+statements about what svcdoctor could obtain. F3 and F4 are **semantic** findings — statements
+about what Kubernetes records.
+
+### 9.1 What each one claims, and what it may never say
+
+**`KUBERNETES_SERVICE_NOT_FOUND`** — *the Kubernetes API reported that no Service of this name
+exists in this namespace, at the time of this observation.* Admitted only from a structured
+`NotFound` (`metav1.StatusReason`, through `apierrors`) on the **Service read**, and from
+nothing else: a `LIST` answered `404` — the ordinary way a namespace that does not exist reports
+itself — says nothing about the Service. Evidence: the `k8s.service` node **only**.
+**Never:** *the Service was deleted* · *it never existed* · *the namespace is wrong* · *the
+context is wrong* · any claim about what the operator meant. Absence may be exactly what
+somebody arranged, and a `NotFound` is also returned in some authorization configurations, so
+the claim stops at *"the API reported"*.
+
+**`KUBERNETES_API_ACCESS_DENIED`** — *the Kubernetes API denied this run's identity the read it
+required; that measurement was not made.* Admitted only from a structured `Forbidden` on one of
+the three reads, whose node is **`UNKNOWN`** — a denied read is a measurement that was not made,
+not a target that failed. It is **WARN** for that reason, and `REDIS_COMMAND_NOT_PERMITTED` is
+the precedent. It names the denied operation from a **closed svcdoctor-owned map** —
+`SERVICE_GET`, `POD_LIST`, `ENDPOINTSLICE_LIST` — and never an HTTP method, a path or a URL.
+Evidence: the denied read's node only. **Never:** *RBAC is misconfigured* · *the ServiceAccount
+lacks the right Role* · *cluster policy is wrong* · *request cluster-admin* — **and never that
+the objects are absent.** A denied read is never emptiness: the set it would have produced is
+*unavailable*, which is a different fact from *empty*.
+
+**`KUBERNETES_SERVICE_SELECTS_NO_PODS`** — *at the time of these API observations, this
+Service's selector matched no Pod in its namespace.* Requires the Service to have been read, to
+have a **non-empty** selector, to be of a supported type, and the Pod enumeration to have
+**completed** and returned exactly zero. Evidence: the `k8s.service` node (the selector anchor)
+and the `k8s.pod_set` node (the complete set). **Never:** *the selector is wrong* · *the
+Deployment is missing* · *the Pods crashed* · *traffic has no backend* · *the Service is
+unavailable* · *the application is down*. A workload deliberately held at zero replicas produces
+this finding truthfully; svcdoctor reports observed state and never violated intent.
+
+**`KUBERNETES_SERVICE_NO_READY_ENDPOINT`** — *at the time of these API observations, Kubernetes
+published no ready endpoint for this Service.* Requires the same Service gate, the EndpointSlice
+enumeration to have **completed**, and zero effective-ready endpoints. Evidence: the
+`k8s.service` node and the `k8s.endpoint_publication` node. It carries **two Detail variants**
+from a closed two-value map — *no associated slice was published* and *slices were published and
+no endpoint among them is ready* — which are mutually exclusive by construction, so no fifth
+code is needed and no convergence hazard exists. Where the set is entirely terminating the
+detail says so. **Never:** *the Service is unreachable* · *clients cannot connect* · *the
+application is unavailable* · *the Pods are unhealthy* · *the readiness probe failed* · *the
+EndpointSlice controller is broken* · *the network is broken* — **and no word implying
+persistence.**
+
+> **The wording is `publishes`, never `reachable`** (ADR 0093 §2.5). Topology-aware routing,
+> traffic policies, mesh interception and the all-terminating case each break the equation
+> between publication and reachability, in both directions. svcdoctor connects to no endpoint,
+> no cluster IP and no Pod: it reads three objects.
+
+### 9.2 Completeness is the precondition, not a nicety
+
+An enumeration that stopped at a page ceiling, an object budget, a `410 Gone`, a cancellation or
+a failed request is **incomplete and never empty**, and supports no `zero`, `all`, `none` or
+`only` claim of any kind. That is Kafka Phase 10.2's rule, unchanged, in a third domain. F3 and
+F4 each check the node's state **and** its completeness attribute: the two come from different
+code paths in the adapter, and requiring both means neither alone can be weakened into admitting
+an incomplete set.
+
+**F3 and F4 are disjoint** (ADR 0094 §10.3). One impact is never described twice at one
+severity, so the publication claim is withheld exactly where the selector claim was made. That
+disjointness is *not* a dependency: a Pod branch that was denied, incomplete or skipped leaves
+the publication claim alone, and the reverse holds too, because the two sets are siblings under
+the Service node rather than a chain.
+
+### 9.3 What earns no Kubernetes code, deliberately
+
+**A `401 Unauthorized` does not.** It is authentication, not authorization: the `k8s.api_access`
+node **FAILs** with `AUTH_CREDENTIALS_REJECTED`, the three reads below it are `SKIPPED` and
+blocked by it, and `DIAG_FAILURE_BOUNDARY` localizes it. Collapsing a `401` into
+`KUBERNETES_API_ACCESS_DENIED` would be svcdoctor inventing a distinction the API server did not
+make, in the direction that names an innocent policy.
+
+**Nor does anything else.** A `5xx`, a `429`, a `410 Gone` mid-pagination, a timeout, a reset and
+a cancellation are acquisition failures carrying an existing `FailureClass` on their own node.
+The admission rule is ADR 0094 §2.8's:
+
+> A Kubernetes API failure earns a `FindingCode` only when the operator's first move differs
+> from that of every other API failure, and the discriminating value comes from an API-contract
+> enumeration rather than from a message.
+
+**No message is ever read.** `Status.Message`, `Status.details.causes[].message` and every
+condition or status message are never read, matched, parsed or interpolated anywhere in the
+tree, which keeps hostile status strings, ANSI and CRLF out structurally rather than by
+escaping. No label key, label value, Pod name, slice name, endpoint address or `managed-by`
+string is in the evidence graph to begin with, so no Kubernetes prose can carry one.
+
+**And no count reaches any sentence.** The counts decide *which* frozen constant is emitted;
+none is rendered into one. A cluster's cardinality does not belong in a document that may be
+shared.
+
+### 9.4 Recommendations
+
+All four carry exactly one, all **`NEXT_EVIDENCE`** with `SelfCollectable: false` — `VERIFY` for
+F1 and F2, `COMPARE` for F3 and F4. No `REMEDIATION` is reachable at any confidence, and no
+`RESTART`, `DISRUPTIVE` or `SECURITY_WEAKENING` class is producible at all.
+
+**Forbidden permanently:** change the selector · restart Pods · delete or recreate the Service ·
+increase replicas · edit RBAC · grant cluster-admin · modify a NetworkPolicy. The text is pinned
+byte for byte and imperatives are refused by name, because a well-formed
+`NEXT_EVIDENCE`/`COMPARE` recommendation whose sentence says *"change the selector"* passes every
+structural check there is and is a remediation in the only sense that matters to the operator
+reading it.
+
+### 9.5 What is not diagnosed, and what a fifth code would cost
+
+No Pod health, container reason, restart count, workload, Deployment, StatefulSet, DaemonSet,
+Job, Node, PVC, Event, log, metric, NetworkPolicy, CNI, mesh, Ingress or Gateway diagnosis
+exists. No endpoint is probed, no external reachability is claimed, and no cross-service or
+cross-target correlation is performed. `docs/COMPATIBILITY.md` grades no Kubernetes distribution
+and will not until a fixture establishes one.
+
+A fifth first-scope code needs ADR 0094 §7's condition: *a bounded operator question no admitted
+finding answers, whose discriminating value comes from an API-contract enumeration rather than
+from a message.* That is a decision with its own record, never an edit to the table above.
