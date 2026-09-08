@@ -5149,6 +5149,91 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 12.2A — Kubernetes CI and release-gate contract freeze: COMPLETE
+
+**Docs-only. No production, test, CI or configuration change.** ADR **0095** is Accepted and
+`docs/validation/PHASE122A_KUBERNETES_CI_RELEASE_GATE_CONTRACT_FREEZE.md` is the measurement it was
+derived from. Phase 12.2B implements it.
+
+**MODEL B**, chosen against a measured decision matrix rather than a preference: **one CURRENT lane
+on every pull request**, **CURRENT + OLDER weekly, on demand and at every release**, and **exactly
+one test tier — the whole suite**. The evidence that decided it is one line of Phase 12.1D: both
+lanes ran *the identical binary and produced identical results*, so the older lane carries
+**compatibility** signal rather than **regression** signal, and those two want different triggers.
+
+**The release gate is a job inside `release-oci.yml`, not a workflow that gates it.** GitHub cannot
+make one workflow depend on another's recent result, and "green last Tuesday" is a statement about a
+different commit. `stage-and-verify` and `publish` gain `kubernetes` in their `needs:` lists, exactly
+as they already depend on `integration` — the mechanism
+`TestOCIPublicationCannotStartBeforeLinuxIntegration` already protects.
+
+**Tiering was refused on measurement, and that refusal is what keeps 12.2B small.** The suite is 71 s
+of a ≈5–7 minute job whose cost is dominated by cluster creation, node-image pull and the Go build,
+so a core/extended split would save under a fifth of the job. Tier selection was the *only* thing
+that would have required editing `Makefile` or `test/integration/kubernetes/**`, so both are now out
+of 12.2B's scope — and the exec-auth refusal, the credential-authority trap and the
+data-minimization scan run on **every pull request** instead of weekly.
+
+### Four things a future agent should not re-derive
+
+- **The first hosted run will be this suite's first `amd64` execution.** Phase 12.1D ran on
+  `aarch64` under Colima. This repository has already lost a release (`v0.3.1`) to one such
+  developer-platform-versus-runner difference, which is why the gate is **not operational until its
+  first real green run** — closure option B, not "the YAML parses".
+- **Nothing floats, and no digest was invented.** `kind` is installed with
+  `go install sigs.k8s.io/kind@v0.30.0`, which the module proxy and `sum.golang.org` verify — the
+  mechanism `release-oci.yml` already chose for `golangci-lint` and the one the `Makefile`'s own
+  error message already recommends. `kubectl` is pinned with a checksum **recorded by 12.2B**,
+  because Phase 9.2B's UX-S16-b already decided that writing an unverifiable digest is worse than the
+  tag it replaces. The ambient `kubectl` a runner image ships is refused outright.
+- **Two existing guards constrain the implementation mechanically.**
+  `TestOCIPublicationCannotStartBeforeLinuxIntegration` finds the release matrix with
+  `strings.Cut(wf, "suite:")` — the *first* occurrence — so the new job must key its matrix on
+  `lane:` and sit **after** `integration` in the file. And `TestUX22TheSupplyChainPinningIsRecorded`
+  globs every workflow, so the new one uses only `actions/checkout` and `actions/setup-go` at the
+  SHAs this repository already carries, and needs no new digest.
+- **Path filtering was refused for an operational reason, not a purity one.** The narrow
+  `paths-ignore` on documentation is technically sound — the lane runs no documentation guard — but a
+  required check that does not run leaves a pull request **pending**, and the usual workaround is a
+  second always-succeeding job that exists to satisfy branch protection. The accepted price is ≈7
+  runner-minutes on a documentation-only pull request.
+
+**CI protects claims; it never creates them.** Adding a Kubernetes version to the matrix is not
+grading it: no `latest`, no dynamic version discovery, and no dispatch input that can name an image.
+**OLDER is a fixed validated version, not a moving compatibility floor**, and two terms are frozen —
+*continuously gated* (in the matrix) and *validated historically* (measured once, no longer gated).
+
+Frozen counts unchanged, all pinned by tests that `make check` runs: finding codes **69**, rules
+**24**, `SchemaVersion` **1**, `RunSchemaVersion` **1**, failure classes **42**, `Reveal` **5**,
+`SecretFor` **5**, external modules **40**, Kubernetes flags **10**, exit codes **5**.
+
+### Documentation debt this phase measured and deliberately did not fix
+
+- `CONTRIBUTING.md` omits `integration-kubernetes` from its suite list, and says `make check`
+  *"mirrors CI exactly"* — which stops being true when the Kubernetes lane lands. 12.2B's
+  documentation surface covers it.
+- `CONTRIBUTING.md` still says svcdoctor "has two" dependencies. It has **40** since Phase 12.1B.
+- `docs/RELEASE_CHECKLIST.md`'s frozen-count table is stale — 60 finding codes, 2 external modules —
+  and its gate list names no Kubernetes lane.
+- The release `integration` matrix runs **three of eight** suites. Redis, Valkey, RabbitMQ, LavinMQ
+  and multi-target run only locally while the checklist requires all eight by hand. Pre-existing,
+  unrelated to Kubernetes, and larger than this phase.
+- `govulncheck` is still absent from `ci.yml`, against ADR 0076 §2.6 — already tracked as UX-S17.
+
+### Phase 12.2B — Kubernetes CI and release-gate implementation: NOT STARTED
+
+Allowed surface, and nothing else: `.github/workflows/kubernetes.yml` (new); one job plus two
+`needs:` entries in `.github/workflows/release-oci.yml`; `scripts/install-kube-tools.sh` (new);
+`internal/cli/kubernetesworkflow_test.go` (new guards, each with its non-vacuity proof);
+`docs/validation/PHASE122B_*.md`; and CI-operation documentation. **Refused:** production code,
+diagnosis rules, the evidence model, the client boundary, CLI flags, secret authority, the
+compatibility grade, `Makefile`, `test/integration/kubernetes/**` and `cluster.yaml`.
+
+**Closure requires an actual green GitHub-hosted run**, which the user owns. Three states stay
+distinct and must never be collapsed: *workflow implemented*, *workflow green*, *workflow configured
+as a required check* — the third being a repository setting a human applies
+(`Kubernetes / current`), never Claude.
+
 ## Phase 12.1D — Kubernetes real-cluster and release-quality validation: COMPLETE
 
 The frozen Kubernetes model was taken to a real API server and it held. Two `kind` lanes, pinned by

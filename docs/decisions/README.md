@@ -649,6 +649,27 @@ key is `security.Secret`, the certificate and CA bundle are public — and takes
 and derives the API server host from the context it was already given. **Zero open blockers**, and
 the implementation is split three ways so that no phase is one giant Kubernetes commit.
 
+**0095 decides which trigger runs which Kubernetes lane, and it was decided by one measured
+sentence.** Phase 12.1D ran both `kind` lanes with *the identical binary* and got *identical
+results*, so the older lane carries **compatibility** signal and the current lane carries
+**regression** signal — and those want different triggers. Hence one CURRENT lane on every pull
+request, both lanes weekly, on demand, and at every release. **The release gate is a job inside
+`release-oci.yml`**, because GitHub cannot make one workflow depend on another's recent result and a
+gate in prose is not a gate; `stage-and-verify` and `publish` depend on it exactly as they already
+depend on `integration`. **A tier split was refused on measurement** — 71 s of a ≈5–7 minute job
+whose cost is cluster creation, image pull and the Go build — which is what puts the exec-auth
+refusal, the credential-authority trap and the data-minimization scan on every pull request rather
+than weekly, and what keeps `Makefile` and the integration suite out of the implementation's scope
+entirely. `pull_request_target` is refused, no repository secret is used or needed, and permissions
+stay `contents: read` with no job escalating. Nothing floats: node images by digest, `kind` through
+`go install` at a pinned version, Go from `go.mod`, actions at the SHAs already carried — and,
+following 9.2B's UX-S16-b, **no digest is written that this phase could not verify**. **A green lane
+protects a claim and never creates one**: no `latest`, no dynamic version discovery, OLDER a fixed
+validated version rather than a moving floor, and *continuously gated* versus *validated
+historically* frozen as terms. Because the lane has never executed on hosted infrastructure — and
+12.1D ran on `arm64` while every runner is `amd64` — **the gate is not operational until its first
+real green run**, which is the record's closure policy rather than a caveat in a footnote.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:
