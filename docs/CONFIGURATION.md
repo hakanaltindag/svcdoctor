@@ -358,7 +358,9 @@ before it executes, and the value goes out of scope when it finishes.
 No `--password` flag, in any command, because an argument is visible to every process on the
 host. No interactive prompt. No DSN or connection-string input. No secret-manager integration.
 
-The four leaf `diagnose` commands take `--password-file` and `--password-stdin`, and read no
+The four endpoint leaf `diagnose` commands take `--password-file` and `--password-stdin`;
+`diagnose kubernetes` takes `--token-file` and `--token-stdin`, because its credential is a
+bearer token rather than a password. All five read no
 environment variable at all. `env:` exists only in this file, where a reference is *named* rather
 than inherited from an ambient process environment.
 

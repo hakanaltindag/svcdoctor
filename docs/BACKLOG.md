@@ -5149,20 +5149,59 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
-## Phase 12.1C — Kubernetes Service findings and diagnosis: DIAGNOSIS COMPLETE, CLI PENDING
+## Phase 12.1C — Kubernetes Service findings and diagnosis: COMPLETE
 
-The diagnosis half is complete and closed. **The phase is not contract-complete**: ADR 0094
-§2.10 and §2.12 and `PHASE121A…§12.1`/`§14` assign **the CLI case** — `svcdoctor diagnose
-kubernetes` — to this phase by name, and it is absent. Nothing about F1–F4 depends on it, and
-every finding is exercised end to end through `svcdoctor run --config`.
+Complete across all three parts. **12.1C** built the two rules and the four findings; **12.1C.1**
+froze the leaf CLI contract; **12.1C.2** implemented it and closed the phase's one open blocker.
+ADR 0094 §2.10 and §2.12 and `PHASE121A…§12.1`/`§14` (KAC-040) assign the CLI case to this phase,
+and `svcdoctor diagnose kubernetes` now exists.
 
-**Phase 12.1C.1 froze that command's public surface and produced no Go code.** Ten flags, zero of
-them a new decision: five DERIVED from the five frozen target fields, `--token-file`
-EXPLICITLY_FROZEN by `PHASE121A…§6.1` mode A, `--token-stdin` DERIVED from ADR 0049's *file or
-pipe* pair applied to that noun, and `--timeout`/`--output`/`--shareable` SHARED unchanged. **No
-`--step-timeout`, no acquisition-budget flag, no TLS flag, no `--user`, no `--host`.** Implementation
-is authorized against
+**Real-cluster validation is deferred to Phase 12.1D**, `docs/COMPATIBILITY.md` grades **no**
+Kubernetes distribution or version, and the `401` exit code remains a CONTRACT-CONFORMANT KNOWN
+LIMITATION.
+
+### Phase 12.1C.1 — the leaf CLI contract freeze (no Go code)
+
+Ten flags, **zero of them a new decision**: five DERIVED from the five frozen target fields,
+`--token-file` EXPLICITLY_FROZEN by `PHASE121A…§6.1` mode A, `--token-stdin` DERIVED from ADR
+0049's *file or pipe* pair applied to that noun, and `--timeout`/`--output`/`--shareable` SHARED
+unchanged. **No `--step-timeout`, no acquisition-budget flag, no TLS flag, no `--user`, no
+`--host`, no `--client-cert` pair.** See
 `docs/validation/PHASE121C1_KUBERNETES_LEAF_CLI_CONTRACT_FREEZE.md`.
+
+### Phase 12.1C.2 — the leaf CLI, implemented
+
+**One new production file**, `internal/cli/kubernetes.go`, plus one `case`, one help function and
+a two-field parameterization of the shared secret helper. **69 finding codes, 24 rules, 10 public
+Kubernetes flags**, and every other frozen count unchanged: `SchemaVersion` 1, `RunSchemaVersion`
+1, failure classes 42, `Reveal`/`SecretFor` 5/5, modules 40, `k8s.io` import paths 10, renderer
+files changed 0, relation producers 0.
+
+Three properties are worth carrying forward. **The exec release gate now holds at the surface an
+operator types**: a kubeconfig whose plugin would write a sentinel is refused at exit 2, the file
+does not exist, the API server counted zero requests, and the command, args and env leak nowhere.
+**Twenty-one invalid invocations reach the API server zero times**, counted at the server. And
+**the leaf and `run --config` produce byte-identical reports** across five scenarios — the whole
+canonical document, timings blanked — which is ADR 0094 §2.10's *one Service is one target and one
+report through both entry points*, made checkable.
+
+**One structural guard was widened rather than re-enumerated.**
+`TestTheCommandBoundaryReachesNoWirePackage` matched packages *named* `wire`, and Kubernetes'
+authorized `Reveal` is not in one — client-go owns the transport — so it would have said nothing
+about the one package a Kubernetes leaf was most likely to reach for. That is the Phase 7.6A
+defect's exact shape. The guard now computes the property: any adapter package whose production
+sources call `security.Reveal` is out of reach, whatever it is called.
+
+**Mutation 28 planted / 28 caught / 0 survivors — but the first run caught 24, and none of the
+four survivors was equivalent.** Two shared a shape: `TestTheBearerTokenValueIsUnobservable`
+compares two runs against each other, so a command that ignored `--shareable` or `--output`
+produced two identical outputs and passed. Chasing that found a defect in a *test helper* that had
+made every JSON comparison in the file vacuous — `blankVarying` collapsed a one-line JSON document
+to `"<varies>"` in its entirety, so two reports were being compared as two identical placeholders.
+Fuzz: **1,755,446 executions, 0 crashes**, and the fuzzer refuted its own target's first
+assumption in under a second. Historical suites all at zero survivors, with one Phase 9.2B anchor
+repaired and reported. See
+`docs/validation/PHASE121C2_KUBERNETES_LEAF_CLI_IMPLEMENTATION.md`.
 
 Frozen by ADR 0094 §2.7 in Phase 12.1A, implemented here. `internal/diagnosis/kubernetes` holds
 **two rules** producing **four codes**, and the composition root wires them beside the generic
@@ -5251,7 +5290,7 @@ stated positively.
 |---|---|
 | **A `401` against the API server exits 0, and so does an unreachable control plane. This is a CONTRACT-CONFORMANT KNOWN LIMITATION and not an ADR deviation.** ADR 0094 §10.4 deliberately gives a `401` no Kubernetes code — it is authentication, and `DIAG_FAILURE_BOUNDARY` localizes it — and that boundary is INFO, so no ERROR finding exists, `SummaryStatus` is OK, the run is complete, and the generic mapping returns 0. **Every other service has a credential-rejection finding at ERROR; Kubernetes has none.** The behaviour is unchanged by 12.1C — before it the same invocation exited 0 with no finding at all — and it is measured and pinned by `TestTheKubernetesExitBehaviourIsTheGenericOne` rather than left to be discovered | Closing it needs a **fifth finding code**, which ADR 0094 §7 makes a decision with its own record: a bounded operator question no admitted finding answers, whose discriminating value comes from an API-contract enumeration. Phase 12.1D should weigh it against a real cluster, where the shape is easy to produce |
 | **A refused read leaves the run incomplete, so exit 4 outranks F2's WARN.** A `403` on a list is `Attempted` and not `Complete`, so `Result.Incomplete()` is true. The WARN never decides the invocation's status | Not a defect: incompleteness qualifies every conclusion, which is what `docs/SCOPE.md`'s precedence says it should do. Recorded because a reader expecting exit 0 for a WARN-only run will not get it |
-| **`svcdoctor diagnose kubernetes` is not added yet; its contract is frozen and implementation is authorized.** ADR 0094 §2.10 and §2.12, `PHASE121A…§12.1` and `§14` (KAC-040) all assign **the CLI case** to Phase 12.1C by name, so 12.1C is **not contract-complete**. The phase brief instructed *"No new CLI command. No new flags."* twice and this tree follows the brief; on a source reconciliation the frozen contract wins. A Kubernetes target is reachable through `svcdoctor run --config`, which is how every test in this phase drives it, and all four findings are fully exercised end to end, so nothing about F1–F4 depends on it | **Closed by Phase 12.1C.1.** All three previously-open decisions are answered from source: stdin is **REQUIRED** as `--token-stdin` (ADR 0049's pair is the contract and ADR 0072 §4/§14 make it leaf-generic); **no** budget flag and **no** `--step-timeout` (`app.KubernetesParams` has no step-timeout field and no caller sets `client.Budgets`, so either would be inert — ADR 0060); and the command may exist ungraded, with `docs/COMPATIBILITY.md` unchanged. Ten flags, zero new decisions. See `docs/validation/PHASE121C1_KUBERNETES_LEAF_CLI_CONTRACT_FREEZE.md` for the surface, the conflict matrix, the refused surface and the twenty required tests |
+| **`svcdoctor diagnose kubernetes` is implemented (Phase 12.1C.2), closing the one blocker Phase 12.1C left.** ADR 0094 §2.10 and §2.12 and `PHASE121A…§12.1`/`§14` (KAC-040) assign the CLI case to 12.1C by name; it now exists. Ten flags, frozen by `PHASE121C1…§5` and pinned by an exact-set guard in both directions plus a separate count. The leaf and `run --config` produce byte-identical reports across five scenarios | **Closed.** Real-cluster execution of `--in-cluster`, and compatibility grading, are Phase 12.1D's |
 | **No Kubernetes distribution is graded.** `docs/COMPATIBILITY.md` is unchanged and mentions none | Phase 12.1D: `kind` fixtures, the seven scenarios, the two-version matrix. A hermetic suite may not grade a distribution |
 | **The terminal renders a Kubernetes report through the zero `serviceView`** — an empty journey, no outcome line, no advertisement level — and the findings block, which is service-neutral. That is ADR 0094 §12.3's *"no renderer change"* holding, and the output is correct rather than merely unchanged | Reopens only if a real-cluster reader finds the journey unreadable. A Kubernetes row in the `services` table would be a table row, never a branch |
 

@@ -34,8 +34,18 @@ type blackBox struct {
 // runCLI drives the real command with real arguments.
 func runCLI(t *testing.T, ctx context.Context, args ...string) blackBox {
 	t.Helper()
+	return runCLIWithStdin(t, ctx, "", args...)
+}
+
+// runCLIWithStdin is runCLI with credential material on the input stream.
+//
+// Phase 12.1C.2 needed it: `--token-stdin` is the one leaf source that reads
+// stdin, and a suite that could not supply one could not exercise half the
+// Kubernetes credential surface.
+func runCLIWithStdin(t *testing.T, ctx context.Context, stdin string, args ...string) blackBox {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := cli.New(strings.NewReader(""), &stdout, &stderr, "test").Run(ctx, args)
+	code := cli.New(strings.NewReader(stdin), &stdout, &stderr, "test").Run(ctx, args)
 	return blackBox{code: code, stdout: stdout.String(), stderr: stderr.String()}
 }
 

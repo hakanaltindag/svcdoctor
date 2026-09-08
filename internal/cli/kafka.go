@@ -139,7 +139,10 @@ func (a *App) parseKafka(args []string) (kafkaCommand, error) {
 		return kafkaCommand{}, err
 	}
 
-	sources := credentialSources{file: *passwordFile, fromStdin: *passwordStdin}
+	sources := credentialSources{
+		file: *passwordFile, fromStdin: *passwordStdin,
+		fileFlag: "password-file", stdinFlag: "password-stdin",
+	}
 	if err := sources.validate(); err != nil {
 		return kafkaCommand{}, err
 	}

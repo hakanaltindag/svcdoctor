@@ -10,6 +10,7 @@
   exist; one — `--token-file` — is EXPLICITLY_FROZEN by name. **Zero NEW_DECISION flags.**
   No acquisition budget is exposed. No `--step-timeout`. No TLS flag. No `--user`. No `--host`.
 - **Implementation authorized:** yes, under §16's plan and §17's test obligations
+- **Implemented:** Phase 12.1C.2, exactly as frozen — ten flags, no eleventh, zero deviations. See `docs/validation/PHASE121C2_KUBERNETES_LEAF_CLI_IMPLEMENTATION.md`
 
 ---
 

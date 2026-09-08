@@ -72,6 +72,16 @@ type App struct {
 	diagnoseKafka    func(context.Context, app.KafkaParams) (app.Result, error)
 	diagnoseRedis    func(context.Context, app.RedisParams) (app.Result, error)
 	diagnoseRabbitMQ func(context.Context, app.RabbitMQParams) (app.Result, error)
+
+	// diagnoseKubernetes is the fifth seam and the first whose production
+	// function opens no socket of svcdoctor's own: client-go owns the
+	// transport. It exists for the same reason as the other four — parsing,
+	// parameter construction, output routing and the exit decision are
+	// testable against a scripted result — and for one more that is specific
+	// to this service: the parse path calls app.InspectKubernetesTarget, which
+	// reads a file, so a test that wants to reach the *output* half must be
+	// able to stop before the run.
+	diagnoseKubernetes func(context.Context, app.KubernetesParams) (app.Result, error)
 }
 
 // New builds the production command environment.
@@ -85,6 +95,8 @@ func New(stdin io.Reader, stdout, stderr io.Writer, version string) *App {
 		diagnoseKafka:    app.DiagnoseKafka,
 		diagnoseRedis:    app.DiagnoseRedis,
 		diagnoseRabbitMQ: app.DiagnoseRabbitMQ,
+
+		diagnoseKubernetes: app.DiagnoseKubernetes,
 	}
 }
 
@@ -166,6 +178,9 @@ func (a *App) diagnose(ctx context.Context, args []string) int {
 
 	case "rabbitmq":
 		return a.diagnoseRabbitMQCommand(ctx, args[1:])
+
+	case "kubernetes":
+		return a.diagnoseKubernetesCommand(ctx, args[1:])
 
 	default:
 		_, _ = fmt.Fprintf(a.Stderr, "svcdoctor: unknown service %q\n\n", args[0])

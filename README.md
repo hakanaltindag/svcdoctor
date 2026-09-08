@@ -5,16 +5,20 @@ services. You point it at a service endpoint, it attempts the journey a real cli
 and it reports what it measured at every stage — and, just as deliberately, what it did not
 learn.
 
-**Four services are supported: PostgreSQL, Apache Kafka, Redis/Valkey and RabbitMQ/LavinMQ.**
-One command diagnoses one endpoint; one configuration file diagnoses many. No APM,
+**Five services are supported: PostgreSQL, Apache Kafka, Redis/Valkey, RabbitMQ/LavinMQ and
+Kubernetes.** One command diagnoses one endpoint; one configuration file diagnoses many. No APM,
 OpenTelemetry collector, sidecar or agent is required for a diagnostic run.
 
-A fifth target type, `kubernetes`, reads one Service's backend publication from the Kubernetes
-API and answers **four bounded questions** about it. It is available in a configuration file and
-has no command of its own. See [Kubernetes](#kubernetes-target).
+The fifth is different in kind and the README says so throughout: `kubernetes` reads one
+Service's backend publication from the Kubernetes API and answers **four bounded questions**
+about it. It names a Service rather than an endpoint, it connects to nothing that Service
+describes, and no Kubernetes distribution is graded in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md). See [Kubernetes](#kubernetes-target).
 
 ```sh
 svcdoctor diagnose postgres --host db.prod.internal --user app --password-file /run/secrets/db
+svcdoctor diagnose kubernetes --kubeconfig ~/kubeconfig --context prod \
+  --namespace payments --service-name checkout
 svcdoctor run --config services.yaml
 ```
 
@@ -30,7 +34,12 @@ kafka      requested target → DNS → TCP → TLS → ApiVersions → SASL neg
                                                                                    └→ per advertised broker: DNS → TCP → TLS
 redis      requested target → DNS → TCP → TLS → HELLO → Authentication → PING
 rabbitmq   requested target → DNS → TCP → TLS → Connection.Start → Authentication → Connection.Open
+kubernetes declared Service → API authority → Service read → Pod list → EndpointSlice list
 ```
+
+Kubernetes is the one row that is not a client journey. There is no DNS, TCP or TLS stage of
+svcdoctor's own: the API client owns the transport, and what svcdoctor measures is what three
+bounded API reads returned.
 
 For Kafka it then measures DNS, TCP and TLS for every broker endpoint the cluster advertised —
 **credential-free**. A discovered broker is an endpoint you never named, learned from
@@ -462,6 +471,11 @@ for this run*. Inspecting a server's operational state is a separate future body
 
 ### Kubernetes target
 
+```sh
+svcdoctor diagnose kubernetes --kubeconfig ~/kubeconfig --context prod \
+  --namespace payments --service-name checkout
+```
+
 A `kubernetes` target names one namespace and one Service, and svcdoctor makes exactly three
 Kubernetes API requests for it: `GET` the Service, `LIST` the Pods that Service's own selector
 matches, and `LIST` the EndpointSlices Kubernetes associates with it. It reports what those
@@ -509,6 +523,18 @@ configuration error. A configuration file must not be able to make svcdoctor run
 EKS, GKE and AKS generate exec-based kubeconfigs by default, so those clusters are reachable only
 through in-cluster identity or a token materialized outside the file.
 
+The command takes **ten flags and no eleventh**: `--kubeconfig`, `--context`, `--in-cluster`,
+`--namespace`, `--service-name`, `--token-file`, `--token-stdin`, `--timeout`, `--output` and
+`--shareable`. There is no `--host` or `--port`, because the API server is derived from the
+kubeconfig context rather than typed; no TLS flag, because the trust material is the kubeconfig's
+own; no `--client-cert` pair, because a client certificate is reached through the kubeconfig; and
+no per-request or budget flag, because a lowered object ceiling would make an enumeration
+incomplete and silence a finding. Exactly one of `--kubeconfig` and `--in-cluster` is required;
+`--context` is mandatory with the first and refused with the second.
+
+The same target is available in a configuration file, and **one Service is one target and one
+report through both entry points** — proven by a test comparing the two documents.
+
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the fields and
 [docs/SECURITY.md](docs/SECURITY.md) for the boundary.
 
@@ -516,10 +542,8 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the fields and
 
 These are deliberate boundaries, not defects:
 
-- no real-cluster validation — no distribution is graded in `docs/COMPATIBILITY.md`
-- no `svcdoctor diagnose kubernetes` command **yet**: a `kubernetes` target is configured in a
-  file today, which reaches every one of the four findings above. This one is pending rather
-  than deliberate
+- no real-cluster validation — **no Kubernetes distribution or version is graded** in
+  `docs/COMPATIBILITY.md`. The command exists; that is not a compatibility claim
 - no fifth Kubernetes finding: no cluster-health, workload, reachability or root-cause claim,
   and no recommendation that tells anyone to change anything
 - no Kubernetes Pod, container, event, log, metric, Secret, ConfigMap, annotation or label

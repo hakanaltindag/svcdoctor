@@ -61,6 +61,7 @@ Services:
   postgres    diagnose a PostgreSQL endpoint
   redis       diagnose a Redis or Valkey endpoint
   rabbitmq    diagnose a RabbitMQ or other AMQP 0-9-1 endpoint
+  kubernetes  diagnose one Kubernetes Service's backend publication
 
 Run "svcdoctor diagnose <service> --help" for its flags.
 `)
@@ -426,6 +427,126 @@ Exit codes:
   4  the run was incomplete, which qualifies every conclusion
 
 Exit code 0 does not mean the virtual host was opened. Read the report.
+`)
+}
+
+// usageKubernetes is the fifth service's help, and the first that describes no
+// endpoint.
+//
+// It follows the four before it and says the same three things in the same
+// order: what is measured, what is *not* proven, and what happens to the
+// credential. The middle section carries more weight here than anywhere else,
+// because a Kubernetes answer is the one an operator is most likely to read as
+// a reachability claim — "no ready endpoint" looks like "nothing works", and it
+// is not. Every sentence says `publishes`.
+//
+// It also states the two things a reader would otherwise have to discover: that
+// a 401 produces no Kubernetes finding and such a run exits 0, and that no
+// Kubernetes distribution is graded. Neither is a defect, and both are worse to
+// find out from a report than from the help.
+func (a *App) usageKubernetes(w io.Writer) {
+	_, _ = fmt.Fprint(w, `Diagnose one Kubernetes Service's backend publication.
+
+svcdoctor makes exactly three bounded Kubernetes API requests for one declared
+Service: it reads the Service, lists the Pods that Service's own selector
+matches, and lists the EndpointSlices Kubernetes associates with it. It reports
+what those reads returned and whether each enumeration was complete.
+
+What this measures, and what it does not:
+  * It reports what Kubernetes PUBLISHES. It never says "reachable". svcdoctor
+    connects to no Pod, no cluster IP and no endpoint address, so it makes no
+    claim about whether traffic flows, about any backend's condition, or about
+    the components that publish endpoints.
+  * A published endpoint that is terminating is not a dead one, and a Service
+    with no ready endpoint may still be receiving traffic. Where that applies,
+    the report says so rather than leaving you to assume otherwise.
+  * A denied read is never reported as emptiness. The set it would have
+    produced is unavailable, which is a different fact. Reaching a page or
+    object budget makes a set incomplete rather than empty, and svcdoctor will
+    not report an incomplete enumeration as "none".
+  * It reads no Pod name, label, phase, condition, image, IP or node, no
+    annotation, no Secret, no ConfigMap, no event, no log and no metric. None
+    of it is collected, so none of it can appear in the report.
+  * It performs no cluster-scoped read, diagnoses no Ingress, Gateway,
+    NetworkPolicy or service mesh, and reports no cluster, node or workload
+    health.
+  * The credential authorizes the Kubernetes API server and nothing else. No
+    address discovered through it inherits the credential.
+  * A 401 produces no Kubernetes finding: it is authentication rather than
+    authorization, and the report localizes where observation stopped instead.
+    Such a run exits 0.
+  * No Kubernetes distribution or version is graded in docs/COMPATIBILITY.md.
+
+Usage:
+  svcdoctor diagnose kubernetes --kubeconfig <path> --context <name> \
+                                --namespace <ns> --service-name <name> [flags]
+  svcdoctor diagnose kubernetes --in-cluster \
+                                --namespace <ns> --service-name <name> [flags]
+
+Required:
+  --namespace string        the namespace the Service is in. Never defaulted,
+                            never taken from the context, never "default"
+  --service-name string     the one Service this run is about
+
+API authority, exactly one of:
+  --kubeconfig path         exactly one kubeconfig file. KUBECONFIG is not
+                            consulted, ~/.kube/config is not a fallback, and a
+                            merge list is not supported: one file, so one
+                            invocation means the same thing on every machine
+  --in-cluster              authenticate as the pod's own projected
+                            ServiceAccount. Explicit only and never a fallback:
+                            a mounted token must not make svcdoctor acquire an
+                            identity nobody asked for
+
+  --context string          the kubeconfig context to read through. Required
+                            with --kubeconfig and refused with --in-cluster.
+                            The file's current-context is never used: a
+                            defaulted context reads a different cluster on a
+                            different machine, and reporting "not found" for
+                            the wrong cluster is indistinguishable from a real
+                            finding. "kubectl config current-context" tells you
+                            what to write
+
+Credential:
+  --token-file path         read the bearer token from a file
+  --token-stdin             read the bearer token from stdin
+                            The two sources are mutually exclusive, and there
+                            is no flag that takes a token as a value: an
+                            argument is visible to every process on the host.
+                            Both are refused with --in-cluster, and refused
+                            when the selected kubeconfig user already carries a
+                            credential, because two identities is an ambiguity
+                            svcdoctor will not resolve by preference. A source
+                            that holds no token is refused rather than ignored.
+                            Omit both to authenticate as the selected
+                            kubeconfig user: a token, a tokenFile svcdoctor
+                            reads itself, or a client certificate and key
+
+  An exec credential plugin, an auth-provider, impersonation, a proxy-url,
+  insecure-skip-tls-verify and basic authentication are refused before any
+  network operation, whichever mode you choose. svcdoctor runs no subprocess
+  to obtain a credential.
+
+Execution budget:
+  --timeout duration        bound on the whole run (default 30s). There is no
+                            per-request flag and no budget flag: the request
+                            sequence, the page limits and the object ceilings
+                            are fixed, because a lowered ceiling would make an
+                            enumeration incomplete and silence a finding
+
+Output:
+  --output string           "text" or "json" (default "text")
+  --shareable               produce the shareable redacted report instead of
+                            the local one, using the same diagnosis
+
+Exit codes:
+  0   a report was produced and no error-level problem was proven
+  1   a report was produced and an error-level problem was proven
+  2   svcdoctor was invoked with something it cannot act on
+  3   svcdoctor failed and produced no usable report
+  4   a report was produced but svcdoctor's own execution did not finish
+
+Exit code 0 does not mean this Service has a working backend. Read the report.
 `)
 }
 

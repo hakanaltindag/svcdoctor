@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -218,20 +219,98 @@ func TestTheCommandBoundaryReachesNoWirePackage(t *testing.T) {
 			if !strings.HasPrefix(path, modulePath) {
 				continue
 			}
+			// Two shapes, and the second is why Phase 12.1C.2 revisited this.
+			//
 			// A wire package is any package named `wire` under an adapter, and
-			// the shape is matched rather than the service, deliberately.
+			// the shape is matched rather than the service, deliberately. That
+			// covered four services and would have covered a fifth — except
+			// that Kubernetes' authorized `security.Reveal` is **not** in a
+			// wire package. It cannot be: client-go owns the transport, so the
+			// last layer svcdoctor controls is the one that assembles the
+			// connection, which is exactly what
+			// TestRevealHasOneProductionCallSitePerService already records.
+			//
+			// A guard that matched only the name would therefore have said
+			// nothing about the one package a Kubernetes leaf command was most
+			// likely to reach for — the identical shape of the Phase 7.6A
+			// defect this test was written to close. So the property is now
+			// computed: **any adapter package that opens a secret is out of
+			// reach**, whatever it is called.
 			trimmed := strings.TrimPrefix(path, modulePath)
-			if strings.HasPrefix(trimmed, "internal/adapter/") &&
-				(trimmed == "internal/adapter/wire" || strings.HasSuffix(trimmed, "/wire")) {
+			if !strings.HasPrefix(trimmed, "internal/adapter/") {
+				continue
+			}
+			switch {
+			case trimmed == "internal/adapter/wire" || strings.HasSuffix(trimmed, "/wire"):
 				t.Errorf("%s imports %s.\n\n"+
 					"A wire package holds the protocol and the authorized "+
 					"security.Reveal; the command boundary reaches neither. Compose "+
 					"the run through internal/app instead.", name, path)
+			case packageOpensASecret(t, trimmed):
+				t.Errorf("%s imports %s, which holds an authorized security.Reveal.\n\n"+
+					"The command boundary composes a run and renders its report; a "+
+					"package that can turn a masked secret into bytes is not something "+
+					"it may hold a reference to. Compose the run through internal/app "+
+					"instead — app.KubernetesTarget is a type alias precisely so that "+
+					"no adapter import is needed.", name, path)
 			}
 		}
 	}
 
 	if checked == 0 {
 		t.Fatal("no Go files were parsed; this guard would pass vacuously")
+	}
+}
+
+// packageOpensASecret reports whether a package's production sources contain an
+// authorized security.Reveal call.
+//
+// It reads the package rather than a list of names, which is the whole point:
+// an enumeration protects what somebody remembered to enumerate, and the fifth
+// service was the one nobody would have remembered, because its authorized site
+// is not in a package called `wire`.
+//
+// dir is repository-relative, as an import path under internal/ already is.
+func packageOpensASecret(t *testing.T, dir string) bool {
+	t.Helper()
+
+	entries, err := os.ReadDir(filepath.Join("..", "..", dir))
+	if err != nil {
+		// A package this repository does not have cannot hold a Reveal. An
+		// import of it would not compile, so there is nothing to report.
+		return false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") ||
+			strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join("..", "..", dir, name))
+		if err != nil {
+			t.Fatalf("reading %s/%s: %v", dir, name, err)
+		}
+		if strings.Contains(string(body), "security.Reveal(") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestTheSecretOpeningPackageGuardIsLive proves the computed half is not
+// vacuous: the Kubernetes client really is detected as a package that opens a
+// secret, and an ordinary adapter package really is not.
+func TestTheSecretOpeningPackageGuardIsLive(t *testing.T) {
+	if !packageOpensASecret(t, "internal/adapter/kubernetes/client") {
+		t.Error("internal/adapter/kubernetes/client is not detected as opening a secret.\n\n" +
+			"It holds the fifth authorized security.Reveal, and it is the one such " +
+			"package that is not named `wire` — so if this predicate stops seeing it, " +
+			"the command boundary is unguarded against exactly the import Phase 12.1C.2 " +
+			"had to avoid.")
+	}
+	if packageOpensASecret(t, "internal/adapter/kubernetes") {
+		t.Error("internal/adapter/kubernetes is detected as opening a secret; it " +
+			"normalizes evidence and holds no credential, so the predicate is matching " +
+			"something other than a Reveal call")
 	}
 }

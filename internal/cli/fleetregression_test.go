@@ -52,9 +52,18 @@ var leafFlagSurface = map[string][]string{
 		"tls", "tls-ca-file", "tls-server-name", "tls-insecure",
 		"output", "password-file", "password-stdin", "shareable",
 	},
+	// The fifth, added in Phase 12.1C.2 and frozen by `PHASE121C1…§5`. It is
+	// the one entry that shares no flag with the other four but `timeout`,
+	// `output` and `shareable`, because it names a Service rather than an
+	// endpoint and takes its trust and its identity from a kubeconfig.
+	"kubernetes": {
+		"kubeconfig", "context", "in-cluster", "namespace", "service-name",
+		"timeout",
+		"output", "token-file", "token-stdin", "shareable",
+	},
 }
 
-// TestTheLeafCommandFlagSurfacesAreUnchanged pins all four.
+// TestTheLeafCommandFlagSurfacesAreUnchanged pins all five.
 //
 // Each flag is probed by invoking the command with it and confirming the
 // invocation is not refused as unknown. `flag` reports an unrecognized flag with
@@ -74,8 +83,9 @@ func TestTheLeafCommandFlagSurfacesAreUnchanged(t *testing.T) {
 
 				if strings.Contains(stderr.String(), "not defined") {
 					t.Errorf("`diagnose %s` no longer defines --%s.\n\n"+
-						"The four leaf command surfaces are frozen; Phase 9.1A added a "+
-						"configuration layer beside them and changed none of them.",
+						"The five leaf command surfaces are frozen; Phase 9.1A added a "+
+						"configuration layer beside them and changed none of them, and "+
+						"Phase 12.1C.2 added the fifth without touching the other four.",
 						service, name)
 				}
 			})

@@ -244,9 +244,15 @@ assert "if false {" in s' \
 echo
 echo "--- UX-B02: the README's stale and contradictory claims ---"
 
+# The anchor moved in Phase 12.1C.2, when a fifth service shipped and the README
+# sentence it plants over legitimately changed from "Four" to "Five". **The
+# guarded property is unchanged** — a stale headline count survives `make check`
+# unless a guard reads it — so the anchor is re-pointed rather than the mutation
+# weakened, and the planted sentence is still the exact stale claim Phase 9.2A
+# found in the wild.
 mutate U11 "the README says only two services are supported" README.md \
-  's = s.replace("**Four services are supported: PostgreSQL, Apache Kafka, Redis/Valkey and RabbitMQ/LavinMQ.**",
-"**PostgreSQL BASIC and Kafka BASIC are supported today.**", 1)
+  's = s.replace("**Five services are supported: PostgreSQL, Apache Kafka, Redis/Valkey, RabbitMQ/LavinMQ and",
+"**PostgreSQL BASIC and Kafka BASIC are supported today.** Ignore:", 1)
 assert "PostgreSQL BASIC and Kafka BASIC are supported today" in s' \
   ./internal/cli 'TestUX15TheREADMECountsServicesCorrectly|TestUX15TheDocumentedServicesAreTheRegisteredServices'
 

@@ -36,8 +36,10 @@ func updateHelpGoldens() bool { return *update }
 
 // helpSurfaces is every way an operator can ask svcdoctor what it does.
 //
-// Seven, and the list is asserted complete: a sixth command whose help nobody
-// snapshotted is exactly the drift this exists to catch.
+// Eight, and the list is asserted complete: a seventh command whose help nobody
+// snapshotted is exactly the drift this exists to catch. Phase 12.1C.2 added
+// the Kubernetes leaf and this entry in the same change, which is the property
+// the count is here to force.
 var helpSurfaces = []struct {
 	name string
 	args []string
@@ -48,6 +50,7 @@ var helpSurfaces = []struct {
 	{"kafka", []string{"diagnose", "kafka", "--help"}},
 	{"redis", []string{"diagnose", "redis", "--help"}},
 	{"rabbitmq", []string{"diagnose", "rabbitmq", "--help"}},
+	{"kubernetes", []string{"diagnose", "kubernetes", "--help"}},
 	{"run", []string{"run", "--help"}},
 }
 

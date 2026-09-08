@@ -251,7 +251,10 @@ func (a *App) parsePostgres(args []string) (postgresCommand, error) {
 	// inspects it, compares it or decides anything from it: an empty source
 	// leaves the credential unset and the run takes the documented
 	// not-configured path. See readSecret and credentialFor.
-	sources := credentialSources{file: *passwordFile, fromStdin: *passwordStdin}
+	sources := credentialSources{
+		file: *passwordFile, fromStdin: *passwordStdin,
+		fileFlag: "password-file", stdinFlag: "password-stdin",
+	}
 	if err := sources.validate(); err != nil {
 		return postgresCommand{}, err
 	}

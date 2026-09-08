@@ -88,7 +88,7 @@ func TestTrailingLineEndingSemantics(t *testing.T) {
 			if file.IsEmpty() != wantEmpty {
 				t.Errorf("file: IsEmpty() = %v, want %v", file.IsEmpty(), wantEmpty)
 			}
-			stdin, err := secretFrom(t, credentialSources{fromStdin: true}, tt.input)
+			stdin, err := secretFrom(t, credentialSources{fromStdin: true, fileFlag: "password-file", stdinFlag: "password-stdin"}, tt.input)
 			if err != nil {
 				t.Fatalf("stdin source: %v", err)
 			}
@@ -140,7 +140,7 @@ func TestTheBoundIsOnTheInputAsRead(t *testing.T) {
 				if source == "file" {
 					_, err = secretFrom(t, credentialSources{file: writeFile(t, tt.input)}, "")
 				} else {
-					_, err = secretFrom(t, credentialSources{fromStdin: true}, tt.input)
+					_, err = secretFrom(t, credentialSources{fromStdin: true, fileFlag: "password-file", stdinFlag: "password-stdin"}, tt.input)
 				}
 
 				if tt.wantErr != (err != nil) {
@@ -173,7 +173,7 @@ func TestOversizeErrorsCarryNoSecretDerivedValue(t *testing.T) {
 		if source == "file" {
 			_, err = secretFrom(t, credentialSources{file: writeFile(t, oversize)}, "")
 		} else {
-			_, err = secretFrom(t, credentialSources{fromStdin: true}, oversize)
+			_, err = secretFrom(t, credentialSources{fromStdin: true, fileFlag: "password-file", stdinFlag: "password-stdin"}, oversize)
 		}
 		if err == nil {
 			t.Fatalf("%s: oversize input was accepted", source)
@@ -195,7 +195,8 @@ func TestOversizeErrorsCarryNoSecretDerivedValue(t *testing.T) {
 func TestSourcesAreMutuallyExclusive(t *testing.T) {
 	// A path that does not exist, so a fallback would fail loudly, plus stdin
 	// material that a "last flag wins" rule would happily use.
-	sources := credentialSources{file: "/nonexistent/password", fromStdin: true}
+	sources := credentialSources{file: "/nonexistent/password", fromStdin: true,
+		fileFlag: "password-file", stdinFlag: "password-stdin"}
 	if err := sources.validate(); err == nil {
 		t.Fatal("both sources were accepted")
 	}
@@ -214,7 +215,7 @@ func TestSourcesAreMutuallyExclusive(t *testing.T) {
 // An operator who wrote --password-file must not silently authenticate with
 // whatever happened to be on stdin.
 func TestAFailedSourceNeverFallsBackToTheOther(t *testing.T) {
-	_, err := secretFrom(t, credentialSources{file: "/nonexistent/password"},
+	_, err := secretFrom(t, credentialSources{file: "/nonexistent/password", fileFlag: "password-file", stdinFlag: "password-stdin"},
 		"stdin-material-that-must-not-be-used")
 	if err == nil {
 		t.Fatal("a missing credential file produced a secret")
@@ -230,12 +231,12 @@ func TestFileErrorsNameThePathAndNothingElse(t *testing.T) {
 
 	t.Run("missing", func(t *testing.T) {
 		path := filepath.Join(dir, "absent")
-		_, err := secretFrom(t, credentialSources{file: path}, "")
+		_, err := secretFrom(t, credentialSources{file: path, fileFlag: "password-file", stdinFlag: "password-stdin"}, "")
 		requirePathOnly(t, err, path, "no such file")
 	})
 
 	t.Run("directory", func(t *testing.T) {
-		_, err := secretFrom(t, credentialSources{file: dir}, "")
+		_, err := secretFrom(t, credentialSources{file: dir, fileFlag: "password-file", stdinFlag: "password-stdin"}, "")
 		requirePathOnly(t, err, dir, "directory")
 	})
 
@@ -247,7 +248,7 @@ func TestFileErrorsNameThePathAndNothingElse(t *testing.T) {
 		if err := os.WriteFile(path, []byte("secret"), 0o000); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
-		_, err := secretFrom(t, credentialSources{file: path}, "")
+		_, err := secretFrom(t, credentialSources{file: path, fileFlag: "password-file", stdinFlag: "password-stdin"}, "")
 		requirePathOnly(t, err, path, "permission denied")
 	})
 }
@@ -302,7 +303,7 @@ func TestAnEmptySourceLeavesTheCredentialUnset(t *testing.T) {
 
 // TestANonEmptySourceBindsToTheLogicalEndpoint pins the other direction.
 func TestANonEmptySourceBindsToTheLogicalEndpoint(t *testing.T) {
-	secret, err := secretFrom(t, credentialSources{fromStdin: true}, "hunter2\n")
+	secret, err := secretFrom(t, credentialSources{fromStdin: true, fileFlag: "password-file", stdinFlag: "password-stdin"}, "hunter2\n")
 	if err != nil {
 		t.Fatalf("readSecret: %v", err)
 	}
@@ -336,7 +337,7 @@ func TestANonEmptySourceBindsToTheLogicalEndpoint(t *testing.T) {
 // TestNoSourceIsAValidRun is the regression that Phase 5.1's product acceptance
 // depends on: adding credential support must not make one required.
 func TestNoSourceIsAValidRun(t *testing.T) {
-	secret, err := secretFrom(t, credentialSources{}, "material-on-stdin-nobody-asked-for")
+	secret, err := secretFrom(t, credentialSources{fileFlag: "password-file", stdinFlag: "password-stdin"}, "material-on-stdin-nobody-asked-for")
 	if err != nil {
 		t.Fatalf("no source should be an error: %v", err)
 	}

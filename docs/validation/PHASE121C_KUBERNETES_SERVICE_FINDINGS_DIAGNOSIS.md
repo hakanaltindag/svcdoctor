@@ -584,15 +584,18 @@ RabbitMQ rule, code or wiring changed, and the four existing composition roots a
    boundary is INFO. The implementation does exactly what the frozen contract says. It is pinned
    by test and recorded in `docs/BACKLOG.md`. **Phase 12.1D should weigh it against a real
    cluster**, where ADR 0094 §7's fifth-code condition can be tested rather than argued.
-2. **`svcdoctor diagnose kubernetes` is not added yet.** ADR 0094 §2.10 and §2.12,
-   `PHASE121A…§12.1` and `§14` (KAC-040) all assign **the CLI case** to Phase 12.1C by name. The
-   phase brief instructed *"No new CLI command. No new flags."* twice, and this tree follows the
-   brief; on a source reconciliation the frozen contract wins, so the phase is **not
-   contract-complete**. Every finding is fully reachable and tested through
-   `svcdoctor run --config`, so nothing about F1–F4 depends on it. **Phase 12.1C.1 has since
-   frozen the command's public surface** —
+2. **`svcdoctor diagnose kubernetes` was not added in this phase, and it has since been added.**
+   ADR 0094 §2.10 and §2.12, `PHASE121A…§12.1` and `§14` (KAC-040) all assign **the CLI case** to
+   Phase 12.1C by name. The phase brief instructed *"No new CLI command. No new flags."* twice, and
+   this record's tree follows the brief; on a source reconciliation the frozen contract wins, so
+   **at this commit the phase was not contract-complete**. Every finding was fully reachable and
+   tested through `svcdoctor run --config`, so nothing about F1–F4 ever depended on it.
+   **Phase 12.1C.1 froze the command's public surface** —
    `docs/validation/PHASE121C1_KUBERNETES_LEAF_CLI_CONTRACT_FREEZE.md`, ten flags, zero new
-   decisions — and implementation is authorized. See §12.1.
+   decisions — and **Phase 12.1C.2 implemented it**, closing the blocker:
+   `docs/validation/PHASE121C2_KUBERNETES_LEAF_CLI_IMPLEMENTATION.md`. The analysis in §12.1 is
+   kept as written so the chronology stays legible rather than being rewritten to pretend the
+   command existed earlier.
 
 ### 12.1 What the leaf command needed decided — closed by Phase 12.1C.1
 

@@ -129,7 +129,7 @@ func TestUX18EveryDocumentedLinkResolves(t *testing.T) {
 // supported today" on the day Redis shipped.
 func TestUX15TheDocumentedServicesAreTheRegisteredServices(t *testing.T) {
 	advertised := advertisedServices(t)
-	if len(advertised) != 4 {
+	if len(advertised) != 5 {
 		t.Fatalf("`diagnose --help` advertises %v; the guard reads it to find the "+
 			"services, so a change here needs a deliberate look rather than a new number",
 			advertised)
@@ -144,6 +144,7 @@ func TestUX15TheDocumentedServicesAreTheRegisteredServices(t *testing.T) {
 		{"kafka", "kafka"},
 		{"redis", "redis"},
 		{"rabbitmq", "rabbitmq"},
+		{"kubernetes", "kubernetes"},
 	} {
 		if !strings.Contains(lower, want.needle) {
 			t.Errorf("the README never mentions %s, which `diagnose --help` advertises",
@@ -174,16 +175,18 @@ func TestUX15TheREADMECountsServicesCorrectly(t *testing.T) {
 		"Two leaf commands",
 		"two leaf commands",
 		"v0.1 contains only Kafka + PostgreSQL",
+		"Four services are supported",
+		"four leaf commands take",
 	} {
 		if strings.Contains(readme, stale) {
 			t.Errorf("the README still says %q.\n\n"+
-				"Four services are registered and five commands are exposed. A count "+
-				"written before Redis and RabbitMQ shipped tells a reader the product "+
-				"does less than it does.", stale)
+				"Five services are registered and six commands are exposed. A count "+
+				"written before Redis, RabbitMQ or Kubernetes shipped tells a reader the "+
+				"product does less than it does.", stale)
 		}
 	}
 
-	if !strings.Contains(readme, "Four services are supported") {
+	if !strings.Contains(readme, "Five services are supported") {
 		t.Error("the README does not state how many services are supported.\n\n" +
 			"A reader deciding whether svcdoctor is worth trying reads that sentence " +
 			"and nothing else.")

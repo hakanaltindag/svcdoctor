@@ -17,9 +17,50 @@ import (
 const maxCredentialInput = secretinput.MaxInput
 
 // credentialSources names what the invocation selected.
+//
+// # The flag names are a parameter, and this file still knows no service
+//
+// ADR 0049 decides the *shape* — a secret arrives by file or by pipe, never by
+// argument — while each command names the material it carries. Four commands
+// read a password and say so; `diagnose kubernetes` reads a bearer token, whose
+// two flags `PHASE121A…§6.1` froze as `--token-file` and `--token-stdin`,
+// because a Kubernetes credential is a token and `--password-file` would name
+// the one authentication mode ADR 0094 §2.3 refuses.
+//
+// So the pair travels as data. There is deliberately **no default and no
+// service branch**: this file cannot tell which command is asking, and the day
+// it can is the day the abstraction stopped being generic.
 type credentialSources struct {
 	file      string
 	fromStdin bool
+
+	// fileFlag and stdinFlag are the two flag names, without their dashes.
+	// Both are required; every message below is built from them.
+	fileFlag  string
+	stdinFlag string
+}
+
+// declared reports whether the invocation named a credential source at all.
+//
+// It reads the declaration and never the resolved value, which is the
+// distinction a caller needs *before* reading anything: whether an operator
+// asked svcdoctor to present a credential is knowable from the flags, and
+// whether that source turns out to hold one is not.
+func (c credentialSources) declared() bool { return c.file != "" || c.fromStdin }
+
+// declaredFlag names the source the invocation selected, for a message about it.
+//
+// It returns the empty string when neither was given, which no caller reaches:
+// every use is guarded by declared.
+func (c credentialSources) declaredFlag() string {
+	switch {
+	case c.file != "":
+		return c.fileFlag
+	case c.fromStdin:
+		return c.stdinFlag
+	default:
+		return ""
+	}
 }
 
 // validate enforces exclusivity.
@@ -32,7 +73,7 @@ type credentialSources struct {
 // incident. Refusing ambiguity is stronger than resolving it (ADR 0049 §2).
 func (c credentialSources) validate() error {
 	if c.file != "" && c.fromStdin {
-		return usagef("--password-file and --password-stdin are mutually exclusive")
+		return usagef("--%s and --%s are mutually exclusive", c.fileFlag, c.stdinFlag)
 	}
 	return nil
 }
@@ -54,7 +95,7 @@ func (c credentialSources) validate() error {
 func (a *App) readSecret(sources credentialSources) (security.Secret, error) {
 	switch {
 	case sources.file != "":
-		return a.readSecretFile(sources.file)
+		return a.readSecretFile(sources.fileFlag, sources.file)
 	case sources.fromStdin:
 		plaintext, err := readBoundedSecret(a.In)
 		if err != nil {
@@ -74,24 +115,25 @@ func (a *App) readSecret(sources credentialSources) (security.Secret, error) {
 // buys the reader nothing (ADR 0049 §3).
 //
 // The reading rules are internal/security/secretinput's; the wording is this
-// package's, because an operator has to be told which flag to fix. A directory
-// is still named as a directory rather than left to surface as "unreadable",
-// which is the distinction that survives the extraction because the shared
-// package reports it as its own sentinel.
-func (a *App) readSecretFile(path string) (security.Secret, error) {
+// package's, because an operator has to be told which flag to fix — so the flag
+// name is the caller's, and every byte of every message is otherwise unchanged.
+// A directory is still named as a directory rather than left to surface as
+// "unreadable", which is the distinction that survives the extraction because
+// the shared package reports it as its own sentinel.
+func (a *App) readSecretFile(flagName, path string) (security.Secret, error) {
 	plaintext, err := secretinput.ReadFile(path)
 	switch {
 	case err == nil:
 		return security.NewSecret(plaintext), nil
 	case errors.Is(err, secretinput.ErrIsDirectory):
-		return security.Secret{}, usagef("--password-file %s is a directory", path)
+		return security.Secret{}, usagef("--%s %s is a directory", flagName, path)
 	case errors.Is(err, secretinput.ErrTooLarge), errors.Is(err, secretinput.ErrNoReader):
-		return security.Secret{}, usagef("--password-file %s: %s", path, err)
+		return security.Secret{}, usagef("--%s %s: %s", flagName, path, err)
 	case errors.Is(err, secretinput.ErrUnreadable):
-		return security.Secret{}, usagef("--password-file %s cannot be read: unreadable", path)
+		return security.Secret{}, usagef("--%s %s cannot be read: unreadable", flagName, path)
 	default:
 		return security.Secret{}, usagef(
-			"--password-file %s cannot be read: %s", path, openReason(err))
+			"--%s %s cannot be read: %s", flagName, path, openReason(err))
 	}
 }
 

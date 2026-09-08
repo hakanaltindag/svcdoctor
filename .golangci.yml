@@ -384,6 +384,20 @@ linters:
                 the Kafka command builds app.KafkaParams and nothing else; a
                 mechanism name is a string on the wire, and reaching for the
                 adapter's constant would put the protocol in the CLI
+            # The fifth service's authorized Reveal is not in a `wire`
+            # package — client-go owns the transport, so the last layer
+            # svcdoctor controls is the one that assembles the connection.
+            # The enumeration above would therefore have missed it, which is
+            # the Phase 7.6A shape exactly; Phase 12.1C.2 added this entry and
+            # made TestTheCommandBoundaryReachesNoWirePackage compute the
+            # property rather than match a name, so a sixth such package is
+            # covered on the day it lands. The leaf command needs no import of
+            # it: app.KubernetesTarget is a type alias.
+            - pkg: github.com/hakanaltindag/svcdoctor/internal/adapter/kubernetes/client
+              desc: >-
+                this package holds the authorized security.Reveal and the live
+                control-plane client; the CLI reaches neither and builds
+                app.KubernetesParams instead
             - pkg: os/exec
               desc: the command runs no subprocesses
             - pkg: net/http

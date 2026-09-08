@@ -8,5 +8,6 @@ Services:
   postgres    diagnose a PostgreSQL endpoint
   redis       diagnose a Redis or Valkey endpoint
   rabbitmq    diagnose a RabbitMQ or other AMQP 0-9-1 endpoint
+  kubernetes  diagnose one Kubernetes Service's backend publication
 
 Run "svcdoctor diagnose <service> --help" for its flags.
