@@ -458,6 +458,22 @@ var realTestedPlatforms = map[string]bool{
 	// used at any point.
 	"RabbitMQ": true,
 	"LavinMQ":  true,
+	// Phase 12.1D. A committed fixture — test/integration/kubernetes — driven
+	// through the **released binary** against a real `kind` API server on two
+	// pinned node images, with ground truth established through the API before
+	// svcdoctor is asked. Recorded in
+	// docs/validation/PHASE121D_KUBERNETES_REAL_CLUSTER_RELEASE_VALIDATION.md.
+	//
+	// **This entry covers upstream Kubernetes and no distribution.** EKS, GKE,
+	// AKS, OpenShift, RKE2 and k3s each have their own row, at Level 0, and this
+	// list is per-platform rather than per-API precisely so that an upstream API
+	// server answering cannot promote a managed one — whose authenticator,
+	// admission chain and default kubeconfig are all different. The three cloud
+	// providers are additionally gated by ADR 0094 §2.2's `exec` refusal.
+	//
+	// It also names no version. The two validated minors are the table's to
+	// state, and every other minor has its own Level 0 row.
+	"Kubernetes": true,
 }
 
 // TestOnlyRealTestedPlatformsClaimLevelTwoOrThree is the central guard.

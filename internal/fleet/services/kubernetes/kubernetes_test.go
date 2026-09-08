@@ -557,3 +557,76 @@ func TestNoNetworkIsTouchedWhileDecoding(t *testing.T) {
 		t.Fatalf("loading: %v", err)
 	}
 }
+
+// TestAWrittenStepTimeoutIsRefused is Phase 12.1D's §36 closure.
+//
+// A Kubernetes run has no per-step budget: three API requests run under the
+// target's own timeout, `app.KubernetesParams` carries no such field, and this
+// runner passes none. The value is therefore **inert**, and ADR 0060 makes an
+// inert input a refusal rather than a documented no-op.
+//
+// The leaf command has refused it since Phase 12.1C.1, by not defining
+// `--step-timeout` at all. Phase 12.1D found the configuration half still
+// accepting it silently — the two entry points disagreeing about the same
+// non-existent capability — and this is that half.
+func TestAWrittenStepTimeoutIsRefused(t *testing.T) {
+	kubeconfig := writeKubeconfig(t, "https://api.cluster.internal:6443", "")
+
+	_, err := load(t, kubernetesDocument(kubeconfig, "    step_timeout: \"10s\"\n"))
+	if err == nil {
+		t.Fatal("a written step_timeout was accepted.\n\n" +
+			"It changes nothing about a Kubernetes run, and an operator who wrote it " +
+			"believes it configured something (ADR 0060).")
+	}
+	if !strings.Contains(err.Error(), "step_timeout") {
+		t.Errorf("the refusal does not name the field: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no per-step budget") {
+		t.Errorf("the refusal does not say why: %v", err)
+	}
+	if !errors.Is(err, config.ErrConfig) {
+		t.Errorf("the refusal is not a configuration error, so it would not exit 2: %v", err)
+	}
+}
+
+// TestTheDefaultStepTimeoutIsNotRefused is the other half, and the reason the
+// signal is "declared" rather than "non-zero".
+//
+// Every target receives a resolved step timeout whether or not it wrote one, so
+// a check reading the resolved value would refuse every Kubernetes target ever
+// written.
+func TestTheDefaultStepTimeoutIsNotRefused(t *testing.T) {
+	kubeconfig := writeKubeconfig(t, "https://api.cluster.internal:6443", "")
+
+	if _, err := load(t, kubernetesDocument(kubeconfig, "")); err != nil {
+		t.Fatalf("a target that wrote no step_timeout was refused: %v", err)
+	}
+}
+
+// TestTheOtherServicesStillAcceptAStepTimeout.
+//
+// The refusal is one service's, and `Common.StepTimeoutDeclared` is a signal the
+// other four ignore. A change that made the field mean something everywhere
+// would be a generic fleet semantics change, which Phase 12.1D §36 forbids
+// making blindly.
+func TestTheOtherServicesStillAcceptAStepTimeout(t *testing.T) {
+	for _, service := range []string{"postgres", "kafka", "redis", "rabbitmq"} {
+		t.Run(service, func(t *testing.T) {
+			document := "version: 1\ntargets:\n" +
+				"  - id: t\n    type: " + service + "\n    host: example.invalid\n" +
+				"    step_timeout: \"10s\"\n"
+			// Each service's own required fields; the point is only that
+			// step_timeout is not what refuses them.
+			switch service {
+			case "kafka":
+				document += "    config:\n      sasl_mechanism: PLAIN\n"
+			case "postgres":
+				document += "    credentials:\n      username: app\n" +
+					"    config:\n      database: app\n"
+			}
+			if _, err := load(t, document); err != nil {
+				t.Errorf("%s no longer accepts step_timeout: %v", service, err)
+			}
+		})
+	}
+}

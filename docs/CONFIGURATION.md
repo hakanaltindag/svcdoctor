@@ -83,11 +83,11 @@ they finished in.
 | Field | Required | Default | Meaning |
 |---|---|---|---|
 | `id` | **yes** | — | Your identifier for this target |
-| `type` | **yes** | — | `postgres`, `kafka`, `redis` or `rabbitmq` |
+| `type` | **yes** | — | `postgres`, `kafka`, `redis`, `rabbitmq` or `kubernetes` |
 | `host` | **yes** | — | Hostname, or IPv4 or IPv6 address literal |
 | `port` | no | the service's default | `5432`, `9092`, `6379`, `5672` |
 | `timeout` | no | `30s` | Bound on this target's whole journey |
-| `step_timeout` | no | `10s` | Bound on each individual exchange |
+| `step_timeout` | no | `10s` | Bound on each individual exchange. **Refused on a `kubernetes` target**, which has no per-step budget |
 | `tls` | no | `mode: require` | Transport encryption; see below |
 | `credentials` | no | none | Identity and credential *reference*; see below |
 | `config` | no | none | The service's own configuration; see below |
@@ -125,6 +125,10 @@ the pseudonym namespace. Deferred, not rejected.
 Durations with a unit: `45s`, `2m`, `1500ms`. A bare number is refused.
 
 `step_timeout` must be below `timeout`, or no step could complete inside the target's own budget.
+
+**A `kubernetes` target refuses `step_timeout` outright.** It has no per-step exchange to bound —
+three API requests run under the target's own `timeout` — so the value would be inert, and an
+inert input is refused rather than silently ignored.
 
 RabbitMQ requires `step_timeout` above `3s`: it delays several refusals by exactly that long on
 purpose, and a shorter budget reports the delay as a local timeout instead of the refusal it is.
@@ -212,10 +216,16 @@ targets:
       service_name: payments-api
 ```
 
-**Diagnosis is not active yet.** A `kubernetes` target is decoded, validated and executed, and it
-produces a report containing the evidence it gathered — the API access, the Service, the Pod set
-and the endpoint publication. It produces **no findings**: interpreting those nodes is the next
-phase's work, so a Kubernetes target currently reports what was observed and concludes nothing.
+A `kubernetes` target is decoded, validated and executed, and it produces a report containing the
+evidence it gathered — the API access, the Service, the Pod set and the endpoint publication — and
+up to four findings drawn from it. The same target is reachable as
+`svcdoctor diagnose kubernetes`, and **one Service is one target and one report through both entry
+points**: the two produce the same canonical report, proven against a real cluster.
+
+**A `kubernetes` target writes no `step_timeout`, and one is refused.** Its three API requests run
+under the target's own `timeout`; a per-step budget would change nothing, and an inert value is
+refused rather than accepted, because an operator who wrote it believes it configured something.
+The leaf command refuses it the same way, by defining no `--step-timeout` at all.
 
 **One Service is one target.** There is no selector, no Pod, no workload, no wildcard, no regular
 expression, no list of Services and no all-namespaces mode. Each of those is a field that does not

@@ -145,6 +145,9 @@ func (Factory) Decode(node *config.ServiceNode, common config.Common) (config.Se
 	if err := checkInertIdentity(common.Credentials); err != nil {
 		return nil, err
 	}
+	if err := checkInertStepTimeout(common); err != nil {
+		return nil, err
+	}
 
 	// The credential reference is a **bearer token** for the API server. Whether
 	// one was declared is all the ambiguity check needs, and it is knowable here
@@ -208,6 +211,35 @@ func checkInertTLS(tls config.TLS) error {
 				"there, and it will not recommend or silently accept an unverified channel")
 	}
 	return nil
+}
+
+// checkInertStepTimeout refuses a per-step budget a Kubernetes target has none of.
+//
+// # It is inert, and an inert input is refused rather than accepted
+//
+// The other four services thread `step_timeout` into a probe chain and an
+// adapter, where it bounds one exchange. A Kubernetes run has no exchange to
+// bound: three API requests run under the target's single deadline,
+// `app.KubernetesParams` carries no step budget, and this runner passes none. So
+// a written `step_timeout` here changes nothing at all.
+//
+// ADR 0060's rule is that such a value is refused, because an operator who wrote
+// it believes they configured something — and the failure it hides is the worst
+// kind, one where the invocation in the runbook keeps whatever meaning they
+// first read into it. Phase 12.1C.1 applied exactly this to the leaf command,
+// where `--step-timeout` is not defined; Phase 12.1D found the configuration
+// half still accepting the value silently, and this is that half.
+//
+// **The default is not refused.** Only a value the target wrote is, which is
+// what Common.StepTimeoutDeclared exists to distinguish.
+func checkInertStepTimeout(common config.Common) error {
+	if !common.StepTimeoutDeclared {
+		return nil
+	}
+	return config.InvalidField("step_timeout",
+		"a Kubernetes target has no per-step budget: its three API requests run under "+
+			"the target's own timeout, so this value would change nothing. Remove it, "+
+			"and use timeout to bound the run")
 }
 
 // checkInertIdentity refuses a username a Kubernetes target cannot use.

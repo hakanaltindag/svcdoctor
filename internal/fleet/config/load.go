@@ -184,6 +184,10 @@ func validateTarget(block targetBlock, registry *Registry) (Target, error) {
 		StepTimeout: stepTimeout,
 		TLS:         block.TLS,
 		Credentials: block.Credentials,
+
+		// Written, not resolved: `stepTimeout` above is never zero, so it
+		// cannot say whether the operator wrote the key. See Common.
+		StepTimeoutDeclared: block.StepTimeout != 0,
 	}
 
 	// The service decodes its own subtree and validates it together with the

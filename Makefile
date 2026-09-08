@@ -563,3 +563,87 @@ multitarget-test: ## Run the multi-target suite against running fixtures
 	$(GO) test -tags integration -count=1 -timeout 15m ./test/integration/multitarget/...
 
 integration-multitarget: multitarget-up multitarget-test multitarget-down ## Full multi-target validation gate
+
+# --- Kubernetes integration validation (Phase 12.1D gate) -------------------
+#
+# The only lane that needs a Kubernetes cluster rather than a container, and the
+# only one whose fixtures are API objects rather than a server process.
+# Deliberately not part of `check`, for the reason none of the others are: it
+# needs a runtime, while the ordinary gate stays fast and hermetic.
+#
+# # Two lanes, and neither is `latest`
+#
+# CURRENT is the newest minor kind v0.30.0 ships a node image for; OLDER is the
+# oldest it ships one for. Both are pinned by **digest**, taken from that kind
+# release's own notes. `KUBERNETES_LANE=older make integration-kubernetes` runs
+# the second.
+#
+# **The architectural minimum is not the validated version.** ADR 0094 §2.11
+# derives v1.21 from the EndpointSlice v1 API, and kind v0.30.0 cannot run a
+# v1.21 node at all. `docs/COMPATIBILITY.md` grades what was measured and says so.
+#
+# # Two binaries, and the second is named rather than implied
+#
+# Every scenario runs the host build. The in-cluster lane runs svcdoctor inside a
+# Linux container, so a second binary is cross-compiled from the same tree.
+
+KIND ?= kind
+KIND_CLUSTER ?= svcdoctor-k8s
+KUBERNETES_LANE ?= current
+
+KIND_NODE_current := kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
+KIND_NODE_older   := kindest/node:v1.31.12@sha256:0f5cc49c5e73c0c2bb6e2df56e7df189240d83cf94edfa30946482eb08ec57d2
+KIND_NODE := $(KIND_NODE_$(KUBERNETES_LANE))
+
+K8S_ENV := test/integration/kubernetes/env
+K8S_KUBECONFIG := $(K8S_ENV)/kubeconfig.generated
+# `bin` is what `make clean` already removes.
+K8S_BIN := bin/svcdoctor-integration
+K8S_LINUX_BIN := bin/svcdoctor-integration-linux
+
+.PHONY: kubernetes-up kubernetes-down kubernetes-test integration-kubernetes
+
+kubernetes-up: ## Create the kind cluster the Kubernetes suite validates against
+	@if [ -z "$(KIND_NODE)" ]; then \
+		echo "KUBERNETES_LANE=$(KUBERNETES_LANE) is not a lane; use current or older"; \
+		exit 1; \
+	fi
+	@command -v $(KIND) >/dev/null 2>&1 || { \
+		echo "kind is not installed."; \
+		echo "Install it with: go install sigs.k8s.io/kind@v0.30.0"; \
+		exit 1; \
+	}
+	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl is not installed."; exit 1; }
+	@docker info >/dev/null 2>&1 || { \
+		echo "no container runtime is reachable; start Docker or Colima first."; \
+		exit 1; \
+	}
+	@echo "creating kind cluster $(KIND_CLUSTER) on lane $(KUBERNETES_LANE)"
+	@$(KIND) delete cluster --name $(KIND_CLUSTER) >/dev/null 2>&1 || true
+	$(KIND) create cluster --name $(KIND_CLUSTER) --image $(KIND_NODE) \
+		--config $(K8S_ENV)/cluster.yaml --wait 180s
+	$(KIND) get kubeconfig --name $(KIND_CLUSTER) > $(K8S_KUBECONFIG)
+	@chmod 600 $(K8S_KUBECONFIG)
+	@kubectl --kubeconfig $(K8S_KUBECONFIG) --context kind-$(KIND_CLUSTER) \
+		version -o json | sed -n 's/.*"gitVersion": "\(v[^"]*\)".*/server: \1/p' | tail -1
+
+kubernetes-down: ## Delete the kind cluster and its generated kubeconfig
+	-$(KIND) delete cluster --name $(KIND_CLUSTER)
+	-rm -f $(K8S_KUBECONFIG)
+
+kubernetes-test: ## Run the Kubernetes integration suite against a running cluster
+	@test -f $(K8S_KUBECONFIG) || { \
+		echo "$(K8S_KUBECONFIG) is missing; run `make kubernetes-up` first."; exit 1; }
+	@mkdir -p bin
+	CGO_ENABLED=0 $(GO) build -o $(K8S_BIN) ./cmd/svcdoctor
+	CGO_ENABLED=0 GOOS=linux $(GO) build -o $(K8S_LINUX_BIN) ./cmd/svcdoctor
+	@echo "binary sha256:       $$(shasum -a 256 $(K8S_BIN) | cut -d' ' -f1)"
+	@echo "linux binary sha256: $$(shasum -a 256 $(K8S_LINUX_BIN) | cut -d' ' -f1)"
+	SVCDOCTOR_BIN=$(CURDIR)/$(K8S_BIN) \
+	SVCDOCTOR_LINUX_BIN=$(CURDIR)/$(K8S_LINUX_BIN) \
+	SVCDOCTOR_KUBECONFIG=$(CURDIR)/$(K8S_KUBECONFIG) \
+	SVCDOCTOR_KUBE_CONTEXT=kind-$(KIND_CLUSTER) \
+	SVCDOCTOR_KIND_CLUSTER=$(KIND_CLUSTER) \
+	$(GO) test -tags integration -count=1 -timeout 30m ./test/integration/kubernetes/...
+
+integration-kubernetes: kubernetes-up kubernetes-test kubernetes-down ## Full Kubernetes validation gate

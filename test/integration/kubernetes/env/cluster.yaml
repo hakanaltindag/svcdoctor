@@ -1,0 +1,17 @@
+# The kind cluster the Phase 12.1D validation runs against.
+#
+# One control-plane node and nothing else: svcdoctor reads three API objects and
+# connects to no Pod, so a worker node would add startup time and prove nothing.
+#
+# `maxPods` is raised from kubelet's default 110 because the pagination lane
+# needs more than 500 Pods on one node to force a real `continue` token out of
+# the API server (Phase 12.1D §22). It changes no svcdoctor behaviour: the
+# object budget and the page limit are the production constants, unaltered.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        maxPods: 800

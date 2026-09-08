@@ -49,6 +49,31 @@ type Common struct {
 	StepTimeout time.Duration
 	TLS         TLS
 	Credentials Credentials
+
+	// StepTimeoutDeclared says whether the target **wrote** `step_timeout`, as
+	// opposed to receiving the default.
+	//
+	// # Why the resolved value cannot answer it
+	//
+	// StepTimeout is never zero: an absent key becomes DefaultStepTimeout, which
+	// is what every consumer wants. So a service cannot tell an operator's "10s"
+	// from silence, and one service needs to — for the reason `Port` is a
+	// pointer in the schema and for no other.
+	//
+	// # Which service, and why it is not a special case
+	//
+	// A Kubernetes run has no per-step budget: three requests run under one
+	// deadline, `app.KubernetesParams` carries no such field, and the runner
+	// passes none. A written `step_timeout` there is therefore **inert**, and
+	// ADR 0060's discipline is that an inert input is refused rather than
+	// accepted, because an operator who wrote it believes it did something.
+	// Phase 12.1C.1 refused `--step-timeout` on the leaf command for exactly
+	// that reason; this is the same refusal on the other entry point, which
+	// Phase 12.1D found still missing.
+	//
+	// Four services ignore this field. Nothing about their behaviour changes,
+	// and a sixth service that has steps ignores it too.
+	StepTimeoutDeclared bool
 }
 
 // Factory is what a service registers so the generic core can handle its targets.

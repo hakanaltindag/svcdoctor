@@ -510,8 +510,9 @@ credential authorizes the API server and nothing else.
 
 **A `401 Unauthorized` produces no Kubernetes finding**, deliberately: it is authentication
 rather than authorization, and the run reports where observation stopped instead. Such a run
-exits 0 today. Every other API error — a `5xx`, a timeout, a `410 Gone` mid-pagination — is
-recorded on its own evidence node and produces no finding either.
+exits 0 today — measured against a real API server, and recorded as a known limitation rather
+than left to be discovered. Every other API error — a `5xx`, a timeout, a `410 Gone`
+mid-pagination — is recorded on its own evidence node and produces no finding either.
 
 The minimum access it needs is a namespaced `Role` with three resources and two verbs —
 `services: [get]`, `pods: [list]`, `endpointslices: [list]`. No `ClusterRole`, no cluster-scoped
@@ -533,7 +534,14 @@ incomplete and silence a finding. Exactly one of `--kubeconfig` and `--in-cluste
 `--context` is mandatory with the first and refused with the second.
 
 The same target is available in a configuration file, and **one Service is one target and one
-report through both entry points** — proven by a test comparing the two documents.
+report through both entry points** — proven by a test comparing the two documents, hermetically
+and against a real cluster. A `kubernetes` target takes no `step_timeout`: its three API requests
+run under the target's own `timeout`, so the value would be inert and is refused rather than
+ignored.
+
+It is validated against **real Kubernetes API servers**, not only fixtures: `make
+integration-kubernetes` creates a `kind` cluster and runs 30 scenarios against it — real RBAC,
+real pagination, real EndpointSlice conditions, and in-cluster authentication from inside a Pod.
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the fields and
 [docs/SECURITY.md](docs/SECURITY.md) for the boundary.
@@ -542,8 +550,10 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the fields and
 
 These are deliberate boundaries, not defects:
 
-- no real-cluster validation — **no Kubernetes distribution or version is graded** in
-  `docs/COMPATIBILITY.md`. The command exists; that is not a compatibility claim
+- no Kubernetes **distribution** is graded: EKS, GKE, AKS, OpenShift, RKE2 and k3s were never
+  run against, and the first three are additionally gated by the `exec` refusal above. Upstream
+  Kubernetes **v1.34.0 and v1.31.12** are validated and no other version is —
+  see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 - no fifth Kubernetes finding: no cluster-health, workload, reachability or root-cause claim,
   and no recommendation that tells anyone to change anything
 - no Kubernetes Pod, container, event, log, metric, Secret, ConfigMap, annotation or label

@@ -5149,6 +5149,79 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 12.1D — Kubernetes real-cluster and release-quality validation: COMPLETE
+
+The frozen Kubernetes model was taken to a real API server and it held. Two `kind` lanes, pinned by
+digest — **v1.34.0** and **v1.31.12** — one binary, 30 real-cluster tests, both lanes green in
+about 71 seconds each. `make integration-kubernetes` is the gate; `KUBERNETES_LANE=older` runs the
+second.
+
+**Kubernetes is graded Level 3 — SUPPORTED BASIC at those two versions and nowhere else.** No
+distribution is graded: EKS, GKE and AKS are additionally gated by ADR 0094 §2.2's `exec` refusal,
+which their default kubeconfigs trip. `docs/COMPATIBILITY.md` §4d states exactly what was measured.
+
+**The architectural minimum is not the validated version, and the record says so.** ADR 0094 §2.11
+derives v1.21 from the EndpointSlice v1 API; kind v0.30.0 cannot run a v1.21 node, and downgrading
+a dependency to force one would be manufacturing evidence.
+
+### One production change, and it is a refusal
+
+A `kubernetes` fleet target **accepted an inert `step_timeout`** — the debt Phase 12.1C.1 recorded
+and 12.1C.2 left open. `app.KubernetesParams` has no step budget and the runner passes none, so the
+value read nothing while the leaf command had refused the same thing since 12.1C.1 by not defining
+`--step-timeout`. The two entry points disagreed about a capability neither has.
+
+The correction is one additive field, `Common.StepTimeoutDeclared`, because the resolved
+`StepTimeout` is never zero and so cannot say whether an operator wrote the key — exactly the
+reason `Port` is a pointer in the same schema. **Generic fleet semantics are unchanged**: four
+services ignore the field and a test drives all four through the real loader to say so. No ADR was
+needed and no released behaviour changed, because a Kubernetes target is in no published release.
+
+### Four things the cluster taught, that no earlier phase had recorded
+
+- **A denied Service read exits 0; a denied list exits 4.** Both are the generic mapping applied to
+  two different completeness states — the first short-circuits so nothing is left half-measured,
+  the second was attempted and did not finish. The suite's initial expectation was 4 for all three
+  RBAC rows, copied from the 12.1C fleet test; the cluster corrected it.
+- **Kubernetes' garbage collector deletes a slice whose owner reference resolves to nothing**, in
+  well under a second, resolving the owner by kind and name and comparing the UID. So a fabricated
+  stale UID is not a durable fixture, and the delete-and-recreate race window is **narrower than
+  assumed** — good news, and not the guard, because it is asynchronous.
+- **The API server stores `conditions: {}` verbatim** and defaults none of the three booleans on
+  write. That is what makes the frozen nil semantics — `ready` absent ⇒ **ready** — testable
+  against a real server at all.
+- **A fixture waiting for "zero ready endpoints" is satisfied by an empty slice.** The first K4
+  fixture passed that wait while the Pod was still `ContainerCreating`, and measured the wrong F4
+  variant. The condition was too weak, not the timing.
+
+### Real RBAC confirms Phase 12.1C's reconciliation
+
+R2 and R3 each produce **two** findings — the denied branch's F2 and the *other* branch's universal
+claim — because one branch failing never erases the other's independent evidence. Had the §10.3
+literal reading been implemented instead, each would have produced one. That is the strongest
+available confirmation that the 12.1C reconciliation was right, and it came from a real authorizer
+rather than from an argument.
+
+### Counted at the wire, not argued from the source
+
+A TLS reverse proxy forwards every request to the real API server and counts it: **exactly 3** for
+a nominal run, **exactly 1** for a selector-less Service, **0** for a refused `exec` kubeconfig,
+and **600 Pod objects → 2 list requests → 4 total** for real pagination with the `continue` token
+followed under identical parameters. No discovery call, no server-version call, no UID lookup.
+
+**In-cluster authentication now executes**, from a Job inside the cluster on a locally built,
+never-pushed image, agreeing with the equivalent external run — closing the one gap 12.1C.2
+recorded as unprovable.
+
+**The `401` decision: it stays.** Measured against a real API server, it is contract-conformant, the
+report still says where observation stopped, and closing it needs a fifth code with its own record.
+It is now pinned by a real-cluster test rather than left to be discovered.
+
+Mutation **7 planted / 7 caught / 0 survivors**; historical suites 9.1A/9.1B/9.1C/12.1B/12.1C/12.1C.2
+all at zero. Counts unchanged: finding codes **69**, rules **24**, `SchemaVersion` **1**, Kubernetes
+flags **10**, new `k8s.io` imports **0**, new `Reveal`/`SecretFor` **0**. See
+`docs/validation/PHASE121D_KUBERNETES_REAL_CLUSTER_RELEASE_VALIDATION.md`.
+
 ## Phase 12.1C — Kubernetes Service findings and diagnosis: COMPLETE
 
 Complete across all three parts. **12.1C** built the two rules and the four findings; **12.1C.1**
@@ -5291,7 +5364,7 @@ stated positively.
 | **A `401` against the API server exits 0, and so does an unreachable control plane. This is a CONTRACT-CONFORMANT KNOWN LIMITATION and not an ADR deviation.** ADR 0094 §10.4 deliberately gives a `401` no Kubernetes code — it is authentication, and `DIAG_FAILURE_BOUNDARY` localizes it — and that boundary is INFO, so no ERROR finding exists, `SummaryStatus` is OK, the run is complete, and the generic mapping returns 0. **Every other service has a credential-rejection finding at ERROR; Kubernetes has none.** The behaviour is unchanged by 12.1C — before it the same invocation exited 0 with no finding at all — and it is measured and pinned by `TestTheKubernetesExitBehaviourIsTheGenericOne` rather than left to be discovered | Closing it needs a **fifth finding code**, which ADR 0094 §7 makes a decision with its own record: a bounded operator question no admitted finding answers, whose discriminating value comes from an API-contract enumeration. Phase 12.1D should weigh it against a real cluster, where the shape is easy to produce |
 | **A refused read leaves the run incomplete, so exit 4 outranks F2's WARN.** A `403` on a list is `Attempted` and not `Complete`, so `Result.Incomplete()` is true. The WARN never decides the invocation's status | Not a defect: incompleteness qualifies every conclusion, which is what `docs/SCOPE.md`'s precedence says it should do. Recorded because a reader expecting exit 0 for a WARN-only run will not get it |
 | **`svcdoctor diagnose kubernetes` is implemented (Phase 12.1C.2), closing the one blocker Phase 12.1C left.** ADR 0094 §2.10 and §2.12 and `PHASE121A…§12.1`/`§14` (KAC-040) assign the CLI case to 12.1C by name; it now exists. Ten flags, frozen by `PHASE121C1…§5` and pinned by an exact-set guard in both directions plus a separate count. The leaf and `run --config` produce byte-identical reports across five scenarios | **Closed.** Real-cluster execution of `--in-cluster`, and compatibility grading, are Phase 12.1D's |
-| **No Kubernetes distribution is graded.** `docs/COMPATIBILITY.md` is unchanged and mentions none | Phase 12.1D: `kind` fixtures, the seven scenarios, the two-version matrix. A hermetic suite may not grade a distribution |
+| **No Kubernetes *distribution* is graded, and that is now a measured boundary rather than an absence.** Phase 12.1D graded upstream Kubernetes **v1.34.0** and **v1.31.12** at Level 3 and nothing else. EKS, GKE and AKS are additionally gated by ADR 0094 §2.2's `exec` refusal | Each distribution needs its own evidence. No cloud credential has been used at any point |
 | **The terminal renders a Kubernetes report through the zero `serviceView`** — an empty journey, no outcome line, no advertisement level — and the findings block, which is service-neutral. That is ADR 0094 §12.3's *"no renderer change"* holding, and the output is correct rather than merely unchanged | Reopens only if a real-cluster reader finds the journey unreadable. A Kubernetes row in the `services` table would be a table row, never a branch |
 
 ## Phase 7 — Real-world Validation and Hardening: NOT STARTED

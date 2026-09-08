@@ -227,6 +227,86 @@ against one and assumed for the rest:
 - **A backend-qualified vhost denial** (`" by backend …"`) remains **SOURCE-ONLY**. No
   authorization-backend plugin was installed, and the template is not claimed as measured.
 
+## 4d. Kubernetes
+
+`svcdoctor diagnose kubernetes` reads one Service's backend publication through the Kubernetes
+API. It is different in kind from the four above: there is no wire protocol svcdoctor implements,
+no journey it walks, and **nothing it connects to except the API server**. So the columns below
+mean something different, and the row that matters is *which API servers were really asked*.
+
+**A distribution is not graded by its Kubernetes version.** Everything measured here was measured
+against upstream Kubernetes in `kind`. Nothing about a managed control plane, its authenticator or
+its admission behaviour follows from that, and none of it is claimed.
+
+| Platform | API surface | Auth | Real tested | Level | Known gaps |
+|---|---|---|---|---|---|
+| **Kubernetes** v1.34.0 (kind v0.30.0) | `services:get`, `pods:list`, `endpointslices:list` | client cert ✓, bearer token ✓ (file and stdin), in-cluster ServiceAccount ✓ | **YES** — committed `test/integration/kubernetes` suite, 30 real-cluster tests (50 with subtests) | **3 — SUPPORTED BASIC** | See the limits below |
+| **Kubernetes** v1.31.12 (kind v0.30.0) | same | same | **YES** — the same suite, same binary, same assertions | **3 — SUPPORTED BASIC** | Same limits |
+| Any other Kubernetes minor | EndpointSlice `discovery.k8s.io/v1` | — | **NO** | **0 — NOT EVALUATED** | Tested at the two exact versions above and nowhere else. svcdoctor does no version arithmetic, so it makes no prediction about any other release — **including the ones between them** |
+| **EKS** | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. Its default kubeconfig authenticates with an **`exec` credential plugin**, which svcdoctor refuses before any network operation (ADR 0094 §2.2). Reachable only through in-cluster identity or a token materialized outside the file |
+| **GKE** | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. Same `exec` plugin gate as EKS |
+| **AKS** | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. Same `exec` plugin gate as EKS |
+| **OpenShift, RKE2, k3s, MicroK8s** | — | — | **NO** | **0 — NOT EVALUATED** | `NOT TESTED`. No cloud credential and no distribution was used at any point |
+
+### The architectural minimum is not the validated version
+
+ADR 0094 §2.11 derives a floor of **v1.21** from the API: EndpointSlice `v1` is stable there and
+`conditions.ready` is available. That is a statement about the API svcdoctor uses, and it is
+**not** a compatibility claim.
+
+`kind` v0.30.0 publishes node images for v1.31 through v1.34 and cannot run a v1.21 node at all.
+Downgrading a dependency to force one would be manufacturing evidence, so it was not done. The
+honest summary is the one the table gives: **validated against v1.34.0 and v1.31.12**, and
+nothing is claimed about v1.21 beyond the API reasoning.
+
+`serving` and `terminating` became stable in v1.26, so **both lanes have them** — no lane
+exercises a server old enough to omit them. Their nil semantics are asserted against authored API
+objects instead, which the real API server stores verbatim.
+
+### What was actually measured
+
+Ground truth is established through the API before svcdoctor is asked, never through a `sleep`.
+The released binary is invoked, and where a request count is asserted it is counted at the wire by
+a TLS reverse proxy that forwards every request to the real API server.
+
+- **Exactly 3 API requests** for a nominal run — one `GET`, two server-side-filtered `LIST`s —
+  and **exactly 1** for a Service that publishes no backends. No namespace read, no UID lookup,
+  no discovery call, no server-version call.
+- **Real pagination**: 600 Pod objects, **2** list requests at the frozen limit of 500, the
+  `continue` token followed with identical parameters, and the set complete only after the final
+  page.
+- **Real RBAC**, three ways. An identity holding exactly the three frozen permissions completes a
+  whole diagnosis; removing any one produces `KUBERNETES_API_ACCESS_DENIED` and never an empty
+  set. **The frozen RBAC minimum is sufficient and is not more than is needed.**
+- **All four findings** produced by real objects, plus selector-less, `ExternalName` and headless
+  Services.
+- **F3 and F4 stay disjoint** on a real cluster, in both directions.
+- **The EndpointSlice nil semantics**, against objects a real API server stored: `ready` absent is
+  **ready**, and `serving` alone is not.
+- **The owner-UID generation guard**, and a real delete-and-recreate.
+- **In-cluster authentication**, from a Job inside the cluster, agreeing with the equivalent
+  external run.
+- **An `exec` credential plugin is refused** against a real cluster: exit 2, sentinel absent,
+  **zero** API requests.
+- **No credential, Pod IP, ClusterIP, UID, label, annotation or kubeconfig path** reaches any
+  output, in text, JSON or shareable form.
+- svcdoctor needs **no `kubectl`**: a diagnosis completes with an empty `PATH` and no `KUBECONFIG`.
+
+### Known limits, all deliberate
+
+- **Four findings and no fifth.** No cluster-health, workload, reachability or root-cause claim.
+- **A `401` produces no Kubernetes finding and such a run exits 0.** It is authentication rather
+  than authorization; the report localizes where observation stopped. Measured against a real API
+  server, unchanged, and recorded rather than fixed — a fifth code is a decision with its own record.
+- **`publishes`, never `reachable`.** svcdoctor connects to no Pod, no cluster IP and no endpoint
+  address, so no finding is about traffic.
+- **Dual-stack was not exercised**: the `kind` lanes publish a single address family. An authored
+  IPv6 slice shows the parser treats address family as no semantic branch, and that is **not** a
+  dual-stack claim.
+- **No `exec`, `auth-provider`, impersonation, `proxy-url`, `insecure-skip-tls-verify` or basic
+  auth**, in any mode, refused before any network operation.
+- **One Service per target.** No scan, no wildcard, no selector target, no all-namespaces mode.
+
 ## 5. What none of this required
 
 No provider-specific branch exists anywhere in production code — verified by search; the only
