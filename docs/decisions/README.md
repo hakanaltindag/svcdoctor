@@ -689,6 +689,28 @@ refused, and that is the intended behaviour.** No test enforces this record and 
 properties it protects each already have their own guard, and what it adds is a decision procedure
 for the humans reviewing scope.
 
+**0097 was decided by reading all 73 recommendations before touching the model, and the model turned
+out to be fine.** Phase 13.1A inventoried every production recommendation — **73 constants, 68
+finding codes, 64 of them unclassified** — and found **zero** that the existing
+`RecommendationKind` × `SafetyClass` vocabulary cannot represent. The hole was underneath the model
+rather than in it: **`domain.NewRecommendation` reaches none of ADR 0082's checks**, and **eight
+recommendations went through it carrying instructions to change the target** — *"Grant this user
+permissions on the virtual host, for example with `rabbitmqctl set_permissions`"*, *"Enable SASL
+PLAIN on this endpoint"*, *"Enable TLS for this endpoint"*. None is unsafe to say and every one sits
+on a CONFIRMED, HIGH finding that would have passed the gate; **the defect is that nothing asked.**
+So a production rule may no longer decline to classify its own advice, which reverses the domain
+model's own sentence that the unclassified constructor *"is not a legacy path"*. **`REMEDIATION`
+stays unreachable and the five are rewritten instead**, because proving a *condition* does not
+authorize a *policy*: svcdoctor proved the broker refused this user's access and did not prove the
+refusal was wrong — ADR 0096 §2.2's third question applied to advice. One of the five asked the
+*target* to reconfigure so the *diagnostic tool* could authenticate, which inverts the product.
+**One constant, one classification** is the third rule, and it is what makes the migration provably
+convergence-neutral, because `converge.go` deduplicates on the whole five-field value. Nothing in the
+vocabulary, the constructors, the guardrails or the schema changes; four already-`omitempty` fields
+simply stop being empty. The measurement the planner has been waiting for arrives as a by-product:
+across all 73, **`SelfCollectable: true` is 2**, and both are *"re-run with a larger execution
+budget"*.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

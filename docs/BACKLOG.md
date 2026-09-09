@@ -5149,6 +5149,97 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 13.1A — Recommendation classification contract freeze: COMPLETE
+
+**Docs and ADR only. No production, test, CI, Makefile or dependency change.** Record:
+`docs/validation/PHASE131A_RECOMMENDATION_CLASSIFICATION_CONTRACT_FREEZE.md`, whose Appendix A is
+the complete 73-row REC-* inventory. Decision: **ADR 0097**.
+
+**Corpus first, taxonomy second — and the corpus said the model is fine.** All 73 production
+recommendations were inventoried and classified before the vocabulary was evaluated. **GROUP C
+(contract gap) is zero**: every recommendation in the tree is representable by the existing
+`RecommendationKind` × `SafetyClass` model. Kind **KEEP**, Safety **KEEP**, SelfCollectable **KEEP**,
+Rationale **KEEP**, schema **KEEP 1/1**.
+
+### The three counts, and a Phase 13.0 correction
+
+**73** recommendation constants · **47** producer sites · **68** finding codes with ≥1
+recommendation · **1** with none (`DIAG_FAILURE_BOUNDARY`). The three are different and must not be
+mixed: table-driven rules give one site to many codes, and five codes carry two or three
+recommendations.
+
+**Phase 13.0's "61 of 69" is corrected to 8 classified / 60 unclassified / 1 with no recommendation
+at all.** The 61 conflated *not classified* with *carries an unclassified recommendation*, and the
+boundary finding belongs to neither group. By constant the figures are **73 / 9 structured / 64
+legacy**, and a constant — not a code — is the unit of work.
+
+### What the audit actually found
+
+The hole is **underneath** the model, not in it: `domain.NewRecommendation` reaches **none** of
+ADR 0082's checks — not `Producible()`, not `ChangesNothing()`, not `ValidateActionText`, not the
+confidence gate. **Eight recommendations went through it carrying instructions to change the
+target**, five of them unambiguously. None is unsafe to say; every one sits on a CONFIRMED/HIGH
+finding that would have passed the gate. **The defect is that nothing asked.**
+
+**REMEDIATION stays unreachable and the five are rewritten**, because proving a *condition* does not
+authorize a *policy*. One of them — *"configure a mechanism svcdoctor performs"* — asks the target to
+change so the diagnostic tool can authenticate, which inverts the product.
+
+### Four things a future agent should not re-derive
+
+- **The dedup key is the whole five-field `Recommendation` value**, not the action. That already
+  prevents a merged field holding a classification nobody stated, and it is why the migration is
+  provably convergence-neutral **provided one constant gets one classification** — which is now a
+  frozen rule rather than care.
+- **Every committed golden is synthetic.** Terminal goldens build findings by hand
+  (`NewRecommendation("Check the thing the finding names")`) and the JSON fixtures carry invented
+  prose. **No golden moves** when production constants are classified; real output does.
+- **`selfCollectable` is already tri-state on the wire.** The Go field is a bool, but `MarshalJSON`
+  emits it as a pointer only for `NEXT_EVIDENCE`, so a consumer reads present-true, present-false and
+  absent. The bool collapses nothing.
+- **The repository already anticipated this migration and left two tests that fail on purpose when it
+  lands.** `internal/diagnosis/kafka/nextevidencedebt_test.go` asserts the three
+  `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` recommendations are still unclassified, and
+  `hypothesesWithoutStructuredNextEvidence` is a shrink-only list with a pinned size. Both are
+  **deleted** by 13.1C, and their own comments say so.
+
+### Frozen counts and distributions
+
+`SelfCollectable: TRUE` **2** — and both are *"re-run with a larger execution budget"*, in two
+services. **No discriminating observation in the whole corpus is one svcdoctor could take**, which
+is the measurement the planner question has been waiting for. Action mode OBSERVE **65** / MUTATE
+**5** / AMBIGUOUS **3**. Risk READ_ONLY **57** / LOCAL_ONLY **8**. High-risk **8**, policy overclaim
+**3**, security-sensitive **4**. Migration groups **M 64 · S 9 · C 0 · R 0**.
+
+**Redis and RabbitMQ are disproportionately risky**: between them 4 of the 5 pure mutations on 20 of
+73 recommendations — and neither runs in any CI lane. **Transport and Kubernetes are clean**: 12
+recommendations, all read-only, zero semantic review.
+
+### Migration phasing — OPTION 2
+
+**Phase 13.1B** classifies the **55** legacy constants whose prose is safe as written (64 GROUP M
+minus the 9 already classified), writing 55 rationales and changing no prose. **Phase 13.1C**
+rewrites and classifies the **9**, then lands the guards that make legacy prose unable to return.
+Not one phase: the 9 include six prose rewrites touching authorization and TLS advice, and putting a
+security review inside a 64-file diff is the trade to avoid.
+
+### Decisions
+
+`DIAG_FAILURE_BOUNDARY` recommendation: **KEEP NONE** — the failing stage's own finding already
+carries the actionable advice in every normal shape. **The one exception is named**: a Kubernetes
+`401` produces the boundary finding *alone*, with no recommendation anywhere in the report. That gap
+belongs to the missing Kubernetes credential-rejection code (ADR 0094 §7), not to this contract.
+Zero-recommendation findings stay **ALLOWED**.
+
+Recommendation identity **NONE/defer** · next-evidence identity **NONE/refused until the planner is
+reopened** · legacy constructor **kept, forbidden in production** · schema **1/1**.
+
+**Planner reassessment trigger, frozen:** every recommendation classified, **and** at least one
+`NEXT_EVIDENCE` is `SelfCollectable: true` **and is not a budget-or-re-run variant**, **and** it sits
+on a finding carrying a Discriminator. Condition 2 fails today at zero.
+
+**Next: Phase 13.1B — mechanical recommendation classification.**
+
 ## Phase 13.0 — Product and diagnostic roadmap audit: COMPLETE
 
 **Docs and ADR only. No production, test, CI, Makefile or dependency change.** Record:
