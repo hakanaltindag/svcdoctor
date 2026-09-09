@@ -208,6 +208,62 @@ jobs:
         run: make integration-${{ matrix.suite }}
 
   # ---------------------------------------------------------------------------
+  # 3b. Kubernetes real-cluster gate
+  # ---------------------------------------------------------------------------
+  #
+  # ADR 0095 section 2.2. A release makes a compatibility claim, so a release
+  # re-proves **both** graded Kubernetes versions — v1.34.0 and v1.31.12, pinned
+  # by node-image digest in the Makefile.
+  #
+  # This is a job rather than a separate workflow because a release gate has to be
+  # something GitHub can enforce. There is no way to make publication depend on
+  # another workflow's recent green run, and "green last Tuesday" is a statement
+  # about a different commit. `stage-and-verify` and `publish` both name it in
+  # `needs:`, so GitHub will not schedule either until both lanes have passed.
+  #
+  # It is a separate job from `integration` rather than a fourth matrix entry
+  # because the two matrices are over different things — that one is over suites,
+  # this one is over Kubernetes lanes — and because a `matrix.suite == 'kubernetes'`
+  # conditional on the tool-install step would be a service-name branch in the one
+  # place this repository most consistently refuses one.
+  #
+  # The matrix key is `lane`, and this job sits after `integration`, because
+  # `TestOCIPublicationCannotStartBeforeLinuxIntegration` finds the suite matrix
+  # with the document's *first* `suite:`. Phase 12.2A measured that and froze it.
+  kubernetes:
+    name: Kubernetes (${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [current, older]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Install pinned kind and kubectl
+        run: ./scripts/install-kube-tools.sh
+      - name: Record the runner and the tool versions
+        run: |
+          printf 'lane=%s\n' '${{ matrix.lane }}'
+          printf 'runner os=%s arch=%s\n' "$(uname -s)" "$(uname -m)"
+          docker version --format 'docker {{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}'
+          go version
+          kind version
+          kubectl version --client
+      - name: Run the Kubernetes validation gate
+        env:
+          KUBERNETES_LANE: ${{ matrix.lane }}
+        run: make integration-kubernetes
+      - name: Tear down the cluster
+        if: always()
+        run: make kubernetes-down
+
+  # ---------------------------------------------------------------------------
   # 4. Release archives
   # ---------------------------------------------------------------------------
   #
@@ -303,7 +359,7 @@ jobs:
   # `publish` job below.
   stage-and-verify:
     name: OCI
-    needs: [identity, source, integration]
+    needs: [identity, source, integration, kubernetes]
     uses: ./.github/workflows/oci-stage-verify.yml
     permissions:
       contents: read
@@ -335,7 +391,7 @@ jobs:
   publish:
     name: Publish semver tag
     runs-on: ubuntu-latest
-    needs: [identity, stage-and-verify, archives]
+    needs: [identity, stage-and-verify, archives, kubernetes]
     permissions:
       contents: read
       packages: write

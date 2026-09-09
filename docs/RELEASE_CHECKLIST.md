@@ -165,6 +165,11 @@ Watch the whole run, not just the build. Required gates:
 
 - [ ] source gates (including the `golangci-lint` install — `make check` fails closed without it)
 - [ ] integration suites
+- [ ] the `kubernetes` job: **both** graded lanes, `Kubernetes (current)` and
+      `Kubernetes (older)`, on real `kind` clusters at the digest-pinned node images. It gates
+      `stage-and-verify` **and** `publish`, so publication cannot start until both have passed
+      (ADR 0095 §2.2). A release makes a compatibility claim, and this is what re-proves it on
+      the tagged commit
 - [ ] the `archives` job: five archives and `SHA256SUMS`, built by `scripts/build-release.sh`
       from the tagged commit and verified in the job that produced them. It gates `publish`,
       so an archive failure stops the release **before** the semver tag reaches GHCR

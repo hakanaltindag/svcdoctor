@@ -1,0 +1,166 @@
+# The Kubernetes real-cluster gate.
+#
+# This workflow implements ADR 0095. It decides nothing; every rule it enforces
+# was accepted in Phase 12.2A and is normative there.
+#
+# # Why it exists
+#
+# Phase 12.1D took the frozen Kubernetes model to a real API server on two pinned
+# `kind` node images and it held — 30 tests, both lanes green, about 71 seconds of
+# test time. That proof existed exactly once, on one developer's machine, and
+# nothing re-took it. This workflow is what stops it decaying.
+#
+# # The one idea worth understanding before reading it
+#
+# **Both 12.1D lanes ran the identical binary and produced identical results.**
+# So the older lane carries *compatibility* signal — does svcdoctor still meet an
+# older API server the same way — and not *regression* signal, which the current
+# lane already carries in full. Regression signal has to arrive on the commit;
+# compatibility signal has to arrive before a claim is published. That is the
+# whole reason the matrix depends on the event:
+#
+#   pull_request, push to main     current only
+#   schedule, workflow_dispatch    current and older
+#
+# The release gate is not here. It is a job inside `release-oci.yml`, because
+# GitHub cannot make one workflow depend on another's recent result and "green
+# last Tuesday" is a statement about a different commit.
+#
+# # One tier, deliberately
+#
+# The whole suite runs in every lane. The suite is 71 s of a job whose cost is
+# dominated by cluster creation, the node-image pull and the Go build, so a
+# core/extended split would save under a fifth of the job — and the tests most
+# likely to drift into the tier nobody runs on a pull request are the exec-auth
+# refusal, the credential-authority trap and the data-minimization scan.
+#
+# # Nothing floats
+#
+# Node images are pinned by digest in the Makefile. `kind` and `kubectl` are
+# pinned by `scripts/install-kube-tools.sh`, and kubectl additionally by SHA-256.
+# Go comes from `go.mod`. The two actions are pinned by the commit SHAs this
+# repository already carries, so no digest had to be invented for this file.
+
+name: Kubernetes
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Weekly, and deliberately not on the hour: scheduled runs that cluster on :00
+  # are the ones GitHub delays most. Every input to this lane is pinned, so the
+  # only things that move on their own are the runner image and its Docker
+  # version — which change on the order of weeks, not days.
+  schedule:
+    - cron: '17 4 * * 1'
+  # No inputs. A dispatched run picks its lanes from the frozen matrix and cannot
+  # name a Kubernetes version or an image, so it cannot manufacture evidence for
+  # a version nobody decided to support (ADR 0095 section 2.3).
+  workflow_dispatch:
+
+# Read-only, and no job escalates. The cluster is created on the runner and
+# destroyed there; nothing here writes to the repository, publishes a package or
+# holds a signing identity.
+#
+# `pull_request` and never `pull_request_target`: this lane executes the pull
+# request's own code inside a container runtime, which is the worst possible
+# place to hand it the base repository's token and secrets. A fork pull request
+# therefore runs normally, with a read-only token and no secrets, and needs no
+# special case.
+permissions:
+  contents: read
+
+# The event is part of the group on purpose. Without it a scheduled run on `main`
+# and a push to `main` share a group and one cancels the other.
+#
+# Cancellation is enabled for pull requests only — a superseded commit should not
+# keep a cluster alive — and disabled everywhere else.
+concurrency:
+  group: kubernetes-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The job is named `${{ matrix.lane }}` rather than left to GitHub's default,
+  # so the status check renders as `Kubernetes / current` — a stable identity
+  # that carries no Kubernetes version. A check called
+  # `Kubernetes / Compatibility (v1.34.0)` would have to be reconfigured in
+  # branch protection every time the lane advanced.
+  lane:
+    name: ${{ matrix.lane }}
+    runs-on: ubuntu-24.04
+    # 40 minutes, and not a number taken from the local runtime. `kubernetes-test`
+    # runs `go test -timeout 30m`; a job timeout below that would kill the job
+    # before the Go test timeout fires, destroying the goroutine dump that is the
+    # most useful thing a hang produces. This leaves margin for a cold image pull
+    # on top of it.
+    timeout-minutes: 40
+    strategy:
+      # Both lanes report. A cancelled sibling would leave the run ambiguous
+      # about whether the other lane would have passed.
+      fail-fast: false
+      matrix:
+        # The event decides the lanes. `schedule` and `workflow_dispatch` run the
+        # compatibility matrix; everything else — `pull_request` and `push` to
+        # main — runs the current lane alone.
+        #
+        # One line on purpose. A folded block scalar keeps the newlines of its
+        # continuation lines, so the expression would reach GitHub with literal
+        # line breaks inside it; that happens to work and is not worth relying on.
+        lane: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["current","older"]') || fromJSON('["current"]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          # go.mod is the single source of truth for the toolchain. A second
+          # version written here would be a second authority that drifts from it.
+          go-version-file: go.mod
+
+      # Pinned kind, and kubectl verified against a SHA-256 recorded in the
+      # repository. The script refuses the runner's ambient kubectl, which is an
+      # unpinned input to a release gate.
+      - name: Install pinned kind and kubectl
+        run: ./scripts/install-kube-tools.sh
+
+      # Printed before the gate runs, because Phase 12.1D ran on aarch64 under
+      # Colima and every hosted runner is amd64 — so this is the first amd64
+      # execution of this suite, and the next person should not have to reproduce
+      # the environment to find out what it was. This is also the precedent
+      # validate-integration.yml set after a release was lost to exactly one such
+      # unrecorded difference.
+      #
+      # Bounded on purpose: versions and identity, never a kubeconfig, a token or
+      # an environment dump. There is no `set -x` anywhere in this workflow.
+      - name: Record the runner and the tool versions
+        run: |
+          printf 'lane=%s\n' '${{ matrix.lane }}'
+          printf 'runner uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
+          printf 'runner os=%s arch=%s\n' "$(uname -s)" "$(uname -m)"
+          docker version --format 'docker {{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}'
+          go version
+          kind version
+          kubectl version --client
+
+      # The canonical developer command, unchanged. The harness owns the cluster
+      # lifecycle, the two binaries, the fixtures, the waits, the assertions and
+      # the namespace-scoped failure dump; this workflow owns the runner and the
+      # lane. No fixture logic belongs in YAML.
+      #
+      # A missing prerequisite fails here. `kubernetes-up` refuses without kind,
+      # kubectl and a reachable runtime, and the suite calls t.Fatalf rather than
+      # t.Skip when its environment is absent — a skipped mandatory gate is not a
+      # pass. There is no retry, of a job, a step or a test.
+      - name: Run the Kubernetes validation gate
+        env:
+          KUBERNETES_LANE: ${{ matrix.lane }}
+        run: make integration-kubernetes
+
+      # `make` stops at a failing target, so `integration-kubernetes` does not
+      # reach `kubernetes-down` when the suite fails. This calls the harness's own
+      # target — it contains no cleanup logic of its own — and that target is
+      # idempotent, so the extra call after a successful run costs nothing.
+      #
+      # It cannot mask the failure above: the two steps report separately and the
+      # job's conclusion is already failure.
+      - name: Tear down the cluster
+        if: always()
+        run: make kubernetes-down

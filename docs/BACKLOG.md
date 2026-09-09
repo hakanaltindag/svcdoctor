@@ -5149,6 +5149,76 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 12.2B — Kubernetes CI and release-gate implementation: POST-COMMIT HOSTED CLOSURE PENDING
+
+**Stage 1 (local implementation) is complete. Stage 2 (hosted CI closure) has not happened**, and
+until it does the gate is not a gate: ADR 0095 §3 says a workflow that has never executed is not
+one. Record:
+`docs/validation/PHASE122B_KUBERNETES_CI_RELEASE_GATE_IMPLEMENTATION.md`, whose §15 is entirely
+`PENDING` on purpose.
+
+**Production files changed: 0.** `.github/workflows/kubernetes.yml` (new), one job and two `needs:`
+entries in `.github/workflows/release-oci.yml`, `scripts/install-kube-tools.sh` (new),
+`internal/cli/kubernetesworkflow_test.go` (new), one bullet in `docs/RELEASE_CHECKLIST.md`. The
+`Makefile`, `test/integration/kubernetes/**`, `cluster.yaml`, `go.mod` and every compatibility grade
+are **unchanged**.
+
+MODEL B as frozen: `pull_request` and `push` to main run **CURRENT only**; `schedule` (weekly,
+`17 4 * * 1`) and `workflow_dispatch` run **CURRENT + OLDER**; the release gate is a `kubernetes`
+job **inside** `release-oci.yml` running both lanes, which `stage-and-verify` **and** `publish` name
+directly in `needs:`. Both lanes green locally — v1.34.0 in 74.1 s, v1.31.12 in 71.5 s, whole gate
+123 s and 107 s.
+
+### Four things a future agent should not re-derive
+
+- **The mutation harness's `-run` regex selected nothing, and that hid two real defects.** The
+  pattern was `TestTheKubeTools`; the function is `TestTheKubeToolInstallerFailsClosed`, and the
+  trailing `s` means it is not a substring. Go exits 0 on an empty selection, so every mutation of
+  that file was reported as a survivor — **the same class of defect as the 2026-09-05 `grep -q`
+  under `pipefail`**, arriving in a different disguise. Any mutation harness in this repository must
+  prove its selection is non-empty before it plants anything.
+- **A guard that reads a file's own documentation is a guard that never fails.**
+  `install-kube-tools.sh` explains why it does not trace, and that sentence contains the literal
+  `set -x`, so `strings.Contains(script, "set -x")` was true on a script with no tracing — and would
+  have stayed true after tracing was added. Directives are now read comment-stripped, exactly as
+  `TestTheReleaseWorkflowUsesMinimalPermissions` records having learned *"by mutation, not by
+  review"*.
+- **The `curl | sh` idiom is the one form nobody writes.** A guard matching that literal let
+  `curl -sSL https://… | sh` straight through. Matching the *pipeline* — `\|\s*(sh|bash|zsh|dash)\b`
+  — is what actually catches it, and the word boundary keeps `| shasum` out.
+- **A folded YAML block scalar keeps the newlines of its continuation lines.** The event-dependent
+  matrix expression, written across three lines for readability, reached the parser with literal
+  line breaks inside the GitHub expression. It is one line now, and a guard fails if it is folded
+  again.
+
+**The kubectl pin was verified rather than copied.** Phase 12.2A refused to write a digest it could
+not check; this phase downloaded the artifact and matched **both** its SHA-256 and its SHA-512
+against the publisher's own files, confirmed it is a Linux `x86_64` ELF, and confirmed it carries
+`v1.34.0`. The installer is **linux/amd64 only and fails closed elsewhere** — a narrowing of 12.2A's
+"usable locally" wording, not of ADR 0095.
+
+**Mutation closure 26 planted / 26 caught / 0 survivors**, all three files restored byte-for-byte;
+the first run caught 23, and not one of the three survivors was an equivalent mutation. `make check`
+green, `git diff --check` clean, `actionlint` clean on the new workflow with **no new finding** on
+`release-oci.yml`, `shellcheck` clean.
+
+### What the user owns, and what the first hosted run proves
+
+Review, commit, push. The push to `main` should run `Kubernetes / current` on `ubuntu-24.04`,
+**amd64** — which will be this suite's **first amd64 execution**, since Phase 12.1D ran on
+`aarch64` under Colima. It also decides whether the two node-image digests are multi-architecture
+indexes (inferred, not proven) and whether `name: ${{ matrix.lane }}` really renders the check
+identity `Kubernetes / current`.
+
+**Closure needs the CURRENT lane only.** ADR 0095 requires no hosted OLDER run before the phase
+closes; OLDER is proven structurally and locally, and executes on the first schedule, dispatch or
+release.
+
+**Required-check configuration is UNKNOWN and stays the user's.** Three states are distinct and must
+not be collapsed: *workflow implemented*, *workflow hosted-green*, *workflow configured as a
+required check*. Do not configure branch protection against a guessed check name — wait for the
+first run to show it.
+
 ## Phase 12.2A — Kubernetes CI and release-gate contract freeze: COMPLETE
 
 **Docs-only. No production, test, CI or configuration change.** ADR **0095** is Accepted and
