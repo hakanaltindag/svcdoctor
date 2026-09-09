@@ -670,6 +670,25 @@ historically* frozen as terms. Because the lane has never executed on hosted inf
 12.1D ran on `arm64` while every runner is `amd64` — **the gate is not operational until its first
 real green run**, which is the record's closure policy rather than a caveat in a footnote.
 
+**0096 writes down the test that had already decided a dozen scope questions without ever being
+recorded.** Phase 13.0 audited the whole product to choose what to build next and found that Kafka
+controller inference, PostgreSQL `pg_stat_*`, Redis cluster topology, RabbitMQ queue state,
+Kubernetes Events, logs, NetworkPolicy and cluster discovery had all been refused on **the same
+ground**, re-derived from first principles each time. The thesis is that *svcdoctor explains what a
+specific client, from a specific network position, holding a specific credential, can prove about
+its path to a service* — and the record turns it into three questions a proposal must answer: **can
+this client observe it**, **is the authority structured** (peer prose never is), and **does the
+claim stop where the observation stops**. Each permanent exclusion now names the question it fails,
+so a future phase argues against the right thing. Two things it deliberately does **not** forbid:
+running from a different position is the thesis applied rather than an exception to it, and
+observing a self-reported property stays in scope while interpreting one does not. It also makes
+the recommendation part of the boundary — *a recommendation that does not say who can take it is
+incomplete*, because the hand-over is the boundary made visible, which is the gap Phase 13.0
+measured at **61 of 69 finding codes** and Phase 13.1 exists to close. **A useful feature may be
+refused, and that is the intended behaviour.** No test enforces this record and none should: the
+properties it protects each already have their own guard, and what it adds is a decision procedure
+for the humans reviewing scope.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

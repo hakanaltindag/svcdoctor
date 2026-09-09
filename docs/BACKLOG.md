@@ -5149,6 +5149,88 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 13.0 — Product and diagnostic roadmap audit: COMPLETE
+
+**Docs and ADR only. No production, test, CI, Makefile or dependency change.** Record:
+`docs/validation/PHASE130_PRODUCT_DIAGNOSTIC_ROADMAP_AUDIT.md`. Decision: **ADR 0096**, the
+client-vantage product boundary.
+
+**The answer is not a new adapter, not more Kubernetes, and not a planner.** The highest-value next
+investment is finishing something already built.
+
+### The central measurement
+
+**61 of 69 finding codes carry a recommendation with no kind, no safety class, no rationale and no
+self-collectability answer.** Structured advice — `diagnosis.Recommend(AdviceInput{…})` — reaches
+exactly **8** codes: `POSTGRES_CONNECTION_LIMIT_REACHED`, `POSTGRES_ADMISSION_SCOPE`, the two
+`KAFKA_ADVERTISED_TOPOLOGY_*`, and the four `KUBERNETES_*`. The split is **chronology, not design**:
+every code added from Phase 10.2 onward is classified and every earlier one is not, across all six
+rule packages. In the terminal, **1 of 19 goldens** shows a classification tag, and it is the
+synthetic fixture built to exercise the feature.
+
+Three consequences, all measured rather than argued:
+
+- **ADR 0082's safety gate does not run on those 61, by construction.** The unclassified
+  constructor never reaches `Producible()` or the changes-nothing check. At least **five**
+  recommendations are target-mutating actions carried unlabelled — *"Grant this user permissions on
+  the virtual host, for example with `rabbitmqctl set_permissions`"*, *"Enable SASL PLAIN on this
+  endpoint"*, *"Grant the diagnostic identity permission to run PING"*, *"Enable TLS for this
+  endpoint"*, *"configure a mechanism it demands"*. None is unsafe to say; the defect is that
+  nothing checked.
+- **`SelfCollectable` is unanswered for 61 codes**, and exactly **two** production recommendations
+  say `true` — both meaning *"re-run with a larger execution budget."* Not one discriminating
+  observation is svcdoctor-collectable today.
+- **`DIAG_FAILURE_BOUNDARY` carries no recommendation at all.** The one generic cross-service
+  finding — present in essentially every failing run, and the only thing a Kubernetes `401`
+  produces — suggests nothing.
+
+### Decisions
+
+| Question | Verdict |
+|---|---|
+| Diagnostic planner (ADR 0092 / Phase 11.0) | **KEEP DEFERRED**, with a sharper reason — its entry gate is not merely unmet, it is **unmeasurable**: 88% of findings do not state whether their next observation is one svcdoctor could take. Reopen when every recommendation is classified **and** the resulting `SelfCollectable: true` set contains a real discriminator rather than "re-run with more budget" |
+| Evidence relations (ADR 0087 / Phase 10.5A) | **KEEP DEFERRED** — `.Contradict`/`.Miss`/`.Block` still have **0** producers, and Kubernetes reinforced each reason rather than weakening it. One note for the future: `AuthorityCompleteContrast` now has **7** producers, so 10.5A's "both must be armed together" pairing is half-armed and must be re-derived rather than cited |
+| Redis diagnostic intelligence | **DEFER** — a real candidate (`LOADING`, `MASTERDOWN`, `BUSY` collapse into one WARN code) but the prefix is **already machine-readable** as `redis.error_prefix`, it benefits one service, and Redis runs in **no CI lane**. Generic `ERR` remains authority for nothing |
+| RabbitMQ diagnostic intelligence | **DEFER, near-REJECT under current scope** — everything direct AMQP endpoint authority can prove is already proven, including capacity scope. The residual frontier is entirely behind the management API, which is a different product |
+| Kubernetes expansion | **BUILD NOTHING NOW.** K-B Events, K-C logs, K-F workload state, K-H discovery and K-I service topology **REJECTED**; K-A, K-D NetworkPolicy, K-E in-cluster probing and K-G Gateway **DEFERRED**. K-E is the strongest idea in the whole audit and the least ready phase |
+| New service adapter | **DEFER, none admitted.** HTTP rejected as duplication of `curl`; MySQL/MariaDB is the best of the set. A sixth adapter would multiply the classification gap rather than close it |
+
+### Primary and secondary
+
+**PRIMARY — classify every recommendation across all services.** No new evidence, probe,
+dependency, finding code, rule or **schema change** (the four fields are already `omitempty` in v1).
+Touches all six rule packages. Value score **97**.
+
+**Its honest ceiling is stated in the record: it adds no new claim about any target.** What it adds
+is that svcdoctor states, per finding, what kind of action it proposes, how disruptive it is, and
+whether it could have taken the observation itself — checked by a gate rather than left to prose.
+That is the moment the output becomes something a runbook can route on instead of a sentence a
+human reads once.
+
+**SECONDARY — CI coverage for the five uncovered suites.** **Redis, Valkey, RabbitMQ, LavinMQ and
+multi-target run in no CI lane at all** — not the release gate, not `validate-integration.yml`. That
+is 20 finding codes and the entire `svcdoctor run --config` path protected only by a maintainer
+remembering the release checklist.
+
+**STRONGEST REJECTED ALTERNATIVE — Redis condition findings.** A good candidate that should be
+built, just not next.
+
+### Next phase
+
+**Phase 13.1A — Recommendation classification contract freeze** (CONTRACT FREEZE, no production
+code). It is a freeze rather than an implementation phase because the five target-mutating
+recommendations are an ADR 0082 policy question: classify them as REMEDIATION, or rewrite them as
+observations. Smallest phase that tests the value: classify the nine `REDIS_*` recommendations
+first and read the golden diff.
+
+### Two corrections to the record
+
+- **Phase 11.0's *"the two strongest are already fully served by structured `NEXT_EVIDENCE`
+  advice"*** is true of the two cases it named and misleading as a statement about the product.
+  Structured advice never spread beyond the phases that introduced it.
+- **`docs/COMPATIBILITY.md` and the CI lanes disagree about what is protected.** Four platforms are
+  graded Level 3 with committed fixtures that nothing re-runs automatically.
+
 ## Phase 12.2B — Kubernetes CI and release-gate implementation: POST-COMMIT HOSTED CLOSURE PENDING
 
 **Stage 1 (local implementation) is complete. Stage 2 (hosted CI closure) has not happened**, and
