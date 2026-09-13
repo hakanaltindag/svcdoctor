@@ -5204,6 +5204,109 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 13.2 — Post-13.1 roadmap and validation investment checkpoint: COMPLETE
+
+**Documentation only. 0 production, 0 test, 0 script, 0 workflow, 0 ADR change.** Record:
+`docs/validation/PHASE132_POST_131_ROADMAP_VALIDATION_CHECKPOINT.md`.
+
+**Phase 13.1 is closed** — 73 recommendations, 73 structured, 0 legacy, 0 REMEDIATION, 0
+target-mutating, 0 policy-overclaiming, 0 security-weakening.
+
+**The answer to "what next" is trust depth, not more diagnosis**, and it is not a new idea: Phase
+13.0 §22 named exactly two next items, and 13.1 completed the first.
+
+### The measurement that decided it
+
+Nine `make integration-*` targets exist. **Five appear zero times across all six workflow files** —
+`redis`, `valkey`, `rabbitmq`, `lavinmq` and `multitarget`. The release integration matrix is
+`suite: [postgres, kafka, redpanda]` (`release-oci.yml:201`) plus two Kubernetes lanes, and
+publication depends only on those. So:
+
+| Broken | Release still publishes? |
+|---|---|
+| Redis / Valkey / RabbitMQ / LavinMQ BASIC | **YES** |
+| Multi-target `run --config` | **YES** |
+| Kafka / Redpanda / PostgreSQL / Kubernetes | no |
+
+**Main CI is green for all seven services regardless**, because `ci.yml` runs `make check`, which is
+`go test ./...` with no `-tags integration` — `./test/integration/...` matches no packages. **No
+integration suite runs on any pull request for any service except Kubernetes.**
+
+Meanwhile `docs/COMPATIBILITY.md` grades Redis 8.2.1, Valkey 8.1.1, RabbitMQ and LavinMQ at
+**Level 3 — SUPPORTED BASIC**, whose bar includes *"a repeatable committed test"*. Those tests exist
+— 20, 8, 38 and 10 test functions — and **nothing runs them automatically**. A release can carry a
+Level-3 claim no automation re-verified for that commit.
+
+### Four things a future agent should not re-derive
+
+- **The diagnostic frontier has been swept four times.** 10.6A (ADR 0088) DEFER BOTH, zero admitted ·
+  10.7A (ADR 0089) one admitted · 10.8A (ADR 0090/0091) one admitted · 11.0 (ADR 0092) 29 candidates,
+  zero admitted. Both admissions were *activations of evidence already on the wire*, not new
+  acquisition. That is what an exhausted frontier looks like under a fixed authority boundary.
+- **Redis DI is blocked on fixture determinism, not on authority.** The old shorthand — *"arbitrary
+  ERR prose is insufficient authority"* — is true but is **not the binding constraint**.
+  `internal/adapter/redis/wire/errors.go` already normalizes a **closed prefix set** (`LOADING`,
+  `MASTERDOWN`, `BUSY`, `OOM`, `READONLY`, …) matched on prefix precisely because Redis and Valkey
+  parameterize the text. The real blockers are that `redis.error_prefix` is **already canonical JSON
+  and already rendered** in the finding detail, and that Phase 10.7A measured `LOADING` as a restart
+  race and `MASTERDOWN` as needing a replica plus a severed link. **Trust depth is upstream of Redis
+  product depth, not competing with it.**
+- **Only one of 18 mutation harnesses verifies restoration independently.** 421 plants total; all use
+  a `mktemp` backup compared against their own declared `FILES`. Only `phase131c` hashes the whole
+  tree with a `find` that knows nothing about `FILES` and refuses to plant into an undeclared file.
+  No harness invokes `git` anywhere.
+- **Leaf/fleet equivalence tests exist for Kubernetes only**, and the `test/diagnosis` hermetic
+  corpora are `corpus()`, `kafkaCorpus()` and `pgCorpus()` — so **Redis and RabbitMQ are thin on the
+  hermetic axis and the integration axis at the same time.**
+
+### Decisions — no previous decision reversed
+
+| Candidate | Previous | Now | Change |
+|---|---|---|---|
+| **A — service integration CI coverage** | 13.0 "DO NEXT (secondary)" | **BUILD** | promoted, because 13.1 completed the primary |
+| B — new fleet validation capability | — | **DEFER** | gate the suite that exists before writing more |
+| C — mutation harness hardening | recorded debt | **DEFER** | real, but its blast radius is a local leftover plant, not a published artifact |
+| D — Redis/Valkey DI | DEFER | **DEFER** | unchanged; reason sharpened to fixture determinism + already-published fact |
+| E — RabbitMQ/LavinMQ DI | DEFER | **DEFER** | unchanged |
+| F — Kafka/PostgreSQL depth | — | **DEFER** | 10.7A and 11.0 admitted nothing reachable |
+| G — Kubernetes expansion | BUILD NOTHING NOW | **DEFER** | unchanged in substance |
+| H — new adapter | DEFER | **DEFER** | **the reason changed**: 13.0 said a sixth adapter "would multiply the classification gap", which 13.1C closed. Re-derived — a sixth adapter would now be a **sixth ungated service** |
+| I — planner | KEEP DEFERRED | **DEFER** | triggers 2 and 3 still FAIL |
+| J — evidence relations | KEEP DEFERRED | **DEFER** | `.Contradict`/`.Miss`/`.Block` still **0** producers |
+
+**One BUILD.** Nothing rejected outright — every deferral keeps its reopen condition.
+
+**Planner triggers re-measured: 1 PASS, 2 FAIL, 3 FAIL.** The two `SelfCollectable: true`
+recommendations are still both *"Re-run with a larger execution budget"*, and neither of their
+findings carries a discriminator — the only production discriminator sits on
+`KAFKA_ADVERTISED_TOPOLOGY_UNSUITABLE`, whose advice is not self-collectable. **Trigger 1 flipping to
+PASS is what 13.1 was for and is not on its own a reason to reopen.**
+
+### PRIMARY NEXT — Phase 14.0, hosted and release-gating integration coverage
+
+Redis, Valkey, RabbitMQ, LavinMQ and multi-target gain automated execution, and release publication
+depends on them. **Freeze the contract first** — lane model, trigger placement, flake policy,
+runtime budget — because PR-versus-scheduled-versus-release-only is a CI-economics judgement that
+deserves deciding before YAML is written.
+
+Completion criterion, all three: every one of the five appears in a workflow execution path; the
+release `needs:` graph blocks publication on them; and a deliberately planted break in Redis or
+RabbitMQ BASIC fails the lane.
+
+Out of scope: any new finding code, rule, claim or recommendation; any adapter or wire change; new
+fleet *tests*; Redis condition findings; the RabbitMQ management API; Kubernetes. **A lane that
+asserts less than the local suite is worse than no lane** — if a suite is flaky the answer is a
+narrower or scheduled lane, never a weakened assertion.
+
+**SECONDARY — Candidate C**, carrying 13.1C's two restoration properties to the other 17 harnesses.
+It changes if Phase 14.0 shows the Redis/RabbitMQ suites are *thin* rather than merely ungated.
+
+### Known limits of the recommendation, recorded not hidden
+
+Hosted runtime and flake behaviour for the five suites were **not measured** — this audit ran no
+integration or mutation command. Four fixtures must start together for the multi-target lane.
+**arm64 evidence is absent for every service lane** while the release publishes multi-arch images.
+
 ## Phase 13.1C — Semantic and high-risk recommendation closure: COMPLETE
 
 **The recommendation classification migration is COMPLETE.** Record:
@@ -5597,6 +5700,10 @@ human reads once.
 multi-target run in no CI lane at all** — not the release gate, not `validate-integration.yml`. That
 is 20 finding codes and the entire `svcdoctor run --config` path protected only by a maintainer
 remembering the release checklist.
+
+> **Phase 13.2 promoted this to PRIMARY.** The primary above (recommendation classification) was
+> completed by Phases 13.1A–13.1C; Phase 13.2 re-measured this gap from the workflow files, found it
+> unchanged, and selected it as Phase 14.0. See the Phase 13.2 entry above.
 
 **STRONGEST REJECTED ALTERNATIVE — Redis condition findings.** A good candidate that should be
 built, just not next.
