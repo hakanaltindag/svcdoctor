@@ -168,7 +168,7 @@ func evaluateSSLRequest(node domain.Evidence) (domain.Finding, bool) {
 			// The node alone. Its SKIPPED handshake child is not cited: a
 			// blocked step is never a cause, and this node is its blocker.
 			EvidenceRefs:    []domain.EvidenceID{node.ID()},
-			Recommendations: recommend(recommendSSLNegotiationFailed),
+			Recommendations: advise(diagnosis.SafetyVerify, recommendSSLNegotiationFailed, rationaleSSLNegotiationFailed),
 		})
 	}
 
@@ -206,6 +206,18 @@ func evaluateSSLRequest(node domain.Evidence) (domain.Finding, bool) {
 		// a retry from elsewhere that cannot help.
 		VantageDependent: false,
 		EvidenceRefs:     []domain.EvidenceID{node.ID()},
-		Recommendations:  recommend(recommendTLSDeclined),
+		Recommendations:  advise(diagnosis.SafetyObserve, recommendTLSDeclined, rationaleTLSDeclined),
 	})
 }
+
+// The rationales for this file's advice.
+const (
+	rationaleSSLNegotiationFailed = "The endpoint answered the socket and not the PostgreSQL " +
+		"SSL negotiation, so something is listening and what it is remains open; the " +
+		"referenced evidence records what the exchange observed and names no cause."
+
+	rationaleTLSDeclined = "The endpoint declined encryption, which is a valid answer for a " +
+		"server configured to decline it and also what a middlebox answering on its behalf " +
+		"would send; whether this endpoint accepts encrypted connections at all is what " +
+		"separates the two."
+)

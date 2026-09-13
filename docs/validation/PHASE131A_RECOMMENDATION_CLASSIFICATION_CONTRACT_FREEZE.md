@@ -11,6 +11,12 @@
   that instruct a change to the target while carrying no safety classification at all**, and five
   of those cross from *mechanism* into *policy*
 - **Open blockers:** none
+- **CORRECTED 2026-09-13 by Phase 13.1A.1.** Two factual claims in this record about *existing*
+  behaviour were wrong and are corrected in place, each marked
+  *"Correction from Phase 13.1A.1"*: the rationale **is** rendered to human output, and *"every
+  committed golden is synthetic"* was too broad. No classification, safety, remediation,
+  `SelfCollectable`, planner or phasing decision changed. See
+  `docs/validation/PHASE131B_MECHANICAL_RECOMMENDATION_CLASSIFICATION.md` §11 and ADR 0097 §8
 
 ---
 
@@ -66,7 +72,7 @@ are the numbers 13.1B will work against, because a constant — not a code — i
 | `action` | `string` | no | invalid value | `action` | yes | no | printed after `→` | union member | **yes** | `ValidateActionText` on the classified path only |
 | `kind` | `RecommendationKind` | yes | *nobody classified this* | `kind,omitempty` | when set | no | drives `[TAG]` | not reconciled | **yes** | `Valid()` + gate |
 | `safety` | `SafetyClass` | yes | *nobody classified this* | `safety,omitempty` | when set | no | in `[TAG]` | not reconciled | **yes** | `Producible()`, `ChangesNothing()` |
-| `rationale` | `string` | yes | unclassified, or not stated | `rationale,omitempty` | when set | no | **not rendered** | not reconciled | **yes** | non-blank required on classified path |
+| `rationale` | `string` | yes | unclassified, or not stated | `rationale,omitempty` | when set | no | **printed, indented, on its own line** (corrected 13.1A.1) | not reconciled | **yes** | non-blank required on classified path |
 | `selfCollectable` | `bool` | yes | see below | `selfCollectable,omitempty` (`*bool`) | when set | no | in `[TAG]` for NEXT_EVIDENCE | not reconciled | **yes** | refused on REMEDIATION |
 
 Five properties were verified rather than assumed:
@@ -85,8 +91,32 @@ Five properties were verified rather than assumed:
 4. **`rationale` is redacted.** `internal/security/redaction/redact.go` passes it through the same
    `t.text()` transformation as `action`, and rebuilds classified and unclassified recommendations
    down separate branches. Classification survives the shareable projection.
-5. **`rationale` is not rendered anywhere.** The terminal `adviceTag` prints kind, safety and
-   collectability; the rationale reaches canonical JSON and no human surface.
+5. **`rationale` is rendered.** ~~It is not rendered anywhere. The terminal `adviceTag` prints
+   kind, safety and collectability; the rationale reaches canonical JSON and no human surface.~~
+
+   **Correction from Phase 13.1A.1.** That was wrong about behaviour this repository already had.
+   `internal/render/terminal/findings.go:57-59` prints the rationale on its own line, indented six
+   columns, immediately beneath the action:
+
+   ```go
+   if rationale := recommendation.Rationale(); rationale != "" {
+       _, _ = fmt.Fprintln(out, indent(rationale, "      "))
+   }
+   ```
+
+   It has done so since Phase 10.4B (`105e43b`, 2026-09-05) — the same commit that added
+   `adviceTag` — which is why the nine already-classified recommendations already showed theirs in
+   `internal/render/terminal/testdata/next-evidence-classified.txt`. `docs/OUTPUT.md` §"Findings"
+   documents it to operators: *"The indented line beneath is the **rationale**: why that observation
+   discriminates."*
+
+   Two precisions the original sentence would not have captured either. The renderer's condition is
+   **`Rationale() != ""`, not `Classified()`** — an independent test that coincides with
+   classification only because `domain.NewRecommendation` cannot set a rationale and
+   `NewClassifiedRecommendation` refuses a blank one. And **there is no Markdown or HTML renderer**:
+   `internal/render` holds `terminal` and `json` only, and `--output markdown|html` is an exit-2
+   usage error (`TestUnknownOutputFormIsAnInvocationError`). Property 4 below is unaffected and was
+   correct.
 
 ### 2.1 The two construction paths
 
@@ -291,7 +321,7 @@ After migration the field is present on all 68 next-evidence-bearing codes, and 
 recommendations that carry it will say `false`**. That is the honest answer and it is the useful
 one: it tells a runbook that svcdoctor has handed over.
 
-### 7.4 Rationale — **REQUIRED on every classified recommendation, canonical-only**
+### 7.4 Rationale — **REQUIRED on every classified recommendation, and human-visible**
 
 Already enforced: `NewAdvice` refuses a blank rationale. Frozen additions:
 
@@ -299,7 +329,14 @@ Already enforced: `NewAdvice` refuses a blank rationale. Frozen additions:
 - It is **svcdoctor-owned bounded prose**. No peer bytes, no runtime error text, no server message
   may reach it — the same rule the report model applies everywhere (ADR 0010).
 - It is **not machine-readable and must not become so**. Nothing may branch on its content.
-- It stays **canonical-only**: no renderer prints it today and 13.1B adds none.
+- ~~It stays **canonical-only**: no renderer prints it today and 13.1B adds none.~~
+
+  **Correction from Phase 13.1A.1.** It is **canonical *and* human-visible**, and has been since
+  Phase 10.4B. The half of that bullet which holds is the half about 13.1B: **13.1B adds no
+  renderer**, and none changed. What was wrong was the premise that none existed. The corrected
+  clause is: *it is serialized in canonical JSON as `rationale,omitempty` and printed by the
+  terminal renderer beneath its action; it remains svcdoctor-owned bounded prose, redacted before
+  serialization and rendering, and not machine-readable.*
 
 **The cost is named rather than hidden: 13.1B must write 64 rationales**, one per legacy constant.
 That is the real work of the migration, and it is judgement rather than plumbing.
@@ -455,16 +492,33 @@ of `docs/REPORT_SCHEMA.md` §1 and ADR 0083 §2.1. A consumer reading `action` a
 intended outcome and the distinction §39 asks for: *same schema, different optional field
 population*.
 
-### 11.2 Committed goldens — **measured, and the answer is surprising**
+### 11.2 Committed fixtures — **three classes, not one** (corrected 13.1A.1)
 
-**Every committed golden is synthetic.** The terminal goldens build findings by hand
+~~**Every committed golden is synthetic.** The terminal goldens build findings by hand
 (`domain.NewRecommendation("Check the thing the finding names")` in `kafkagolden_test.go`), and the
 `test/golden` JSON fixtures carry hand-written recommendations such as *"Check that the service is
-listening on this port"* that appear in no production rule.
+listening on this port"* that appear in no production rule.~~
 
-**So no committed golden changes as a consequence of classifying production constants.** 13.1B may
-still choose to extend the synthetic fixtures to cover the new shapes; that is an addition, not a
-forced update.
+~~**So no committed golden changes as a consequence of classifying production constants.**~~
+
+**Correction from Phase 13.1A.1.** The two fixture sets named above were measured correctly. The
+error is the word *"every"*: this repository holds **three** fixture classes under two different
+construction methods, and only two of the three were looked at. The third is the one 13.1B moved.
+
+| Class | Location | How a fixture is produced | Carries production recommendation constants? | 13.1B effect |
+|---|---|---|---|---|
+| Aggregate contract fixtures | `test/golden/testdata/*.json` (6) | **Synthetic.** `rungolden_test.go` hand-builds `domain.RunReport` values; its one recommendation is `domain.NewRecommendation("Check that the service is listening on this port")`, a string that appears in no production file | **no** | **unchanged** |
+| Renderer-package goldens | `internal/render/terminal/testdata/*.txt` (19) | **Synthetic report, real renderer.** Findings are hand-built (`"Check the thing the finding names"`; `next-evidence-classified.txt` hand-builds a classified one) and passed to the real terminal renderer | **no** | **unchanged** |
+| CLI output fixtures | `internal/cli/testdata/*.txt` (8) | **Real run, real renderer.** `golden_test.go`: *"the reports below come from internal/app measuring real loopback sockets"*, rendered through the real command; only durations and ephemeral ports are normalized | **yes** | **5 of 8 changed** |
+
+**So the corrected statement is:** classifying production constants changes no *synthetic* fixture,
+because none of them contains a production recommendation; and it changes every **CLI output**
+fixture whose run produces a finding carrying one of the 55. That is 5 of the 8
+(`dns-failure`, `multipath`, `no-credential`, `shareable`, `ssl-floor`); `healthy.txt`,
+`incomplete.txt` and `testdata/help/` produce no such finding and did not move.
+
+13.1B may still choose to extend the synthetic fixtures to cover the new shapes; that is an
+addition, not a forced update. **It did not**, and none was required.
 
 ### 11.3 Renderers — **renderer-visible, and that is the point**
 
@@ -478,6 +532,23 @@ and is exercised by `next-evidence-classified.txt`. Phase 13.0 §16 measured the
 *"svcdoctor can collect" versus "you must collect"* — as the reason the classification is worth
 doing at all.
 
+**Correction from Phase 13.1A.1 — the human-output change is larger than this section states, and
+the decision is unchanged.** The same renderer prints the **rationale** on its own indented line
+(§2 property 5, corrected). So a newly classified recommendation gains **two** human-visible
+things, not one:
+
+```
+    → <action, byte-identical>  [NEXT_EVIDENCE / VERIFY / you must collect]
+      <rationale, six-column indent, one line, not wrapped>
+```
+
+This is **not a new renderer feature**. It is pre-existing renderer behaviour, shipped and
+documented in `docs/OUTPUT.md` since Phase 10.4B, becoming populated by newly structured data. The
+renderer source is unchanged — 13.1B changed **0** renderer files — and the *decision* this section
+records, that classification is renderer-visible on purpose, is reaffirmed rather than revisited.
+Phase 13.1A.1 §5 accepted the existing behaviour explicitly; rejecting it would have required its
+own phase and a renderer change, and neither was taken.
+
 **No renderer file is modified.** `adviceTag` already handles every value; the change is in what it
 receives. Only Markdown and HTML would need new code, and neither exists.
 
@@ -487,12 +558,20 @@ receives. Only Markdown and HTML would need new code, and neither exists.
 |---|---|---|
 | NO PUBLIC CHANGE | schema, exit codes, finding codes, severities, confidences, evidence refs, ordering | none moves |
 | **ADDITIVE CANONICAL METADATA** | **yes** | four optional fields become populated on 68 codes' recommendations |
-| **HUMAN-OUTPUT CHANGE** | **yes** | terminal gains a classification tag on 64 recommendations |
+| **HUMAN-OUTPUT — CLASSIFICATION TAG** | **yes** | terminal gains a `[KIND / SAFETY / who collects]` tag on 64 recommendations |
+| **HUMAN-OUTPUT — RATIONALE LINE** | **yes** (corrected 13.1A.1) | terminal gains one indented rationale line per newly classified recommendation. **Pre-existing renderer behaviour becoming populated**, not a new feature: `findings.go` has printed it since Phase 10.4B and `docs/OUTPUT.md` documents it. Renderer source changes: **0** |
 | SCHEMA CHANGE | no | `SchemaVersion` and `RunSchemaVersion` stay 1 |
 | **BEHAVIOR CHANGE** | **yes, bounded and enumerated** | six recommendation strings are rewritten (§8.2); nothing else |
 
-A consumer parsing `action` is unaffected. A consumer diffing whole reports across the upgrade sees
-new fields and new terminal tags, and that is documented in the release notes rather than avoided.
+A consumer parsing `action` is unaffected — the action text is **byte-identical** across the
+migration, which is what the per-constant SHA-256 corpus proves. A consumer diffing whole reports
+across the upgrade sees new canonical fields, new terminal tags **and new terminal rationale
+lines**, and that is documented in the release notes rather than avoided.
+
+**Correction from Phase 13.1A.1 — nothing here is a released-behaviour change.** Rationale rendering
+landed in Phase 10.4B (`105e43b`, 2026-09-05), which is **after `v0.4.0`** (2026-09-02), the newest
+tag. No published release renders a rationale or a classification tag, so the whole of this table
+describes a change between the tree and the previous tree, not between two releases.
 
 ## 12. Enforcement — the safety gate closure
 
@@ -610,7 +689,8 @@ Designed, not run. Properties rather than a count.
 | new guard tests in `test/security/` and `internal/diagnosis/` | R-G01…R-G12 with non-vacuity proofs |
 | `docs/validation/PHASE131B_*.md`, `PHASE131C_*.md` | the records |
 | `docs/FINDINGS.md`, `docs/OUTPUT.md`, `docs/REPORT_SCHEMA.md` | only if a documented example shows a recommendation |
-| synthetic goldens | **optional addition**, never a forced update (§11.2) |
+| synthetic fixtures — `test/golden/testdata/`, `internal/render/terminal/testdata/` | **optional addition**, never a forced update (§11.2) |
+| `internal/cli/testdata/*.txt` | **required regeneration** (corrected 13.1A.1). These are real CLI output, not synthetic; a classified recommendation changes them. 13.1B regenerated 5 of 8 |
 
 **MUST NOT:** probes, adapters, transport, acquisition, protocol semantics, finding codes, rules,
 severities, confidences, failure classes, the evidence graph, the Kubernetes client, fleet
@@ -681,8 +761,12 @@ Future capability is never `true`.
 
 **RATIONALE CONTRACT** — required on every classified recommendation. svcdoctor-owned bounded prose,
 never peer bytes and never a formatted runtime value. Explains why the observation discriminates.
-**Canonical-only**; no renderer prints it and none may start without a separate decision. Never
-machine-readable; nothing may branch on it.
+~~**Canonical-only**; no renderer prints it and none may start without a separate decision.~~
+**Corrected 13.1A.1: canonical *and* human-visible.** Serialized as `rationale,omitempty`; printed
+by the terminal renderer on its own six-column-indented line beneath its action, whenever it is
+non-empty; redacted through the same `t.text()` transformation as the action before serialization
+and rendering. There is no Markdown or HTML renderer. Never machine-readable; nothing may branch on
+it.
 
 **RECOMMENDATION IDENTITY** — **NONE.** Deferred; reopen when a consumer names itself.
 

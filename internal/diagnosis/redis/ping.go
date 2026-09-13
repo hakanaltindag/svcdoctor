@@ -163,7 +163,7 @@ func evaluatePing(node domain.Evidence) (domain.Finding, bool) {
 				Detail:           detailWithNamedCondition(node),
 				VantageDependent: false,
 				EvidenceRefs:     refs,
-				Recommendations:  recommend(recommendEndpointNotServing),
+				Recommendations:  advise(diagnosis.SafetyObserve, recommendEndpointNotServing, rationaleEndpointNotServing),
 			})
 		}
 		// Everything else UNKNOWN at this step is svcdoctor's own budget or its
@@ -183,7 +183,7 @@ func evaluatePing(node domain.Evidence) (domain.Finding, bool) {
 			Detail:           detailPingNotCompleted,
 			VantageDependent: true,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendPingNotCompleted),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendPingNotCompleted, rationalePingNotCompleted),
 		})
 	}
 
@@ -205,3 +205,18 @@ func detailWithNamedCondition(node domain.Evidence) string {
 	return fmt.Sprintf("%s\nThe condition the endpoint named was %s.",
 		detailEndpointNotServing, prefix)
 }
+
+// The rationales for the two classified claims in this file.
+//
+// `recommendCommandNotPermitted` has none: its first clause asks for an ACL grant
+// and Phase 13.1A reserved that sentence as REC-055.
+const (
+	rationaleEndpointNotServing = "The endpoint answered and named its own condition, which " +
+		"svcdoctor restates and does not interpret; whether the condition persists, and what " +
+		"produced it, are both held in the endpoint's own logs and current state."
+
+	rationalePingNotCompleted = "The probe was sent on an established connection and the " +
+		"exchange ended without an answer, so whatever ended it happened after the connection " +
+		"reached the endpoint; its connection-level log for this address is the only record of " +
+		"that."
+)

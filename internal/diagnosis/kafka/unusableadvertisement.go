@@ -228,13 +228,27 @@ const unusableDetail = "The Kafka Metadata exchange succeeded, and the host and 
 	"This is a property of what the cluster reported rather than of this vantage point: any " +
 	"client reading the same Metadata response receives the same endpoint."
 
-// unusableRecommendations returns the single recommendation this claim supports.
+// rationaleUnusable says what the exchange established and what it did not.
+const rationaleUnusable = "The endpoint is unusable as reported rather than unreachable from " +
+	"here, so the two places it could have come from — how the broker's advertised listeners " +
+	"are configured, and anything rewriting Metadata responses on the way — are the halves " +
+	"this exchange cannot separate."
+
+// unusableRecommendations returns the single classified observation this claim
+// supports.
+//
+// NEXT_EVIDENCE at OBSERVE: it asks a reader to look at a configuration and at
+// what sits on the path, and changes nothing. The kind and confidence are the
+// ones this producer applies unconditionally.
 func unusableRecommendations() []domain.Recommendation {
-	recommendation, err := domain.NewRecommendation(recommendUnusable)
-	if err != nil {
-		// Unreachable: a non-empty, trimmed, control-character-free constant.
-		// Pinned by TestUnusableRecommendationTextIsValid.
-		return nil
-	}
-	return []domain.Recommendation{recommendation}
+	return diagnosis.Recommend(diagnosis.AdviceInput{
+		Kind:   diagnosis.AdviceKindNextEvidence,
+		Safety: diagnosis.SafetyObserve,
+		Action: recommendUnusable,
+		// svcdoctor reads the advertisement and nothing that produced it: a
+		// broker's `advertised.listeners` and a rewriting proxy are both outside
+		// what the Metadata response shows.
+		SelfCollectable: false,
+		Rationale:       rationaleUnusable,
+	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
 }

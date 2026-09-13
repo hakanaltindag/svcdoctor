@@ -8,7 +8,8 @@ Findings
     The resolver answered, and the answer contained no address this client could use.
     This does not establish that the hostname is unknown: the same answer is returned for a name that has no address record, and many resolvers do not distinguish the two. It also says nothing about whether the service behind the name is running.
     Resolution depends on which resolver this host uses, so a different vantage point may resolve the same name.
-    → Check that the hostname is spelled as intended and that it has an address record visible to the resolver this host is configured to use
+    → Check that the hostname is spelled as intended and that it has an address record visible to the resolver this host is configured to use  [NEXT_EVIDENCE / VERIFY / you must collect]
+      svcdoctor asked this host's own resolver for the name the target declared and was answered that it has no address, so whether the name or the zone that should carry it is the surprising half is the one thing this observation cannot settle.
     evidence: 1
 
   · INFO  DIAG_FAILURE_BOUNDARY  db.internal

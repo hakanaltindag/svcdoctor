@@ -225,7 +225,7 @@ func failedAuthentication(node domain.Evidence, refs []domain.EvidenceID) (domai
 			// observer is treated differently.
 			VantageDependent: false,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendCredentialsRejected),
+			Recommendations:  advise(diagnosis.SafetyVerify, recommendCredentialsRejected, rationaleCredentialsRejected),
 		})
 
 	case domain.FailureAuthPeerVerificationFailed:
@@ -246,7 +246,7 @@ func failedAuthentication(node domain.Evidence, refs []domain.EvidenceID) (domai
 			// measurement that would narrow it.
 			VantageDependent: true,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendPeerVerificationFailed),
+			Recommendations:  advise(diagnosis.SafetyVerify, recommendPeerVerificationFailed, rationalePeerVerificationFailed),
 		})
 
 	case domain.FailureAuthzNotPermitted:
@@ -257,7 +257,8 @@ func failedAuthentication(node domain.Evidence, refs []domain.EvidenceID) (domai
 		// performs. WARN and not ERROR: that is a real problem for this
 		// diagnosis, and nothing here proves the operator's own client cannot
 		// authenticate.
-		return mechanismUnavailable(node, domain.SeverityWarn, recommendMechanismNotOffered, refs)
+		return mechanismUnavailable(node, domain.SeverityWarn, recommendMechanismNotOffered,
+			diagnosis.SafetyObserve, rationaleMechanismNotOffered, refs)
 
 	default:
 		return build(domain.FindingInput{
@@ -273,7 +274,7 @@ func failedAuthentication(node domain.Evidence, refs []domain.EvidenceID) (domai
 			// source-keyed one.
 			VantageDependent: true,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendAuthenticationFailed),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendAuthenticationFailed, rationaleAuthenticationFailed),
 		})
 	}
 }
@@ -290,7 +291,11 @@ func unknownAuthentication(node domain.Evidence, refs []domain.EvidenceID) (doma
 	case domain.FailureAuthMechanismUnsupported:
 		// INFO: a gap in svcdoctor. Grading a tool gap higher would spend the
 		// endpoint's severity budget on svcdoctor's own coverage.
-		return mechanismUnavailable(node, domain.SeverityInfo, recommendMechanismUnsupported, refs)
+		// Unclassified: Phase 13.1A REC-034 reserved this sentence, whose second
+		// clause asks the endpoint to reconfigure its authentication so that
+		// svcdoctor can authenticate.
+		return mechanismUnavailable(node, domain.SeverityInfo, recommendMechanismUnsupported,
+			diagnosis.SafetyUnspecified, "", refs)
 
 	case domain.FailureExecUnsupportedBySvcdoctor:
 		return build(domain.FindingInput{
@@ -424,7 +429,7 @@ func credentialNotConfigured(node domain.Evidence, refs []domain.EvidenceID) (do
 		// vantage-dependent because the claim names what the endpoint required.
 		VantageDependent: true,
 		EvidenceRefs:     refs,
-		Recommendations:  recommend(recommendCredentialNotConfigured),
+		Recommendations:  advise(diagnosis.SafetyObserve, recommendCredentialNotConfigured, rationaleCredentialNotConfigured),
 	})
 }
 
@@ -435,7 +440,8 @@ func credentialNotConfigured(node domain.Evidence, refs []domain.EvidenceID) (do
 // same distinction structurally, so severity and state agree by construction
 // rather than by coincidence.
 func mechanismUnavailable(
-	node domain.Evidence, severity domain.Severity, action string, refs []domain.EvidenceID,
+	node domain.Evidence, severity domain.Severity, action string,
+	safety diagnosis.SafetyClass, rationale string, refs []domain.EvidenceID,
 ) (domain.Finding, bool) {
 	return build(domain.FindingInput{
 		Code:       CodeMechanismUnavailable,
@@ -451,6 +457,49 @@ func mechanismUnavailable(
 		// one of a client elsewhere.
 		VantageDependent: true,
 		EvidenceRefs:     refs,
-		Recommendations:  recommend(action),
+		// Mixed while one of the two actions is Phase 13.1C's: the caller decides,
+		// because the caller is what chose the action, and SafetyUnspecified is
+		// how it says the sentence has not been reviewed.
+		Recommendations: mechanismAdvice(safety, action, rationale),
 	})
 }
+
+// mechanismAdvice classifies this finding's advice, or leaves it unclassified
+// when the action is one Phase 13.1C owns.
+func mechanismAdvice(
+	safety diagnosis.SafetyClass, action, rationale string,
+) []domain.Recommendation {
+	if safety == diagnosis.SafetyUnspecified {
+		return recommend(action)
+	}
+	return advise(safety, action, rationale)
+}
+
+// The rationales for the classified half of this file.
+//
+// `recommendCredentialWithheld` and `recommendUnsupportedBySvcdoctor` have none:
+// their actions are the ones Phase 13.1C reviews (REC-031 and REC-036), and
+// writing a rationale for a sentence whose scope is unsettled would settle it
+// here instead.
+const (
+	rationaleCredentialsRejected = "The endpoint rejected the credential and said nothing " +
+		"about which half was wrong, so a mistyped secret and a role the server does not know " +
+		"are the same observation here; the endpoint's own log is where they separate."
+
+	rationalePeerVerificationFailed = "A credential was withheld from a peer this run could " +
+		"not identify, so what the endpoint is comes before what it would have said about the " +
+		"credential, and neither is established yet."
+
+	rationaleAuthenticationFailed = "Authentication ended without the endpoint stating a " +
+		"reason this client can read, which is not the same as a rejection; the endpoint's " +
+		"authentication log for this role is the only place the two are told apart."
+
+	rationaleCredentialNotConfigured = "No credential was supplied, so authentication was " +
+		"never attempted and the endpoint took no position on one; whether this endpoint was " +
+		"meant to admit this role without one is an intent nobody declared to svcdoctor."
+
+	rationaleMechanismNotOffered = "The endpoint offers mechanisms selected by its own " +
+		"host-based rules for the role and the address of this attempt, so the same endpoint " +
+		"can demand a different one of a client elsewhere; which mechanisms apply here is held " +
+		"on the server's side."
+)

@@ -266,7 +266,7 @@ func evaluateSession(g domain.Graph, node domain.Evidence) (domain.Finding, bool
 			// A catalog lookup does not vary by the source of the connection.
 			VantageDependent: false,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendDatabaseNotFound),
+			Recommendations:  advise(diagnosis.SafetyVerify, recommendDatabaseNotFound, rationaleDatabaseNotFound),
 		})
 
 	case domain.FailureResourceLimitReached:
@@ -328,7 +328,7 @@ func evaluateSession(g domain.Graph, node domain.Evidence) (domain.Finding, bool
 			// CONNECT is held per role per database, not per source address.
 			VantageDependent: false,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendDatabaseConnectDenied),
+			Recommendations:  advise(diagnosis.SafetyVerify, recommendDatabaseConnectDenied, rationaleDatabaseConnectDenied),
 		})
 
 	default:
@@ -345,7 +345,7 @@ func evaluateSession(g domain.Graph, node domain.Evidence) (domain.Finding, bool
 			// source-keyed one.
 			VantageDependent: true,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendSessionEstablishmentFailed),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendSessionEstablishmentFailed, rationaleSessionEstablishmentFailed),
 		})
 	}
 }
@@ -398,3 +398,19 @@ func startupOf(g domain.Graph, proof domain.Evidence) (domain.Evidence, bool) {
 	}
 	return parentWithStep(g, proof, servicepostgres.StepStartup)
 }
+
+// The rationales for this file's unclassified-until-now advice.
+const (
+	rationaleDatabaseNotFound = "The endpoint answered that the requested database is not " +
+		"there, which fixes the mismatch and not which half of it is wrong; the name this run " +
+		"asked for and the databases the endpoint serves are the two halves."
+
+	rationaleDatabaseConnectDenied = "The endpoint admitted the role and refused it this " +
+		"database, so the credential is not in question and the CONNECT privilege is; that " +
+		"privilege is a server-side grant PostgreSQL BASIC executes no SQL to read."
+
+	rationaleSessionEstablishmentFailed = "The endpoint accepted the connection and then " +
+		"ended it before the session was usable, so the failure is after admission and before " +
+		"readiness; the endpoint's log for that connection is the only record of what closed " +
+		"it."
+)

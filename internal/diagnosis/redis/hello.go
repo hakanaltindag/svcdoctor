@@ -80,7 +80,7 @@ func Hello(ctx diagnosis.RuleContext) []domain.Finding {
 			// finding has no basis for.
 			VantageDependent: true,
 			EvidenceRefs:     []domain.EvidenceID{node.ID()},
-			Recommendations:  recommend(recommendProtocolNotEstablished),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendProtocolNotEstablished, rationaleProtocolNotEstablished),
 		})
 		if !built {
 			continue
@@ -89,3 +89,9 @@ func Hello(ctx diagnosis.RuleContext) []domain.Finding {
 	}
 	return out
 }
+
+// rationaleProtocolNotEstablished says what the socket established and what it
+// did not.
+const rationaleProtocolNotEstablished = "Something answered the socket and did not answer " +
+	"HELLO, so a listener exists and what it serves is still open; what this port carries is " +
+	"not something a client learns from a handshake that was not answered."

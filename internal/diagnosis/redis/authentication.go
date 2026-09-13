@@ -163,7 +163,7 @@ func evaluateAuthentication(node domain.Evidence) (domain.Finding, bool) {
 				Detail:           detailCredentialNotConfigured,
 				VantageDependent: false,
 				EvidenceRefs:     refs,
-				Recommendations:  recommend(recommendCredentialNotConfigured),
+				Recommendations:  advise(diagnosis.SafetyObserve, recommendCredentialNotConfigured, rationaleCredentialNotConfigured),
 			})
 		}
 		return domain.Finding{}, false
@@ -183,7 +183,7 @@ func evaluateAuthentication(node domain.Evidence) (domain.Finding, bool) {
 				// from here is not proved refused from everywhere.
 				VantageDependent: true,
 				EvidenceRefs:     refs,
-				Recommendations:  recommend(recommendCredentialsRejected),
+				Recommendations:  advise(diagnosis.SafetyVerify, recommendCredentialsRejected, rationaleCredentialsRejected),
 			})
 		}
 		return build(domain.FindingInput{
@@ -197,7 +197,7 @@ func evaluateAuthentication(node domain.Evidence) (domain.Finding, bool) {
 			Detail:           detailAuthenticationNotCompleted,
 			VantageDependent: true,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendAuthenticationNotCompleted),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendAuthenticationNotCompleted, rationaleAuthenticationNotCompleted),
 		})
 	}
 
@@ -206,3 +206,21 @@ func evaluateAuthentication(node domain.Evidence) (domain.Finding, bool) {
 	// report's incompleteness already reports that.
 	return domain.Finding{}, false
 }
+
+// The rationales for the three classified claims in this file.
+//
+// `recommendCredentialWithheld` has none: "enable TLS for this endpoint" is a
+// change to the endpoint, and Phase 13.1A reserved it as REC-052.
+const (
+	rationaleCredentialNotConfigured = "No credential was supplied, so authentication was " +
+		"never attempted and the endpoint took no position on one; which credential the " +
+		"application uses for this endpoint is not something svcdoctor can read."
+
+	rationaleCredentialsRejected = "The endpoint rejected the identity and its reply carries " +
+		"no reason, so a wrong secret and an unknown user are one observation here; the ACL " +
+		"configuration and the ACL log are where they separate."
+
+	rationaleAuthenticationNotCompleted = "Authentication ended without the endpoint taking a " +
+		"position, which is not a rejection; the endpoint's connection-level log for this " +
+		"address is the only place an unanswered attempt and a refused one differ."
+)

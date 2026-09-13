@@ -234,7 +234,6 @@ func build(
 		// cluster has been actively misled. The flag is unconditional; the
 		// Vantage itself stays on the report, recorded once (ADR 0034 section 17).
 		VantageDependent: true,
-		Recommendations:  recommendations(failures),
 	}
 
 	switch v {
@@ -282,6 +281,14 @@ func build(
 	case verdictNone:
 		return domain.Finding{}, false
 	}
+
+	// After the verdict, because two of the three per-layer sentences are
+	// classified and AdmitAdvice is handed the finding's own kind and confidence.
+	// This shape carries both: CONFIRMED at HIGH when every path failed, and
+	// HYPOTHESIS at LOW when some were never measured. Passing the verdict's
+	// values rather than a constant pair is what keeps the advice's admission a
+	// statement about this finding (ADR 0082 section 2.3 rule 1).
+	in.Recommendations = recommendations(failures, in.Kind, in.Confidence)
 
 	finding, err := domain.NewFinding(in)
 	if err != nil {

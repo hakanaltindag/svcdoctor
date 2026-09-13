@@ -78,7 +78,7 @@ func Sentinel(ctx diagnosis.RuleContext) []domain.Finding {
 			// would invite a retry from elsewhere that cannot change the answer.
 			VantageDependent: false,
 			EvidenceRefs:     []domain.EvidenceID{node.ID()},
-			Recommendations:  recommend(recommendSentinel),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendSentinel, rationaleSentinel),
 		})
 		if !built {
 			continue
@@ -87,3 +87,9 @@ func Sentinel(ctx diagnosis.RuleContext) []domain.Finding {
 	}
 	return out
 }
+
+// rationaleSentinel says why the run has to be re-pointed rather than followed.
+const rationaleSentinel = "The endpoint reported itself a Sentinel, which monitors data " +
+	"endpoints rather than serving the dataset, and svcdoctor asks it nothing further: " +
+	"following its answer would be discovery this scope refuses, so the address to diagnose " +
+	"is one the operator holds."

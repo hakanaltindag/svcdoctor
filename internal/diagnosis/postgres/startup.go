@@ -116,6 +116,11 @@ func evaluateStartup(node domain.Evidence) (domain.Finding, bool) {
 		// false is a positive claim, not an absence (ADR 0040 section 6.1).
 		VantageDependent: true,
 		EvidenceRefs:     refs,
-		Recommendations:  recommend(recommendStartupFailed),
+		Recommendations:  advise(diagnosis.SafetyObserve, recommendStartupFailed, rationaleStartupFailed),
 	})
 }
+
+// rationaleStartupFailed says what the exchange established and what it did not.
+const rationaleStartupFailed = "The startup exchange did not complete for the role and " +
+	"database this run requested, and it named no reason this client can read; the endpoint's " +
+	"connection-level log is where an unanswered startup and a refused one differ."

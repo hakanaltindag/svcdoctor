@@ -61,7 +61,7 @@ func ConnectionStart(ctx diagnosis.RuleContext) []domain.Finding {
 			// so a different vantage may reach a different listener.
 			VantageDependent: true,
 			EvidenceRefs:     []domain.EvidenceID{node.ID()},
-			Recommendations:  recommend(recommendStartNotCompleted),
+			Recommendations:  advise(diagnosis.SafetyVerify, recommendStartNotCompleted, rationaleStartNotCompleted),
 		})
 		if !built {
 			continue
@@ -70,3 +70,9 @@ func ConnectionStart(ctx diagnosis.RuleContext) []domain.Finding {
 	}
 	return out
 }
+
+// rationaleStartNotCompleted says what answering the socket established and what
+// it did not.
+const rationaleStartNotCompleted = "Something answered the socket and did not answer AMQP " +
+	"0-9-1, so a listener exists and what it serves is open: the management HTTP API, a TLS " +
+	"listener addressed as plaintext and another protocol all produce this same observation."

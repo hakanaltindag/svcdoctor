@@ -292,9 +292,8 @@ assert "func IndistinguishableSets" in s' \
 # back: a local helper that quietly returns to the action-only shape.
 mutate NBE-M17 "a service-local lossy projection helper returns" \
   internal/diagnosis/postgres/shared.go \
-  's = s.replace("""// recommend wraps one action""",
-"""// projectAdvice is the helper Phase 10.4B deleted.
-func projectAdvice(action string) []domain.Recommendation {
+  's = s.replace("""func recommend(action string) []domain.Recommendation {""",
+"""func projectAdvice(action string) []domain.Recommendation {
 	r, err := domain.NewRecommendation(action)
 	if err != nil {
 		return nil
@@ -302,7 +301,7 @@ func projectAdvice(action string) []domain.Recommendation {
 	return []domain.Recommendation{r}
 }
 
-// recommend wraps one action""", 1)
+func recommend(action string) []domain.Recommendation {""", 1)
 assert "func projectAdvice" in s' \
   ./test/security 'TestNoServiceLocalAdviceProjectionHelperExists'
 

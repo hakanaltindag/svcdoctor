@@ -107,6 +107,57 @@ recur silently. That guard immediately found a twenty-first stale selector (`B07
 **117 planted, 117 caught, 0 unexplained survivors.** Full analysis, per mutation, in
 `docs/validation/V040_RELEASE_CANDIDATE_GATE.md` §2.
 
+## Mutation harness invariant — OPEN, tooling/test-infrastructure debt
+
+**Recorded by Phase 13.1A.1 (2026-09-13). Classification: TOOLING / TEST-INFRASTRUCTURE DEBT. Not
+the next phase, and not a correctness blocker.**
+
+> **A mutation harness must not claim restoration unless it independently verifies the complete
+> mutation write-set, rather than only the configured backup list.**
+
+Phase 13.1B's first run left two plants in the working tree — `internal/diagnosis/kafka/topology.go`
+and `internal/diagnosis/redis/hello.go` were absent from the harness's `FILES` list, so `restore()`
+never touched them — **and it still reported "all files restored byte-for-byte", because it verified
+only the files it knew about.** A backup list that is maintained by hand beside a plant list that is
+maintained by hand will drift, and the verification step inherits the drift instead of catching it.
+
+**This is the fourth instance of the same class**, after the Phase 9.x `grep -q`/SIGPIPE defect, the
+Phase 9.1C stale `-run` selectors, and the Phase 12.2B empty `-run` selection. Every one is a
+harness reporting success while measuring less than it claimed, and every one was found by something
+other than the harness.
+
+**Two durable properties are wanted**, and neither exists as shared tooling today:
+
+1. **Restoration proof must not be scoped to the harness's own file list.** The cheap form is a
+   hash manifest of the whole tree taken before the first plant and recompared after the last.
+   Phase 13.1A.1 used exactly this to revalidate 13.1B — 974 files, identical digest — from a
+   throwaway script in `/tmp`, which is proof the mechanism is a few lines rather than a framework.
+2. **The backup set must be derived from the plant bodies**, not maintained beside them. 13.1B's
+   harness now asserts this for itself; nothing carries it to the other eight suites.
+
+**Do not build a generic mutation framework for this.** The eight committed
+`scripts/phase*-mutations.sh` suites are deliberately standalone and readable, and the value here is
+one invariant applied eight times, not an abstraction. Reopen as a small tooling phase, or fold it
+into whichever phase next writes a mutation suite.
+
+### A second, narrower gap found with it
+
+**The Phase 13.1B mutation harness was never committed.** Every other suite in this repository is
+`scripts/phase<NN>-mutations.sh`; there is no `scripts/phase131b-mutations.sh`, so the 17/17/0
+closure that record reports was not reproducible from the tree. Phase 13.1A.1 reconstructed all 17
+plants from the record's own descriptions and re-ran them — **17 planted, 17 caught, 0 survivors** —
+which is evidence the record was accurate, and not a substitute for committing the harness.
+**Phase 13.1C should commit its suite**, and may adopt 13.1B's plants when it does.
+
+### A documentation drift for whichever phase touches `docs/OUTPUT.md`
+
+`docs/OUTPUT.md` says *"A recommendation with no brackets is one svcdoctor has not classified. That
+is normal — most of the advice in the product predates the classification."* After Phase 13.1B the
+first sentence is still true and **the second is not**: 64 of 73 are classified and 9 remain.
+Phase 13.1A.1's allowed-file list did not include `OUTPUT.md`, so it is recorded rather than edited.
+**Phase 13.1C closes the nine and should rewrite that paragraph in the same change**, at which point
+the bracket-free case disappears entirely.
+
 ## Fixed at the v0.4.0 gate — a guard that passed for the wrong reason
 
 `TestRAB18ManagementPortTargetedAsAMQP` banned the substrings "management" and "http" anywhere in
@@ -5148,6 +5199,147 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **Two findings may now share a code, subject and layer while saying different things.** That is the correct output and it looks like duplication | Reopens only if a renderer study shows readers misread the pair. The fix would be presentational — grouping — never re-merging |
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
+
+## Phase 13.1A.1 — Recommendation renderer contract reconciliation: COMPLETE
+
+**Documentation and ADR only. 0 production, 0 test, 0 renderer, 0 CI, 0 config change.** Record:
+`docs/validation/PHASE131B_MECHANICAL_RECOMMENDATION_CLASSIFICATION.md` §18, with the corrections
+made in place in `docs/validation/PHASE131A_RECOMMENDATION_CLASSIFICATION_CONTRACT_FREEZE.md` and
+ADR **0097 §8**.
+
+Phase 13.1B's implementation discovered that 13.1A had frozen two claims about *existing* behaviour
+incorrectly. 13.1A.1 re-measured both from source, corrected the record, authorized the actual
+behaviour, and revalidated the 13.1B working tree against the corrected contract.
+
+**The rationale is human-visible, and always was.** 13.1A froze it as *canonical-only, no renderer
+prints it*. `internal/render/terminal/findings.go:57` has printed it — its own line, six-column
+indent, unwrapped — since Phase 10.4B (`105e43b`), the same commit that added `adviceTag`.
+`docs/OUTPUT.md` documents it to operators and `next-evidence-classified.txt` pins it as a golden.
+**The existing behaviour was ACCEPTED**, so 13.1B's human-output effect is a tag **and** a rationale
+line on 55 recommendations — and **0 renderer source files changed**, which is the decision 13.1A
+attached to the wrong premise holding exactly.
+
+Two precisions the original wording could not have carried: the renderer's condition is
+**`Rationale() != ""`, not `Classified()`**, coinciding only because one constructor cannot set a
+rationale and the other refuses a blank one; and there is **no Markdown or HTML renderer** —
+`--output markdown|html` is an exit-2 usage error.
+
+**"Every committed golden is synthetic" was too broad.** There are **three** fixture classes, not
+one: `test/golden/testdata` (synthetic aggregate JSON) and `internal/render/terminal/testdata`
+(synthetic report, real renderer) contain no production recommendation and could not move;
+`internal/cli/testdata` is produced by running the real CLI over real loopback sockets, and **5 of
+its 8 moved** — 10 insertions, 5 deletions, every action prefix byte-identical.
+
+**Nothing here reaches a published release.** Rationale rendering landed 2026-09-05; the newest tag
+`v0.4.0` is 2026-09-02.
+
+### Revalidation of the 13.1B tree against the corrected contract
+
+64 rationales re-reviewed as human-facing prose — **0 format verbs, 0 address or hostname tokens,
+0 peer bytes, 0 runtime errors, 0 credentials, 0 contradictions of their own Action, 0 changes
+required.** Action text **73 checked / 0 mismatches**. Counts **73 · 64 structured · 9 legacy in 4
+packages · REMEDIATION 0**. Silent drops **0 of 64**. Output bound **285, unchanged**, widest
+emitted **281**. Shareable green. `make check` green.
+
+**Mutation: 17 planted / 17 caught / 0 survivors**, and the interesting part is how. **13.1B's
+harness was never committed** — no `scripts/phase131b-mutations.sh` exists — so 13.1A.1
+reconstructed all 17 plants from the record's descriptions as a throwaway `/tmp` harness and re-ran
+them. **Restoration was proven against a SHA-256 manifest of all 974 files in the tree**, not
+against any harness's own backup list, which is the invariant the harness-debt section above now
+carries. `phase104b` re-run: **17/17/0**, `NBE-M17` caught with the repaired anchor. No
+`git stash`, `reset`, `checkout` or `restore` anywhere.
+
+`scripts/phase104b-mutations.sh`'s change is **anchor maintenance only**: the old anchor matched 0
+times after 13.1B reworded a comment; the plant body, assertion, target and catching test are
+byte-identical.
+
+**Phase 13.1B is ACCEPTED AS IMPLEMENTED. Next: Phase 13.1C — semantic and high-risk
+recommendation closure.**
+
+## Phase 13.1B — Mechanical recommendation classification: COMPLETE
+
+Record: `docs/validation/PHASE131B_MECHANICAL_RECOMMENDATION_CLASSIFICATION.md`, whose §17 is the
+full 55-row migration ledger and the 9-row deferral table. No ADR: ADR 0097 was sufficient.
+
+**55 migrated · 9 already classified · 9 deferred to 13.1C · 73 total. Structured 9 → 64.**
+Every one of the 73 action strings is **byte-identical** to the baseline, proven by per-constant
+SHA-256 frozen in `test/security/recommendationclassification_test.go` rather than by review.
+Kind NEXT_EVIDENCE **64** / REMEDIATION **0**. Safety OBSERVE **32**, VERIFY **18**, COMPARE **14**,
+everything else **0**. `SelfCollectable` true **2** — still only the two *"re-run with a larger
+execution budget"* sentences — false **62**, absent **0**.
+
+Counts unchanged: codes **69**, rules **24**, failure classes **42**, `SchemaVersion` **1**,
+`RunSchemaVersion` **1**, `Reveal`/`SecretFor` **5/5**. No renderer source, domain model, probe,
+adapter, wire package, CLI, fleet config, dependency or `Makefile` touched.
+
+### Five things a future agent should not re-derive
+
+- **Phase 13.1A was wrong that the rationale is canonical-only.**
+  `internal/render/terminal/findings.go:57` has printed it for every classified recommendation since
+  Phase 10.4B, which is why the nine already-classified ones already showed theirs. So the
+  human-output change is a tag **and a rationale line** on 55 recommendations, not a tag alone. No
+  renderer source changed; the record's statement about existing behaviour did.
+- **13.1A was also too broad about goldens.** The `test/golden` JSON fixtures are synthetic and did
+  not move, but `internal/cli/testdata` is produced by running the real CLI and **five of those
+  changed** — 10 insertions, 5 deletions, nothing but the tag and the rationale line.
+- **A table-only guard set cannot see the wiring.** The first mutation run caught **9 of 17**, and
+  every one of the eight survivors mutated a production *call site* that a frozen table cannot
+  notice — and the golden corpora reach Kafka, PostgreSQL and generic transport but **not Redis or
+  RabbitMQ at all**. The fix is one wiring guard per rule package, driven over that package's own
+  producer matrix; final closure is **17/17/0**.
+- **Two per-package producer matrices were quietly incomplete, and both are worth knowing.**
+  `transport`'s `everyFinding` builds 3 of its 8 recommendations, because it exists to prove three
+  codes build and the five TLS classes share one finding. And `postgres`'s `shapes()` is a map
+  **keyed by finding code**, so where two failure classes share a code —
+  `POSTGRES_AUTHENTICATION_MECHANISM_UNAVAILABLE` has two actions — it silently keeps whichever was
+  built last, leaving one action unreachable from that matrix.
+- **A mixed recommendation list is a real, reachable shape.**
+  `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` emits one sentence per failing transport layer, and only
+  TCP and TLS were migrated, so the finding carries classified **and** unclassified advice while
+  REC-021 stands. The report model admits it and dedup keys on the whole five-field value, so the two
+  never collapse.
+
+### The harness defect, disclosed
+
+**The first mutation run left two plants in the working tree** — `kafka/topology.go` and
+`redis/hello.go` were absent from its backup list, so `restore()` never touched them and it still
+reported *"all files restored byte-for-byte"*, because it verified only the files it knew about. Both
+were found (one by the new Kafka wiring guard, one by the action-text freeze during the race run),
+repaired **by direct edit rather than `git checkout`**, and the whole 73-constant corpus re-verified
+against the pre-edit baseline: 0 mismatches, identical aggregate digest.
+
+**This is the third time this repository has lost a mutation run to a harness reporting success while
+measuring less than it claimed** — after the Phase 9.x `grep -q`/SIGPIPE defect and the Phase 12.2B
+empty `-run` selection. *A mutation harness must prove the set it measured, not the set it intended.*
+The 13.1B harness now derives its backup-set assertion from its own plant bodies.
+
+Two plant anchors went stale and were **repaired rather than retired**, per the Phase 9.x precedent:
+`NBE-M17` in `scripts/phase104b-mutations.sh` anchored on a comment this phase reworded and is
+re-anchored on the function declaration; M12's anchor was a regex over table whitespace `gofmt`
+changed.
+
+### Retired debt
+
+`internal/diagnosis/kafka/nextevidencedebt_test.go` is **deleted** and
+`hypothesesWithoutStructuredNextEvidence` is empty with its pinned size moved 1 → 0, which both files'
+own comments instruct when the debt is paid. **It is paid, not waived**: the DNS sentence is still
+unclassified but cannot be the only recommendation on a hypothesis, because the incomplete branch
+requires an unmeasured causal owner at TCP or TLS, which requires the lookup to have passed. What
+remains is narrower than a finding code and is guarded as such — the legacy allowlist names the
+constant.
+
+### The temporary boundary 13.1C closes
+
+**5 legacy construction sites in 4 packages, serving exactly the 9.** `transport` and `kubernetes`
+hold empty allowlist entries and a call from either fails. The allowlist is shrink-only three ways:
+the package count is pinned at 4, it must name exactly 9 `REC-` identifiers, and those must equal the
+set the frozen corpus marks deferred. `domain.NewRecommendation` stays, because
+`internal/security/redaction` rebuilds through it.
+
+Historical suites: `phase104b` **17/17/0**, `phase102a` **8/8/0**, `phase102` **25/25/0**,
+`phase103` **27/27/0**, `phase101b` **21/21/0**. No historical suite gained a survivor.
+
+**Next: Phase 13.1C — Semantic and high-risk recommendation closure.**
 
 ## Phase 13.1A — Recommendation classification contract freeze: COMPLETE
 

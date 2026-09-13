@@ -49,13 +49,19 @@ import (
 // TestTheOneExemptHypothesisShapeStillExists in internal/diagnosis/kafka fails
 // when the recorded entry stops being reachable, so a debt that has quietly been
 // paid cannot linger here pretending to still be one.
-var hypothesesWithoutStructuredNextEvidence = map[domain.FindingCode]string{
-	"KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE": "its three recommendations are the " +
-		"per-layer transport sentences from ADR 0034 section 18, written before the " +
-		"advice vocabulary existed and still unclassified. Classifying them is a Kafka " +
-		"judgement about Kafka's own advice; Phase 10.4B carried the vocabulary and " +
-		"deliberately reclassified nothing (ADR 0086 section 2.0)",
-}
+// **Empty since Phase 13.1B, and the entry it held was paid rather than
+// waived.** `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`'s per-layer sentences were
+// the one recorded debt; the TCP and TLS ones are now classified NEXT_EVIDENCE,
+// so every reachable shape of that hypothesis carries a structured observation.
+//
+// The DNS sentence is still unclassified — Phase 13.1A REC-021 reserved it for
+// review — but it cannot be a member here: the incomplete branch requires an
+// unmeasured causal owner at TCP or TLS, which requires the lookup to have
+// passed, so no reachable hypothesis offers the DNS sentence alone. What remains
+// of that debt is narrower than a finding code and is guarded as such, by the
+// Phase 13.1B legacy-producer allowlist in test/security, which names the
+// constant rather than the code.
+var hypothesesWithoutStructuredNextEvidence = map[domain.FindingCode]string{}
 
 // TestNBE021EveryHypothesisDiscriminatorHasStructuredNextEvidence drives the
 // production rule sets over the production corpora and inspects what they built.
@@ -128,7 +134,7 @@ func TestNBE021EveryHypothesisDiscriminatorHasStructuredNextEvidence(t *testing.
 	// for — so growing it has to cost a deliberate edit and a written reason,
 	// which is the same friction docs/FINDINGS.md and the frozen-count guards
 	// use elsewhere.
-	const wantExceptions = 1
+	const wantExceptions = 0
 	if got := len(hypothesesWithoutStructuredNextEvidence); got != wantExceptions {
 		t.Errorf("%d exempted codes, want %d.\n\n"+
 			"A new exception is a hypothesis that asks an open question and offers no "+
@@ -137,13 +143,11 @@ func TestNBE021EveryHypothesisDiscriminatorHasStructuredNextEvidence(t *testing.
 			"number together.", got, wantExceptions)
 	}
 
-	// No staleness sweep here, deliberately. This test sees only what the two
-	// corpora reach, and the one exempt shape — the incomplete branch of
-	// KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE — is not among them. Failing on an
+	// No staleness sweep here, deliberately, and the reason survives the list
+	// emptying: this test sees only what the two corpora reach, so failing on an
 	// unexercised entry would make the exemption list depend on corpus coverage
-	// rather than on the product. The entry is kept honest by
-	// TestTheOneExemptHypothesisShapeStillExists in internal/diagnosis/kafka,
-	// which builds that shape directly.
+	// rather than on the product. With the list empty the loop above cannot
+	// record anything, which is the correct reading of "no code is exempt".
 	_ = seenExempt
 }
 

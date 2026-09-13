@@ -193,7 +193,7 @@ func connectionOpenFinding(node domain.Evidence) (domain.FindingInput, bool) {
 			// A virtual host's existence does not vary by the source of the
 			// connection.
 			VantageDependent: false,
-			Recommendations:  recommend(recommendVHostNotFound),
+			Recommendations:  advise(diagnosis.SafetyVerify, recommendVHostNotFound, rationaleVHostNotFound),
 		}, true
 
 	case domain.FailureAuthzDenied:
@@ -223,7 +223,7 @@ func connectionOpenFinding(node domain.Evidence) (domain.FindingInput, bool) {
 			// a node-wide one is reached by every client at once — but a
 			// per-user ceiling is not, and svcdoctor does not separate them here.
 			VantageDependent: true,
-			Recommendations:  recommend(recommendConnectionNotPermitted),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendConnectionNotPermitted, rationaleConnectionNotPermitted),
 		}, true
 
 	default:
@@ -236,7 +236,7 @@ func connectionOpenFinding(node domain.Evidence) (domain.FindingInput, bool) {
 			Summary:          summaryConnectionNotEstablished,
 			Detail:           detailConnectionNotEstablished,
 			VantageDependent: true,
-			Recommendations:  recommend(recommendConnectionNotEstablished),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendConnectionNotEstablished, rationaleConnectionNotEstablished),
 		}, true
 	}
 }
@@ -316,3 +316,23 @@ func vhostNotFoundDetail(node domain.Evidence) string {
 	}
 	return detailVHostNotFound
 }
+
+// The rationales for the three classified claims in this file.
+//
+// `recommendVHostAccessRefused` has none: it asks for a permission grant the
+// refusal does not establish is correct, and Phase 13.1A reserved it as REC-067.
+const (
+	rationaleVHostNotFound = "The broker answered that the virtual host is not there, which " +
+		"fixes the mismatch and not which half is wrong; a virtual-host name is " +
+		"case-sensitive and may carry a leading slash, and the broker's own list is the other " +
+		"half of the comparison."
+
+	rationaleConnectionNotPermitted = "The broker refused this attempt and named at most the " +
+		"scope of a limit, never its value or its current usage, so an authoritative refusal " +
+		"of this connection is not proof of global capacity; the broker's log and its node, " +
+		"virtual-host and user limits are where the number lives."
+
+	rationaleConnectionNotEstablished = "The connection ended after authentication and before " +
+		"it was usable, so the credential is not in question; the broker's log and whether a " +
+		"proxy terminates the connection are the two accounts of what closed it."
+)

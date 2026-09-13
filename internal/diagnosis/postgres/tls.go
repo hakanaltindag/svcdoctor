@@ -154,6 +154,8 @@ type tlsClaim struct {
 	summary        string
 	detail         string
 	recommendation string
+	safety         diagnosis.SafetyClass
+	rationale      string
 }
 
 // tlsClaims is the closed mapping ADR 0044 section 5 fixes.
@@ -175,36 +177,48 @@ var tlsClaims = map[domain.FailureClass]tlsClaim{
 		summary:        summaryTLSUpgradeNotHonored,
 		detail:         detailTLSUpgradeNotHonored,
 		recommendation: recommendTLSUpgradeNotHonored,
+		safety:         diagnosis.SafetyObserve,
+		rationale:      rationaleTLSUpgradeNotHonored,
 	},
 	domain.FailureTLSHostnameMismatch: {
 		code:           CodeTLSIdentityMismatch,
 		summary:        summaryTLSIdentityMismatch,
 		detail:         detailTLSIdentityMismatch,
 		recommendation: recommendTLSIdentityMismatch,
+		safety:         diagnosis.SafetyCompare,
+		rationale:      rationaleTLSIdentityMismatch,
 	},
 	domain.FailureTLSUnknownAuthority: {
 		code:           CodeTLSChainNotTrusted,
 		summary:        summaryTLSChainNotTrusted,
 		detail:         detailTLSChainNotTrusted,
 		recommendation: recommendTLSChainNotTrusted,
+		safety:         diagnosis.SafetyCompare,
+		rationale:      rationaleTLSChainNotTrusted,
 	},
 	domain.FailureTLSCertificateExpired: {
 		code:           CodeTLSCertificateNotValidNow,
 		summary:        summaryTLSCertificateNotValidNow,
 		detail:         detailTLSCertificateNotValidNow,
 		recommendation: recommendTLSCertificateNotValidNow,
+		safety:         diagnosis.SafetyCompare,
+		rationale:      rationaleTLSCertificateNotValidNow,
 	},
 	domain.FailureTLSCertificateNotYetValid: {
 		code:           CodeTLSCertificateNotValidNow,
 		summary:        summaryTLSCertificateNotValidNow,
 		detail:         detailTLSCertificateNotValidNow,
 		recommendation: recommendTLSCertificateNotValidNow,
+		safety:         diagnosis.SafetyCompare,
+		rationale:      rationaleTLSCertificateNotValidNow,
 	},
 	domain.FailureTLSHandshakeFailure: {
 		code:           CodeTLSHandshakeFailed,
 		summary:        summaryTLSHandshakeFailed,
 		detail:         detailTLSHandshakeFailed,
 		recommendation: recommendTLSHandshakeFailed,
+		safety:         diagnosis.SafetyObserve,
+		rationale:      rationaleTLSHandshakeFailed,
 	},
 }
 
@@ -348,7 +362,7 @@ func evaluateTLS(g domain.Graph, node domain.Evidence) (domain.Finding, bool) {
 		// antecedent. Nothing above is cited: neither the connection nor the
 		// anchor proves anything about TLS.
 		EvidenceRefs:    []domain.EvidenceID{negotiation.ID(), node.ID()},
-		Recommendations: recommend(claim.recommendation),
+		Recommendations: advise(claim.safety, claim.recommendation, claim.rationale),
 	})
 }
 
@@ -368,3 +382,28 @@ func soleParent(g domain.Graph, node domain.Evidence) (domain.Evidence, bool) {
 	parent, ok := g.Node(parents[0])
 	return parent, ok
 }
+
+// The rationales for the five TLS claims. Three are comparisons, and each names
+// the half of the comparison this client held.
+const (
+	rationaleTLSUpgradeNotHonored = "The SSL negotiation was accepted and the handshake that " +
+		"should have followed was not served, so something terminates connections at this " +
+		"endpoint after negotiation; whether that is the component meant to serve TLS is not " +
+		"visible from the client side."
+
+	rationaleTLSIdentityMismatch = "Trust and identity are separate and only identity failed, " +
+		"so the chain verified and the names did not match the identity this run was asked to " +
+		"verify; which of the two is wrong is what the comparison settles."
+
+	rationaleTLSChainNotTrusted = "The chain the endpoint presented is recorded and the trust " +
+		"material this run was given is the other half of the same decision, so comparing them " +
+		"separates an unexpected chain from a run given the wrong roots."
+
+	rationaleTLSCertificateNotValidNow = "Validity is a comparison between the certificate's " +
+		"window and a clock, and svcdoctor read only this host's; which of the two is the " +
+		"surprising half is the one thing the handshake cannot show."
+
+	rationaleTLSHandshakeFailed = "The handshake recorded what it observed and asserts no " +
+		"cause, and what versions this endpoint accepts is not something a client learns from " +
+		"a handshake that did not complete."
+)

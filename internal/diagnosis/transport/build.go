@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
@@ -17,6 +18,12 @@ type buildInput struct {
 	summary        string
 	detail         string
 	recommendation string
+
+	// safety and rationale classify the recommendation, and they are parameters
+	// for the same reason the action is: the three codes differ in what they ask
+	// a reader to do about them. Everything the three share stays in build.
+	safety    diagnosis.SafetyClass
+	rationale string
 }
 
 // build assembles a generic transport finding.
@@ -61,7 +68,7 @@ func build(in buildInput) (domain.Finding, bool) {
 		Summary:          in.summary,
 		Detail:           in.detail,
 		EvidenceRefs:     in.refs,
-		Recommendations:  recommendations(in.recommendation),
+		Recommendations:  recommendations(in.safety, in.recommendation, in.rationale),
 		VantageDependent: true,
 	})
 	if err != nil {
@@ -74,14 +81,33 @@ func build(in buildInput) (domain.Finding, bool) {
 	return finding, true
 }
 
-// recommendations wraps one action, or none if it cannot be constructed.
-func recommendations(action string) []domain.Recommendation {
-	recommendation, err := domain.NewRecommendation(action)
-	if err != nil {
-		// Unreachable: every action is a non-empty, trimmed,
-		// control-character-free constant. Pinned by
-		// TestRecommendationTextIsValid.
-		return nil
-	}
-	return []domain.Recommendation{recommendation}
+// recommendations wraps one classified observation, or none if it cannot be
+// constructed.
+//
+// **Every recommendation this package produces is NEXT_EVIDENCE**, and its
+// safety class is one of the three read-only ones: each of the eight asks a
+// reader to look at a resolver, a route, a certificate or the evidence already
+// recorded, and none asks for a change. `diagnosis.NewAdvice` refuses the three
+// high-blast-radius classes outright and refuses a next-evidence recommendation
+// that changes anything, so "no transport recommendation is a remediation" is a
+// property of the construction path rather than a rule somebody has to remember
+// (ADR 0097 section 2.1, ADR 0082 section 2.3).
+//
+// The finding kind and confidence are the ones build applies unconditionally,
+// because they are what AdmitAdvice is handed and it would refuse an invalid
+// pair rather than the intended advice.
+func recommendations(
+	safety diagnosis.SafetyClass, action, rationale string,
+) []domain.Recommendation {
+	return diagnosis.Recommend(diagnosis.AdviceInput{
+		Kind:   diagnosis.AdviceKindNextEvidence,
+		Safety: safety,
+		Action: action,
+		// svcdoctor cannot take any of these in any run: a resolver's
+		// configuration, a firewall rule and an endpoint's TLS settings are all
+		// outside what a client observes, and the certificate comparisons are
+		// against an intent nobody declared to it.
+		SelfCollectable: false,
+		Rationale:       rationale,
+	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
 }

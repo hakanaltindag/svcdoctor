@@ -47,6 +47,20 @@ const (
 		"reachable and answering from this network position"
 )
 
+// The rationales. Each says what the run established and names the distinction
+// the next observation would settle, and neither reaches for a cause.
+const (
+	rationaleNameNotResolved = "svcdoctor asked this host's own resolver for the name the " +
+		"target declared and was answered that it has no address, so whether the name or " +
+		"the zone that should carry it is the surprising half is the one thing this " +
+		"observation cannot settle."
+
+	rationaleResolutionFailed = "The lookup did not return an answer at all, which says " +
+		"nothing about whether the name exists; the resolver this host is configured to use " +
+		"is the only place a reachable-but-silent resolver and an unreachable one are " +
+		"distinguished."
+)
+
 // The summaries. One stable sentence each, and neither varies by subcase.
 const (
 	summaryNameNotResolved = "The requested hostname did not resolve to a usable address " +
@@ -135,14 +149,18 @@ func evaluateDNS(s sweep) (domain.Finding, bool) {
 		summary        string
 		detail         string
 		recommendation string
+		safety         diagnosis.SafetyClass
+		rationale      string
 	)
 	switch s.lookup.FailureClass() {
 	case domain.FailureDNSNoAddress:
 		code, summary, detail = CodeNameNotResolved, summaryNameNotResolved, detailNameNotResolved
 		recommendation = recommendNameNotResolved
+		safety, rationale = diagnosis.SafetyVerify, rationaleNameNotResolved
 	case domain.FailureDNSTimeout, domain.FailureDNSResolverFailure:
 		code, summary, detail = CodeResolutionFailed, summaryResolutionFailed, detailResolutionFailed
 		recommendation = recommendResolutionFailed
+		safety, rationale = diagnosis.SafetyVerify, rationaleResolutionFailed
 	default:
 		// Includes DNS_NXDOMAIN, which no producer emits, and every class from
 		// another layer's vocabulary. Withholding is the only honest response to
@@ -162,5 +180,7 @@ func evaluateDNS(s sweep) (domain.Finding, bool) {
 		summary:        summary,
 		detail:         detail,
 		recommendation: recommendation,
+		safety:         safety,
+		rationale:      rationale,
 	})
 }

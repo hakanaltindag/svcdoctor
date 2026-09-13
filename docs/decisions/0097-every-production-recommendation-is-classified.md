@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-09
+- **Amended:** 2026-09-13 by Phase 13.1A.1 — §8 corrects one factual error about existing renderer
+  behaviour and the §3 consequence and §7 reopen row that followed from it. **No decision in this
+  record changed**: the rule, the guardrails, the refusals, the phasing and the counts all stand
 - **Phase:** 13.1A (contract freeze; no production, test or CI change)
 - **Extends:** ADR 0082, whose vocabulary, guardrails and refusals are unchanged. This record adds
   two rules ADR 0082 deliberately did not make, and reverses one sentence in the domain model.
@@ -120,6 +123,9 @@ field population, not schema evolution.
 - **Terminal output gains a classification tag** on 64 recommendations. That is the point rather than
   a side effect: *"you must collect"* and *"svcdoctor can collect"* is the hand-over made visible,
   which ADR 0096 §2.5 makes part of the product boundary.
+- **Terminal output also gains a rationale line** on those same recommendations — *added by the
+  Phase 13.1A.1 amendment, see §8*. The renderer has printed the rationale since Phase 10.4B; this
+  record's original text said it did not.
 - **Six recommendation strings change.** That is a behaviour change, it is enumerated in the Phase
   13.1A record, and it is reviewed as prose rather than as metadata.
 - **The `SelfCollectable: true` inventory becomes complete**, and today it would be **2** — both
@@ -196,5 +202,84 @@ requires a companion proving it can fail.
 | `domain.NewRecommendation` is removed | The redaction path stops needing it |
 | `RecommendationCode` identity | A named consumer — a planner, a report differ, or a runbook that must reference a recommendation across versions |
 | Next-evidence observation identity | The planner is reopened first. Never before |
-| Rationale becomes renderer-visible | An operator study showing the rationale is wanted at the terminal; it is canonical-only until then |
+| ~~Rationale becomes renderer-visible~~ | ~~An operator study showing the rationale is wanted at the terminal; it is canonical-only until then~~ **Void — the premise was false. The rationale has been renderer-visible since Phase 10.4B. See §8.** The live reopen condition in its place is *rationale stops being renderer-visible*, which requires its own record and a renderer change |
 | One-constant-one-classification | None. It is what makes convergence neutrality provable |
+
+## 8. Reconciliation — Phase 13.1A.1, 2026-09-13
+
+This section is an **amendment, not a supersession**. It corrects a statement of fact about shipped
+behaviour, and every decision §2 makes stands unchanged.
+
+### 8.1 The error
+
+§5 and §7 of this record, and §7.4 and §11.3 of
+`docs/validation/PHASE131A_RECOMMENDATION_CLASSIFICATION_CONTRACT_FREEZE.md`, stated that the
+rationale is **canonical-only** and that **no renderer prints it**. That was factually inconsistent
+with the renderer this repository already had.
+
+`internal/render/terminal/findings.go` prints it, and has since Phase 10.4B — commit `105e43b`,
+2026-09-05, the same commit that added `adviceTag`:
+
+```go
+for _, recommendation := range finding.Recommendations() {
+    if action := recommendation.Action(); action != "" {
+        _, _ = fmt.Fprintf(out, "    → %s%s\n", action, adviceTag(recommendation))
+    }
+    if rationale := recommendation.Rationale(); rationale != "" {
+        _, _ = fmt.Fprintln(out, indent(rationale, "      "))
+    }
+}
+```
+
+It is not incidental behaviour either. `docs/OUTPUT.md` documents it to operators — *"The indented
+line beneath is the **rationale**: why that observation discriminates"* — and
+`internal/render/terminal/testdata/next-evidence-classified.txt` has pinned it as a golden since the
+same commit. The error was in this record, not in the product.
+
+### 8.2 What the correction is not
+
+It is **not** a licence to put anything new in a rationale. Every constraint §5 places on the field
+is unchanged and is now load-bearing for a *human-facing* string rather than only a canonical one:
+svcdoctor-owned bounded prose, no peer bytes, no runtime error text, no formatted attribute value,
+no credential, and nothing may branch on its content.
+
+It is also not a schema or a renderer change. `SchemaVersion` stays **1**, and the corrected
+contract is satisfied by **zero** renderer source files.
+
+### 8.3 The corrected field contract, from source
+
+| Field | Canonical JSON | Terminal | Condition to appear | Machine-readable |
+|---|---|---|---|---|
+| `action` | `action`, always present | `    → <action>` | non-empty | the stable unit; byte-frozen per constant |
+| `kind` | `kind,omitempty` | inside `[ … ]` | `Classified()` | **yes** — closed enumeration |
+| `safety` | `safety,omitempty` | inside `[ … ]` | `Classified()` | **yes** — closed enumeration |
+| `selfCollectable` | `selfCollectable,omitempty`, a `*bool` emitted only for `NEXT_EVIDENCE` | `svcdoctor can collect` / `you must collect` inside `[ … ]` | `Classified()` and kind is `NEXT_EVIDENCE` | **yes** — tri-state present-true / present-false / absent |
+| `rationale` | `rationale,omitempty` | its own line, six-column indent, immediately beneath the action, **not wrapped** | `Rationale() != ""` | **no** — prose; nothing may branch on it |
+
+Two precisions worth keeping. The rationale line's condition is **`Rationale() != ""`, not
+`Classified()`** — an independent test in the renderer that coincides with classification only
+because `domain.NewRecommendation` cannot set a rationale and `NewClassifiedRecommendation` refuses
+a blank one. And **there is no Markdown or HTML renderer**: `internal/render` holds `terminal` and
+`json`, and `--output markdown|html` is an exit-2 usage error.
+
+Redaction is unchanged and covers the corrected contract: `redact.go` passes the rationale through
+the same `t.text()` transformation as the action, and carries `kind`, `safety` and
+`selfCollectable` across untransformed because a closed enumeration and a boolean cannot hold an
+identity.
+
+### 8.4 The consequence that was mispredicted
+
+§3 predicted that classification would add **a tag** to human output. It adds **a tag and a rationale
+line**. Phase 13.1B measured it: 5 of the 8 `internal/cli/testdata` fixtures moved, by 10 insertions
+and 5 deletions, and in every one of them the action text is byte-identical and the only additions
+are the tag appended to that line and one rationale line beneath it.
+
+Phase 13.1A.1 accepted the existing renderer behaviour rather than suppressing it. The alternative —
+making the rationale canonical-only in fact as well as in the record — would have required deleting
+a documented, golden-pinned feature, and would have been a renderer change with its own phase. It
+was refused.
+
+### 8.5 Released-behaviour scope
+
+None of this reaches a published release. Rationale rendering landed on 2026-09-05; the newest tag,
+`v0.4.0`, is 2026-09-02. No released binary prints a classification tag or a rationale.

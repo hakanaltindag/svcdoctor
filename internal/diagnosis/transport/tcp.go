@@ -52,6 +52,13 @@ const recommendConnectionNotEstablished = "Check that the endpoint accepts conne
 	"this port from this network position, and read the per-address outcomes recorded on " +
 	"the referenced evidence"
 
+// rationaleConnectionNotEstablished says what the failure classes already
+// separate, and why the remaining half is not svcdoctor's to see.
+const rationaleConnectionNotEstablished = "The recorded failure classes already separate a " +
+	"host that declined the connection from one where nothing answered; what remains is " +
+	"whether this port is meant to accept connections from this network position, a property " +
+	"of the endpoint and the path rather than of the attempt."
+
 const summaryConnectionNotEstablished = "No measured TCP connection to the requested " +
 	"endpoint completed from this vantage point"
 
@@ -219,5 +226,7 @@ func evaluateTCP(s sweep) (domain.Finding, bool) {
 		summary:        summaryConnectionNotEstablished,
 		detail:         detail,
 		recommendation: recommendConnectionNotEstablished,
+		safety:         diagnosis.SafetyVerify,
+		rationale:      rationaleConnectionNotEstablished,
 	})
 }

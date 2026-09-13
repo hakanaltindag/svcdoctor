@@ -3,6 +3,7 @@ package postgres
 import (
 	"strings"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicepostgres "github.com/hakanaltindag/svcdoctor/internal/service/postgres"
 )
@@ -66,7 +67,7 @@ func notPermitted(anchor domain.Evidence, layer domain.Layer, refs []domain.Evid
 		// proved rather than merely not excludable (ADR 0040 section 6.1).
 		VantageDependent: true,
 		EvidenceRefs:     refs,
-		Recommendations:  recommend(recommendNotPermitted),
+		Recommendations:  advise(diagnosis.SafetyObserve, recommendNotPermitted, rationaleNotPermitted),
 	})
 }
 
@@ -90,9 +91,50 @@ func build(in domain.FindingInput) (domain.Finding, bool) {
 	return finding, true
 }
 
-// recommend wraps one action, dropping it only if the constant were malformed.
+// advise wraps one classified observation.
 //
-// TestEveryRecommendationTextIsValid pins that none is.
+// **Every recommendation this package produces is NEXT_EVIDENCE**, and its
+// safety class is one of the three read-only ones: each asks a reader to look at
+// a server log, a host-based access rule, a privilege or a certificate, and none
+// asks for a change. `diagnosis.NewAdvice` refuses the three high-blast-radius
+// classes outright and refuses a next-evidence recommendation that changes
+// anything, so the property is structural rather than remembered (ADR 0097
+// section 2.1, ADR 0082 section 2.3).
+//
+// Every PostgreSQL finding that carries advice is CONFIRMED at HIGH, which is
+// what AdmitAdvice is handed; it refuses an invalid pair rather than the intended
+// advice.
+func advise(
+	safety diagnosis.SafetyClass, action, rationale string,
+) []domain.Recommendation {
+	return diagnosis.Recommend(diagnosis.AdviceInput{
+		Kind:   diagnosis.AdviceKindNextEvidence,
+		Safety: safety,
+		Action: action,
+		// svcdoctor cannot take any of these. PostgreSQL BASIC executes no SQL,
+		// so a server log, a `pg_hba` rule, a CONNECT privilege and the set of
+		// mechanisms an endpoint offers a role are all outside what this client
+		// observes — and the certificate comparisons are against an intent
+		// nobody declared to it.
+		SelfCollectable: false,
+		Rationale:       rationale,
+	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
+}
+
+// recommend wraps one unclassified action, dropping it only if the constant were
+// malformed.
+//
+// **The remaining legacy construction site in this package**, and it serves only
+// the three actions Phase 13.1C owns: `recommendCredentialWithheld` and
+// `recommendUnsupportedBySvcdoctor`, whose scope is ambiguous between a change to
+// the endpoint and a change to this run, and `recommendMechanismUnsupported`,
+// whose second clause asks the server to reconfigure its authentication so that
+// the diagnostic tool can authenticate. ADR 0097 section 2.1 forbids a production
+// rule from declining to classify its advice; this exemption is temporary, named
+// in the Phase 13.1B allowlist, and removed with the review that rewrites those
+// sentences.
+//
+// TestEveryRecommendationTextIsValid pins that none is malformed.
 func recommend(action string) []domain.Recommendation {
 	recommendation, err := domain.NewRecommendation(action)
 	if err != nil {
@@ -270,3 +312,10 @@ func floorDetail(base string, node domain.Evidence) string {
 
 	return strings.Join(parts, "\n")
 }
+
+// rationaleNotPermitted says what a host-based refusal establishes and what it
+// leaves to the server's own rules.
+const rationaleNotPermitted = "The endpoint refused the connection on its host-based rules " +
+	"rather than on the credential, so the decision keyed on the role and the address this run " +
+	"connected from; those rules are the server's and PostgreSQL BASIC executes no SQL to read " +
+	"them."

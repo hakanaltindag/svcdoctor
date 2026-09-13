@@ -271,6 +271,61 @@ const (
 		"authenticated principal may describe the cluster"
 )
 
+// The rationales. Each says what this client established and names the half of
+// the question the protocol did not answer.
+//
+// `recommendCredentialWithheld` has none, deliberately: its action is the one
+// Phase 13.1C reviews, and writing a rationale for a sentence whose meaning is
+// unsettled would settle it here instead.
+const (
+	rationaleVersionRejected = "The broker answered that it does not accept the request " +
+		"version this client offered, which fixes the mismatch and not its cause; the version " +
+		"on the referenced evidence and the broker's own version are the two halves of it."
+
+	rationaleAPIVersionsNotCompleted = "The exchange that establishes what a broker speaks is " +
+		"the one that did not complete, so nothing was learned about the peer at all — and " +
+		"what is listening on this address and whether anything rewrites the connection are " +
+		"outside what this client observed."
+
+	rationaleMechanismNotOffered = "The broker listed the mechanisms it offers on this " +
+		"listener and this run was configured for one of them, so the two lists are what " +
+		"differ; which side to change is a decision the listed mechanisms do not make."
+
+	rationaleHandshakeNotCompleted = "The SASL handshake ended without an answer on a " +
+		"connection that had already reached the broker, and whether the listener expects " +
+		"SASL at all is recorded only on the broker's own side."
+
+	rationaleCredentialsRejected = "The broker rejected the credential and its protocol " +
+		"carries no reason for it, so a wrong secret and an unknown principal are the same " +
+		"observation here; the credential this run used and the broker's authentication " +
+		"backend are where they separate."
+
+	rationalePeerVerificationFailed = "A credential was presented to a peer whose identity " +
+		"this run could not establish, so what the endpoint is matters before what it said " +
+		"about the credential does."
+
+	rationaleUnsupportedExchange = "The exchange exceeded a bound svcdoctor applies rather " +
+		"than one the broker stated, so the limit that applied is recorded on the evidence and " +
+		"a correctly behaving endpoint would make this svcdoctor's gap to close."
+
+	rationaleAuthenticationNotCompleted = "Authentication ended without the broker taking a " +
+		"position, which is not a rejection; the broker's log for this connection is the only " +
+		"place an unanswered attempt and a refused one are distinguished."
+
+	rationaleUnsupportedBySvcdoctor = "The listener negotiated a mechanism svcdoctor does not " +
+		"perform, so this states the tool's coverage and nothing about the endpoint; what the " +
+		"listener offers and what another client would complete are both still open."
+
+	rationaleCredentialNotConfigured = "No credential was supplied for this endpoint, so " +
+		"authentication was never attempted and the endpoint took no position on one; whether " +
+		"this listener requires a credential at all is not something an unattempted exchange " +
+		"shows."
+
+	rationaleMetadataNotCompleted = "Authentication completed and the cluster description did " +
+		"not, so the two are separate outcomes; whether the authenticated principal may " +
+		"describe the cluster is an authorization fact held on the broker's side."
+)
+
 // claim is what one authorized outcome supports.
 type claim struct {
 	code           domain.FindingCode
@@ -278,6 +333,17 @@ type claim struct {
 	summary        string
 	detail         string
 	recommendation string
+
+	// safety and rationale classify the recommendation (ADR 0097 section 2.1).
+	//
+	// **SafetyUnspecified means the entry is one Phase 13.1C owns.** Exactly one
+	// is — CodeCredentialWithheld, whose action is ambiguous about whether
+	// "establish verified TLS" is a change to the broker or trust material
+	// supplied to svcdoctor (Phase 13.1A REC-012) — and its advice stays
+	// unclassified until that sentence is reviewed rather than being classified
+	// on a reading nobody has made.
+	safety    diagnosis.SafetyClass
+	rationale string
 
 	// vantageDependent is decided per claim rather than shared.
 	//
@@ -352,6 +418,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryVersionRejected,
 		detail:           detailVersionRejected,
 		recommendation:   recommendVersionRejected,
+		safety:           diagnosis.SafetyCompare,
+		rationale:        rationaleVersionRejected,
 	},
 	{servicekafka.StepAPIVersions, domain.StateFail, domain.FailureProtocolUnexpectedResponse}: {
 		code:     CodeAPIVersionsNotCompleted,
@@ -363,6 +431,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryAPIVersionsNotCompleted,
 		detail:           detailAPIVersionsNotCompleted,
 		recommendation:   recommendAPIVersionsNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleAPIVersionsNotCompleted,
 	},
 	{servicekafka.StepAPIVersions, domain.StateFail, domain.FailureProtocolMalformedResponse}: {
 		code:             CodeAPIVersionsNotCompleted,
@@ -371,6 +441,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryAPIVersionsNotCompleted,
 		detail:           detailAPIVersionsNotCompleted,
 		recommendation:   recommendAPIVersionsNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleAPIVersionsNotCompleted,
 	},
 	{servicekafka.StepAPIVersions, domain.StateFail, domain.FailureProtocolPeerClosed}: {
 		code:             CodeAPIVersionsNotCompleted,
@@ -379,6 +451,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryAPIVersionsNotCompleted,
 		detail:           detailAPIVersionsNotCompleted,
 		recommendation:   recommendAPIVersionsNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleAPIVersionsNotCompleted,
 	},
 
 	// --- L5 mechanism negotiation -----------------------------------------
@@ -396,6 +470,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryMechanismNotOffered,
 		detail:           detailMechanismNotOffered,
 		recommendation:   recommendMechanismNotOffered,
+		safety:           diagnosis.SafetyCompare,
+		rationale:        rationaleMechanismNotOffered,
 	},
 	{servicekafka.StepSASLHandshake, domain.StateFail, domain.FailureProtocolUnsupportedVersion}: {
 		code:             CodeSASLHandshakeNotCompleted,
@@ -404,6 +480,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryHandshakeNotCompleted,
 		detail:           detailHandshakeNotCompleted,
 		recommendation:   recommendHandshakeNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleHandshakeNotCompleted,
 	},
 	{servicekafka.StepSASLHandshake, domain.StateFail, domain.FailureProtocolUnexpectedResponse}: {
 		code:             CodeSASLHandshakeNotCompleted,
@@ -412,6 +490,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryHandshakeNotCompleted,
 		detail:           detailHandshakeNotCompleted,
 		recommendation:   recommendHandshakeNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleHandshakeNotCompleted,
 	},
 	{servicekafka.StepSASLHandshake, domain.StateFail, domain.FailureProtocolMalformedResponse}: {
 		code:             CodeSASLHandshakeNotCompleted,
@@ -420,6 +500,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryHandshakeNotCompleted,
 		detail:           detailHandshakeNotCompleted,
 		recommendation:   recommendHandshakeNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleHandshakeNotCompleted,
 	},
 	{servicekafka.StepSASLHandshake, domain.StateFail, domain.FailureProtocolPeerClosed}: {
 		code:             CodeSASLHandshakeNotCompleted,
@@ -428,6 +510,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryHandshakeNotCompleted,
 		detail:           detailHandshakeNotCompleted,
 		recommendation:   recommendHandshakeNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleHandshakeNotCompleted,
 	},
 
 	// --- L5 authentication -------------------------------------------------
@@ -442,6 +526,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryCredentialsRejected,
 		detail:           detailCredentialsRejected,
 		recommendation:   recommendCredentialsRejected,
+		safety:           diagnosis.SafetyVerify,
+		rationale:        rationaleCredentialsRejected,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureAuthPeerVerificationFailed}: {
 		code:     CodePeerVerificationFailed,
@@ -453,6 +539,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryPeerVerificationFailed,
 		detail:           detailPeerVerificationFailed,
 		recommendation:   recommendPeerVerificationFailed,
+		safety:           diagnosis.SafetyVerify,
+		rationale:        rationalePeerVerificationFailed,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateUnknown, domain.FailureExecUnsupportedBySvcdoctor}: {
 		// The same claim CodeAuthenticationUnsupportedBySvcdoctor already makes
@@ -475,6 +563,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryUnsupportedExchange,
 		detail:           detailUnsupportedExchange,
 		recommendation:   recommendUnsupportedExchange,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleUnsupportedExchange,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureAuthMechanismNotOffered}: {
 		code:             CodeAuthMechanismNotOffered,
@@ -483,6 +573,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryMechanismNotOffered,
 		detail:           detailMechanismNotOffered,
 		recommendation:   recommendMechanismNotOffered,
+		safety:           diagnosis.SafetyCompare,
+		rationale:        rationaleMechanismNotOffered,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureProtocolUnsupportedVersion}: {
 		code:             CodeAuthenticationNotCompleted,
@@ -491,6 +583,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryAuthenticationNotCompleted,
 		detail:           detailAuthenticationNotCompleted,
 		recommendation:   recommendAuthenticationNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleAuthenticationNotCompleted,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureProtocolUnexpectedResponse}: {
 		code:             CodeAuthenticationNotCompleted,
@@ -499,6 +593,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryAuthenticationNotCompleted,
 		detail:           detailAuthenticationNotCompleted,
 		recommendation:   recommendAuthenticationNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleAuthenticationNotCompleted,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureProtocolMalformedResponse}: {
 		code:             CodeAuthenticationNotCompleted,
@@ -507,6 +603,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryAuthenticationNotCompleted,
 		detail:           detailAuthenticationNotCompleted,
 		recommendation:   recommendAuthenticationNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleAuthenticationNotCompleted,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateFail, domain.FailureProtocolPeerClosed}: {
 		code:             CodeAuthenticationNotCompleted,
@@ -515,6 +613,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryAuthenticationNotCompleted,
 		detail:           detailAuthenticationNotCompleted,
 		recommendation:   recommendAuthenticationNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleAuthenticationNotCompleted,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateUnknown, domain.FailureAuthMechanismUnsupported}: {
 		code: CodeAuthenticationUnsupportedBySvcdoctor,
@@ -531,6 +631,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryUnsupportedBySvcdoctor,
 		detail:           detailUnsupportedBySvcdoctor,
 		recommendation:   recommendUnsupportedBySvcdoctor,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleUnsupportedBySvcdoctor,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateSkipped, domain.FailureExecSkippedByPolicy}: {
 		code: CodeCredentialWithheld,
@@ -564,6 +666,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryCredentialNotConfigured,
 		detail:           detailCredentialNotConfigured,
 		recommendation:   recommendCredentialNotConfigured,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleCredentialNotConfigured,
 	},
 
 	// --- L6 topology discovery ---------------------------------------------
@@ -574,6 +678,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryMetadataNotCompleted,
 		detail:           detailMetadataNotCompleted,
 		recommendation:   recommendMetadataNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleMetadataNotCompleted,
 	},
 	{servicekafka.StepMetadata, domain.StateFail, domain.FailureProtocolMalformedResponse}: {
 		code:             CodeMetadataNotCompleted,
@@ -582,6 +688,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryMetadataNotCompleted,
 		detail:           detailMetadataNotCompleted,
 		recommendation:   recommendMetadataNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleMetadataNotCompleted,
 	},
 	{servicekafka.StepMetadata, domain.StateFail, domain.FailureProtocolPeerClosed}: {
 		code:             CodeMetadataNotCompleted,
@@ -590,6 +698,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryMetadataNotCompleted,
 		detail:           detailMetadataNotCompleted,
 		recommendation:   recommendMetadataNotCompleted,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleMetadataNotCompleted,
 	},
 }
 
@@ -696,7 +806,7 @@ func buildProtocol(
 		Summary:          c.summary,
 		Detail:           detailWithMechanism(c.detail, node),
 		EvidenceRefs:     protocolRefs(g, node, c.code),
-		Recommendations:  recommend(c.recommendation),
+		Recommendations:  c.recommendations(),
 		VantageDependent: c.vantageDependent,
 	})
 	if err != nil {
@@ -748,7 +858,50 @@ func detailWithMechanism(detail string, node domain.Evidence) string {
 	return fmt.Sprintf("%s\nThe mechanism this step concerned was %s.", detail, mechanism)
 }
 
-// recommend wraps one action, dropping it if the model rejects the text.
+// recommendations builds this claim's advice, classified unless the claim is one
+// Phase 13.1C owns.
+func (c claim) recommendations() []domain.Recommendation {
+	if c.safety == diagnosis.SafetyUnspecified {
+		return recommend(c.recommendation)
+	}
+	return advise(c.safety, c.recommendation, c.rationale)
+}
+
+// advise wraps one classified observation.
+//
+// **Every recommendation it produces is NEXT_EVIDENCE**, and its safety class is
+// one of the three read-only ones: every entry in the table asks a reader to look
+// at a broker log, a listener's configuration or the evidence already recorded,
+// and none asks for a change. `diagnosis.NewAdvice` refuses the three
+// high-blast-radius classes outright and refuses a next-evidence recommendation
+// that changes anything, so the property holds by construction rather than by
+// memory (ADR 0097 section 2.1, ADR 0082 section 2.3).
+//
+// The kind and confidence are the ones buildProtocol applies to every claim,
+// because AdmitAdvice is handed them and refuses an invalid pair.
+func advise(
+	safety diagnosis.SafetyClass, action, rationale string,
+) []domain.Recommendation {
+	return diagnosis.Recommend(diagnosis.AdviceInput{
+		Kind:   diagnosis.AdviceKindNextEvidence,
+		Safety: safety,
+		Action: action,
+		// svcdoctor cannot take any of these: a broker's log, its
+		// `sasl.enabled.mechanisms` and what terminates a connection on the path
+		// are all outside what a client observes through the protocol.
+		SelfCollectable: false,
+		Rationale:       rationale,
+	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
+}
+
+// recommend wraps one unclassified action, dropping it if the model rejects the
+// text.
+//
+// **The one remaining legacy construction site in this package**, and it exists
+// only for the claim Phase 13.1C owns. ADR 0097 section 2.1 forbids a production
+// rule from declining to classify its own advice; the exemption is temporary,
+// named in the Phase 13.1B allowlist, and removed with the review that replaces
+// that sentence.
 func recommend(action string) []domain.Recommendation {
 	recommendation, err := domain.NewRecommendation(action)
 	if err != nil {

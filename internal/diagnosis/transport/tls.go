@@ -116,12 +116,41 @@ const (
 		"evidence, and compare it with what this endpoint is configured to accept"
 )
 
+// The rationales. Three of the five are comparisons, and each names the half of
+// the comparison svcdoctor held and the half it did not.
+const (
+	rationaleEndpointDoesNotSpeakTLS = "The endpoint answered the socket and not the " +
+		"handshake, which establishes that something is listening and not what it is; what " +
+		"this port serves and whether this run was meant to negotiate TLS with it are both " +
+		"outside what the attempt observed."
+
+	rationaleIdentityMismatch = "Trust and identity are separate questions and only identity " +
+		"failed here, so the chain verified and the names did not match the one this run was " +
+		"asked to verify; which of the two is wrong — the name expected or the names " +
+		"presented — is what the comparison settles."
+
+	rationaleChainNotTrusted = "The chain the endpoint presented is recorded and the trust " +
+		"material this run was given is the other half of the same decision, so comparing " +
+		"them is what separates an endpoint presenting an unexpected chain from a run given " +
+		"the wrong roots."
+
+	rationaleCertificateNotValidNow = "Validity is a comparison between two clocks and " +
+		"svcdoctor read only one of them, so whether the certificate's window or this host's " +
+		"time is the surprising half is the one thing this observation cannot show."
+
+	rationaleHandshakeNotCompleted = "The handshake recorded what it observed and names no " +
+		"cause, and what this endpoint is configured to accept is not something a client " +
+		"learns from a handshake that did not complete."
+)
+
 // tlsClaim is what one authorized FailureClass supports.
 type tlsClaim struct {
 	code           domain.FindingCode
 	summary        string
 	detail         string
 	recommendation string
+	safety         diagnosis.SafetyClass
+	rationale      string
 }
 
 // tlsClaims maps a normalized TLS failure onto the claim it supports.
@@ -149,36 +178,48 @@ var tlsClaims = map[domain.FailureClass]tlsClaim{
 		summary:        summaryEndpointDoesNotSpeakTLS,
 		detail:         detailEndpointDoesNotSpeakTLS,
 		recommendation: recommendEndpointDoesNotSpeakTLS,
+		safety:         diagnosis.SafetyObserve,
+		rationale:      rationaleEndpointDoesNotSpeakTLS,
 	},
 	domain.FailureTLSHostnameMismatch: {
 		code:           CodeTLSIdentityMismatch,
 		summary:        summaryIdentityMismatch,
 		detail:         detailIdentityMismatch,
 		recommendation: recommendIdentityMismatch,
+		safety:         diagnosis.SafetyCompare,
+		rationale:      rationaleIdentityMismatch,
 	},
 	domain.FailureTLSUnknownAuthority: {
 		code:           CodeTLSChainNotTrusted,
 		summary:        summaryChainNotTrusted,
 		detail:         detailChainNotTrusted,
 		recommendation: recommendChainNotTrusted,
+		safety:         diagnosis.SafetyCompare,
+		rationale:      rationaleChainNotTrusted,
 	},
 	domain.FailureTLSCertificateExpired: {
 		code:           CodeTLSCertificateNotValidNow,
 		summary:        summaryCertificateNotValidNow,
 		detail:         detailCertificateNotValidNow,
 		recommendation: recommendCertificateNotValidNow,
+		safety:         diagnosis.SafetyCompare,
+		rationale:      rationaleCertificateNotValidNow,
 	},
 	domain.FailureTLSCertificateNotYetValid: {
 		code:           CodeTLSCertificateNotValidNow,
 		summary:        summaryCertificateNotValidNow,
 		detail:         detailCertificateNotValidNow,
 		recommendation: recommendCertificateNotValidNow,
+		safety:         diagnosis.SafetyCompare,
+		rationale:      rationaleCertificateNotValidNow,
 	},
 	domain.FailureTLSHandshakeFailure: {
 		code:           CodeTLSHandshakeNotCompleted,
 		summary:        summaryHandshakeNotCompleted,
 		detail:         detailHandshakeNotCompleted,
 		recommendation: recommendHandshakeNotCompleted,
+		safety:         diagnosis.SafetyObserve,
+		rationale:      rationaleHandshakeNotCompleted,
 	},
 }
 
@@ -313,5 +354,7 @@ func evaluateTLS(pair upgrade) (domain.Finding, bool) {
 		summary:        claim.summary,
 		detail:         claim.detail,
 		recommendation: claim.recommendation,
+		safety:         claim.safety,
+		rationale:      claim.rationale,
 	})
 }

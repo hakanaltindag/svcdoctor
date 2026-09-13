@@ -3,6 +3,7 @@ package kafka
 import (
 	"slices"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
@@ -25,6 +26,25 @@ const (
 		"whether its issuer is trusted at this vantage point"
 )
 
+// The rationales for the two layers whose advice is classified.
+//
+// **`recommendDNS` has none, and that is the point of the exemption.** Its
+// action asks the operator to check whether the advertised hostname resolves
+// from this vantage point — which is a measurement this run already took and
+// recorded, since a DNS failure at the advertised endpoint is why the finding
+// exists. Phase 13.1A recorded it as REC-021 and reserved the sentence for
+// Phase 13.1C rather than classifying a clause that restates the report.
+const (
+	rationaleTCP = "Name resolution succeeded for the advertised endpoint and the connection " +
+		"did not, so what differs lies between this network position and that address; " +
+		"routing, filtering and security-group policy are where that decision is made, and a " +
+		"refused client observes no part of it."
+
+	rationaleTLS = "The advertised host is the name a client would verify and the certificate " +
+		"is what the broker presents for it, so the two are halves of one comparison; which " +
+		"half is wrong is not something a failed handshake states."
+)
+
 // recommendations returns one recommendation per layer that positively evidenced
 // a failure, in layer order.
 //
@@ -32,7 +52,9 @@ const (
 // recommendation, because there is nothing yet to act on: what it needs is the
 // hypothesis's discriminator, which asks for the measurement rather than for a
 // change to the target.
-func recommendations(failures []domain.Evidence) []domain.Recommendation {
+func recommendations(
+	failures []domain.Evidence, kind domain.FindingKind, confidence domain.Confidence,
+) []domain.Recommendation {
 	var layers []domain.Layer
 	for _, f := range failures {
 		if !slices.Contains(layers, f.Layer()) {
@@ -43,18 +65,35 @@ func recommendations(failures []domain.Evidence) []domain.Recommendation {
 
 	out := make([]domain.Recommendation, 0, len(layers))
 	for _, layer := range layers {
-		action, ok := recommendationFor(layer)
+		action, safety, rationale, ok := recommendationFor(layer)
 		if !ok {
 			continue
 		}
-		recommendation, err := domain.NewRecommendation(action)
-		if err != nil {
-			// Unreachable: the three actions are constants and are non-empty,
-			// trimmed and free of control characters. Pinned by
-			// TestRecommendationTextIsValid.
+		// SafetyUnspecified is the DNS layer, whose sentence Phase 13.1C owns.
+		// The list is therefore mixed while that exemption stands, which the
+		// report model admits: a classified and an unclassified recommendation
+		// are both valid values, and each says exactly what is known about it.
+		if safety == diagnosis.SafetyUnspecified {
+			recommendation, err := domain.NewRecommendation(action)
+			if err != nil {
+				// Unreachable: the action is a constant and is non-empty,
+				// trimmed and free of control characters. Pinned by
+				// TestRecommendationTextIsValid.
+				continue
+			}
+			out = append(out, recommendation)
 			continue
 		}
-		out = append(out, recommendation)
+		out = append(out, diagnosis.Recommend(diagnosis.AdviceInput{
+			Kind:   diagnosis.AdviceKindNextEvidence,
+			Safety: safety,
+			Action: action,
+			// svcdoctor cannot take either: routing and filtering policy between
+			// two positions, and what a broker is configured to present for a
+			// name, are both outside what a refused client observes.
+			SelfCollectable: false,
+			Rationale:       rationale,
+		}, kind, confidence)...)
 	}
 	if len(out) == 0 {
 		return nil
@@ -67,15 +106,19 @@ func recommendations(failures []domain.Evidence) []domain.Recommendation {
 // A layer outside the three the transport chain can fail at yields nothing
 // rather than generic advice: inventing a suggestion for evidence this rule does
 // not understand is exactly the expansion of policy the phase must not do.
-func recommendationFor(layer domain.Layer) (string, bool) {
+func recommendationFor(
+	layer domain.Layer,
+) (action string, safety diagnosis.SafetyClass, rationale string, ok bool) {
 	switch layer {
 	case domain.LayerDNS:
-		return recommendDNS, true
+		// Unclassified, and named as an exemption rather than left to look like
+		// an oversight: Phase 13.1A REC-021.
+		return recommendDNS, diagnosis.SafetyUnspecified, "", true
 	case domain.LayerTCP:
-		return recommendTCP, true
+		return recommendTCP, diagnosis.SafetyVerify, rationaleTCP, true
 	case domain.LayerTLS:
-		return recommendTLS, true
+		return recommendTLS, diagnosis.SafetyVerify, rationaleTLS, true
 	default:
-		return "", false
+		return "", diagnosis.SafetyUnspecified, "", false
 	}
 }

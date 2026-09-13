@@ -182,7 +182,7 @@ func authenticationFinding(node domain.Evidence) (domain.FindingInput, bool) {
 				Summary:          summaryCredentialNotConfigured,
 				Detail:           detailCredentialNotConfigured,
 				VantageDependent: false,
-				Recommendations:  recommend(recommendCredentialNotConfigured),
+				Recommendations:  advise(diagnosis.SafetyObserve, recommendCredentialNotConfigured, rationaleCredentialNotConfigured),
 			}, true
 		case domain.FailureExecSkippedByPolicy:
 			return domain.FindingInput{
@@ -194,7 +194,7 @@ func authenticationFinding(node domain.Evidence) (domain.FindingInput, bool) {
 				Summary:          summaryCredentialWithheld,
 				Detail:           detailCredentialWithheld,
 				VantageDependent: false,
-				Recommendations:  recommend(recommendCredentialWithheld),
+				Recommendations:  advise(diagnosis.SafetyObserve, recommendCredentialWithheld, rationaleCredentialWithheld),
 			}, true
 		}
 
@@ -222,7 +222,7 @@ func authenticationFinding(node domain.Evidence) (domain.FindingInput, bool) {
 				Summary:          summaryAuthUnsupported,
 				Detail:           detailAuthUnsupported,
 				VantageDependent: false,
-				Recommendations:  recommend(recommendAuthUnsupported),
+				Recommendations:  advise(diagnosis.SafetyCompare, recommendAuthUnsupported, rationaleAuthUnsupported),
 			}, true
 		}
 		// Every other UNKNOWN is svcdoctor's own budget or cancellation, which
@@ -243,7 +243,7 @@ func authenticationFinding(node domain.Evidence) (domain.FindingInput, bool) {
 				// A host-based restriction is one of the conditions this refusal
 				// covers, and that one is source-keyed.
 				VantageDependent: true,
-				Recommendations:  recommend(recommendCredentialsRejected),
+				Recommendations:  advise(diagnosis.SafetyVerify, recommendCredentialsRejected, rationaleCredentialsRejected),
 			}, true
 		}
 		return domain.FindingInput{
@@ -255,7 +255,7 @@ func authenticationFinding(node domain.Evidence) (domain.FindingInput, bool) {
 			Summary:          summaryAuthNotCompleted,
 			Detail:           detailAuthNotCompleted,
 			VantageDependent: true,
-			Recommendations:  recommend(recommendAuthNotCompleted),
+			Recommendations:  advise(diagnosis.SafetyObserve, recommendAuthNotCompleted, rationaleAuthNotCompleted),
 		}, true
 	}
 
@@ -273,3 +273,30 @@ func credentialsRejectedDetail(node domain.Evidence) string {
 	}
 	return detailCredentialsRejected
 }
+
+// The rationales for the five classified claims in this file.
+//
+// `recommendMechanismNotOffered` has none: "enable SASL PLAIN on this endpoint"
+// is a change to the broker and carries no TLS condition, and Phase 13.1A
+// reserved it as REC-064.
+const (
+	rationaleCredentialNotConfigured = "No credential was supplied, so authentication and " +
+		"virtual-host access were both left unmeasured rather than found wanting; which " +
+		"credential the application uses is an input this run was not given."
+
+	rationaleCredentialWithheld = "The credential was withheld because the channel's identity " +
+		"was not established, so nothing was sent and the broker took no position; what the " +
+		"endpoint is comes before what it would say about the credential."
+
+	rationaleAuthUnsupported = "The frame size this endpoint negotiated is below what AMQP " +
+		"0-9-1 requires of any peer, so the two numbers are the whole of it; the endpoint's " +
+		"configured limit is the half held on the broker's side."
+
+	rationaleCredentialsRejected = "The broker closed the connection on authentication and " +
+		"AMQP carries no reason for it, so a mistyped password and an unknown user are one " +
+		"observation here; the broker's own log is where they separate."
+
+	rationaleAuthNotCompleted = "Authentication ended without the broker taking a position, " +
+		"which is not a refusal; the broker's log and whether a proxy terminates the " +
+		"connection are the two places an unanswered attempt and a refused one differ."
+)

@@ -22,6 +22,7 @@
 package redis
 
 import (
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
@@ -46,6 +47,42 @@ func build(in domain.FindingInput) (domain.Finding, bool) {
 }
 
 // recommend wraps one action, dropping it only if the constant were malformed.
+// advise wraps one classified observation.
+//
+// **Every recommendation this package produces is NEXT_EVIDENCE**, and its safety
+// class is one of the three read-only ones: each asks a reader to look at a
+// server log, an ACL configuration or the endpoint's own state, and none asks for
+// a change. `diagnosis.NewAdvice` refuses the three high-blast-radius classes
+// outright and refuses a next-evidence recommendation that changes anything, so
+// the property holds by construction (ADR 0097 section 2.1, ADR 0082 section 2.3).
+//
+// Every Redis finding is CONFIRMED at HIGH, which is what AdmitAdvice is handed.
+func advise(
+	safety diagnosis.SafetyClass, action, rationale string,
+) []domain.Recommendation {
+	return diagnosis.Recommend(diagnosis.AdviceInput{
+		Kind:   diagnosis.AdviceKindNextEvidence,
+		Safety: safety,
+		Action: action,
+		// svcdoctor cannot take any of these. The journey is HELLO, AUTH and one
+		// keyless command, so an ACL configuration, an ACL log, a connection log
+		// and the endpoint's current state are all outside it — and re-pointing
+		// the run at a data endpoint needs an address svcdoctor was not given,
+		// because Sentinel discovery is refused (ADR 0065).
+		SelfCollectable: false,
+		Rationale:       rationale,
+	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
+}
+
+// recommend wraps one unclassified action.
+//
+// **The remaining legacy construction site in this package**, and it serves only
+// the two actions Phase 13.1C owns: `recommendCredentialWithheld`, whose "enable
+// TLS for this endpoint" is a change to the endpoint's configuration, and
+// `recommendCommandNotPermitted`, whose first clause asks for an ACL grant that
+// the refusal does not establish is the right policy. ADR 0097 section 2.1
+// forbids a production rule from declining to classify its advice; this exemption
+// is temporary and named in the Phase 13.1B allowlist.
 func recommend(action string) []domain.Recommendation {
 	recommendation, err := domain.NewRecommendation(action)
 	if err != nil {
