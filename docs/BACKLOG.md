@@ -148,15 +148,19 @@ closure that record reports was not reproducible from the tree. Phase 13.1A.1 re
 plants from the record's own descriptions and re-ran them — **17 planted, 17 caught, 0 survivors** —
 which is evidence the record was accurate, and not a substitute for committing the harness.
 **Phase 13.1C should commit its suite**, and may adopt 13.1B's plants when it does.
+**It did**: `scripts/phase131c-mutations.sh`, which also implements property 1 above — a whole-tree
+hash taken independently of its own `FILES` list — and refuses to plant into an undeclared file.
+The other eight suites still verify only what they declare.
 
 ### A documentation drift for whichever phase touches `docs/OUTPUT.md`
 
 `docs/OUTPUT.md` says *"A recommendation with no brackets is one svcdoctor has not classified. That
 is normal — most of the advice in the product predates the classification."* After Phase 13.1B the
 first sentence is still true and **the second is not**: 64 of 73 are classified and 9 remain.
-Phase 13.1A.1's allowed-file list did not include `OUTPUT.md`, so it is recorded rather than edited.
-**Phase 13.1C closes the nine and should rewrite that paragraph in the same change**, at which point
-the bracket-free case disappears entirely.
+Phase 13.1A.1's allowed-file list did not include `OUTPUT.md`, so it was recorded rather than edited.
+**RESOLVED by Phase 13.1C**, which closed the nine and rewrote the section: it now states that every
+recommendation is classified, that the bracket-free case cannot occur, what svcdoctor will never
+recommend and why, and that `REMEDIATION` exists in the schema with no producer.
 
 ## Fixed at the v0.4.0 gate — a guard that passed for the wrong reason
 
@@ -5199,6 +5203,105 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **Two findings may now share a code, subject and layer while saying different things.** That is the correct output and it looks like duplication | Reopens only if a renderer study shows readers misread the pair. The fix would be presentational — grouping — never re-merging |
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
+
+## Phase 13.1C — Semantic and high-risk recommendation closure: COMPLETE
+
+**The recommendation classification migration is COMPLETE.** Record:
+`docs/validation/PHASE131C_SEMANTIC_HIGH_RISK_RECOMMENDATION_CLOSURE.md`. No new ADR; ADR 0097
+received a factual correction only.
+
+**73 recommendations · 73 classified · 0 legacy · production legacy recommendation producers = 0.**
+Nine rewritten and classified, 64 byte-identical — proven per constant by SHA-256 in one table that
+states both halves. Kind NEXT_EVIDENCE **73**, REMEDIATION **0**. Safety OBSERVE **38**, VERIFY
+**20**, COMPARE **15**, CONFIG_CHANGE / RESTART / DISRUPTIVE / SECURITY_WEAKENING **0**.
+`SelfCollectable` true **2**, false **71**, absent **0**.
+
+Counts unchanged: codes **69**, rules **24**, failure classes **42**, `SchemaVersion` **1**,
+`RunSchemaVersion` **1**, `Reveal`/`SecretFor` **5/5**, modules **40**. No renderer source, domain
+model, probe, adapter, wire package, CLI, fleet config, dependency, CI or `Makefile` touched, and
+**zero fixtures moved**.
+
+### What the nine were, and what a rewrite actually is
+
+Five instructed a change to the diagnosed target outright, two more could be read that way, and two
+were ambiguous rather than mutating. **The rule they violate is one sentence:** svcdoctor proved the
+broker refused this user's access to this virtual host; it did **not** prove the refusal was wrong.
+
+Two shapes did all the work. *Name svcdoctor's own options, not the server's configuration* — the
+three credential-withheld sentences became `--tls require` / `--tls-ca-file`, following RabbitMQ's
+REC-062 which already had that shape. *Verify the intent, do not prescribe the policy* — the two
+access refusals and the two mechanism cases now ask whether the observed state is intended.
+
+**`REMEDIATION` stays unreachable**, `CONFIG_CHANGE` stays unused, and **nothing was removed**: every
+one of the nine had a bounded observation worth stating once the policy clause came off. No retained
+action says *investigate further* or *check configuration*.
+
+The sharpest case is REC-064. *"Enable SASL PLAIN on this endpoint"* carried no TLS condition — and
+**ADR 0068 forbids svcdoctor from sending PLAIN without verified TLS**, so it recommended weakening a
+listener for a client that would then still refuse to use it.
+
+### Five things a future agent should not re-derive
+
+- **A keyword guard cannot be the proof, and the verb that shows why is `establish`.** It was on the
+  target-mutation blacklist and flagged two *correct* Phase 13.1B recommendations — *"…and establish
+  what this broker is before presenting the credential again"* — where it means *determine*, not
+  *set up*. That ambiguity is precisely why REC-012 and REC-031 needed rewriting by hand. The byte
+  pin of all nine is primary; the imperative rule is supplemental and refuses 5 of the 9.
+- **The imperative rule reads clause openings, not the whole string.** Kafka's
+  `recommendUnsupportedExchange` ends *"rather than something to change on the cluster"*, which is a
+  **refusal** to recommend a change. A substring scan flags it. Same class as the Phase 12.1D defect
+  that matched `"clu"` inside *"the cluster"*.
+- **The zero-legacy AST detector trusted the identifier `domain`.** Mutation MC-14 planted
+  `dom "…/internal/domain"` and `dom.NewRecommendation`, and it **survived the first run** — an
+  aliased import silenced the guard this whole phase rests on, and this repository already aliases
+  imports in a dozen places. It now resolves the import path and handles a dot import too.
+- **A guard rejected a rewrite, correctly, and the guard won.** The first REC-036 draft opened
+  *"Select a role …"*; PostgreSQL's `TestNoRecommendationIsExecutable` refuses a leading SQL verb in
+  a PostgreSQL report. Reworded to *"Re-run this diagnosis against a role whose password is already
+  printable ASCII …"*. **The guard was not widened.**
+- **Kafka's local "looks executable" list banned `"--"` outright**, which would have rejected the
+  very rewrite that removed the target-mutating reading. It is superseded by
+  `diagnosis.ValidateActionText`, which deliberately permits a double-hyphen token — svcdoctor naming
+  its *own* option — and refuses more besides: shell metacharacters, a leading command word and
+  single-hyphen flags. Net strengthening, in every dimension but the one that was wrong.
+
+### Temporary debt deleted, not emptied
+
+The shrink-only allowlist (`legacyRecommendationSites` + its bounded test), `deferredActions`, the
+five per-package `*Deferred` maps with the `deferred` parameter, and the `groupS` corpus group are
+all **gone**. Nothing reads *"expected legacy producers = []"*. `groupS` became `rewritten` carrying
+the **new** digests, so one table proves both *these nine moved* and *those 64 did not*.
+
+Five production legacy helpers were deleted with them, and Kafka's `SafetyUnspecified` branches went
+too — so the mixed classified/unclassified recommendation list
+`KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` used to carry is **unreachable**, not merely unused.
+`domain.NewRecommendation` stays, because `internal/security/redaction` rebuilds through it.
+
+### Mutation
+
+**15 planted / 15 caught / 0 survivors**, harness committed as `scripts/phase131c-mutations.sh` —
+the reproducibility mistake 13.1B made and this phase does not repeat. Restoration is proven **two
+independent ways**: the declared write-set, and a whole-tree hash derived from a `find` that knows
+nothing about it (975 files). It also refuses to plant into an undeclared file. That is the durable
+invariant the harness-debt section above asks for, implemented once; the other eight suites still
+need it.
+
+Historical: `phase104b` **17/17/0**, `phase102` **25/25/0**, `phase102a` **8/8/0**, `phase103`
+**27/27/0**, `phase101b` **21/21/0**. `NBE-M17` was re-anchored a second time — 13.1C deleted `func
+recommend`, the declaration 13.1A.1 had anchored it to — and now anchors on `func advise`. Body,
+assertion and catching test byte-identical.
+
+### Planner: KEEP DEFERRED
+
+Measured, not recalled. Trigger 1 (zero legacy, guard green) **PASS**. Trigger 2 (a
+`SelfCollectable: true` recommendation that is not merely rerun/budget) **FAIL** — both are still
+literally *"Re-run with a larger execution budget"*. Trigger 3 (that recommendation sits on a finding
+carrying a discriminator) **FAIL** independently: neither aggregate carries one, and Kafka's only
+discriminator sits on `KAFKA_ADVERTISED_TOPOLOGY_UNSUITABLE`, whose advice is **not**
+self-collectable. **Nothing was manufactured to satisfy the trigger**; the count is unchanged at 2.
+
+Still deferred and unchanged: `REMEDIATION` activation, recommendation identity, next-evidence
+identity, the planner, and the mutation-harness infrastructure debt above.
 
 ## Phase 13.1A.1 — Recommendation renderer contract reconciliation: COMPLETE
 

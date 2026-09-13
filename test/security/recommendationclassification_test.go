@@ -4,9 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"go/ast"
+	"os"
 	"path"
-	"regexp"
-	"sort"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,12 +15,14 @@ import (
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 )
 
-// The Phase 13.1B recommendation-classification contract, as a corpus.
+// The recommendation-classification contract, as a corpus. Closed at Phase 13.1C.
 //
 // ADR 0097 section 2.1: a production diagnosis rule may not decline to classify
 // its own advice. Phase 13.1B classified the 55 whose prose Phase 13.1A found
-// safe as written and left 9 for Phase 13.1C, so the invariant is enforced with a
-// **temporary, shrink-only** allowlist rather than at zero.
+// safe as written and left 9 for Phase 13.1C; Phase 13.1C reviewed those nine,
+// rewrote each one and classified it, so the invariant is now enforced **at
+// zero** by TestNoProductionRuleBuildsAnUnclassifiedRecommendation and the
+// shrink-only allowlist that stood in for it is deleted.
 //
 // # Why the corpus is a table and not derived
 //
@@ -42,10 +45,13 @@ const (
 	// alreadyClassified is one of the 9 that shipped classified in Phases 10.2,
 	// 10.3 and 12.1C.
 	alreadyClassified
-	// groupS is one of the 9 Phase 13.1C owns: its action instructs or may
-	// instruct a change to the target, and it stays unclassified until that
-	// sentence is reviewed (Phase 13.1A section 8.3).
-	groupS
+	// rewritten is one of the 9 Phase 13.1C reviewed. Each one's action
+	// instructed, or could be read as instructing, a change to the target
+	// (Phase 13.1A section 8.3); each was rewritten as bounded next evidence and
+	// then classified. **The digests on these rows are the new text**, which is
+	// what makes "only these nine moved" checkable in the same table that proves
+	// the other 64 did not.
+	rewritten
 )
 
 // recommendationRecord is one row of the frozen corpus.
@@ -75,9 +81,9 @@ var recommendationCorpus = []recommendationRecord{
 	{"REC-009", "kafka", "recommendAPIVersionsNotCompleted", "KAFKA_API_VERSIONS_NOT_COMPLETED", migrated, domain.SafetyObserve, false, "88e652796d695eb1cbc708973237d0ef39472409ac5abbb20e7c62f0044aab85"},
 	{"REC-010", "kafka", "recommendAuthenticationNotCompleted", "KAFKA_AUTHENTICATION_NOT_COMPLETED", migrated, domain.SafetyObserve, false, "a6ab3dfdbbb9bb4253576e7054eb256ec507cd41f4ea2dabcad9fdda22d4b227"},
 	{"REC-011", "kafka", "recommendCredentialNotConfigured", "KAFKA_CREDENTIAL_NOT_CONFIGURED", migrated, domain.SafetyObserve, false, "660b4f972971c0513ba91b6e7f14d1dd5dff1e2389f4955b8c26a0558f6e4bd9"},
-	{"REC-012", "kafka", "recommendCredentialWithheld", "KAFKA_CREDENTIAL_WITHHELD", groupS, 0, false, "37de4ab0b3509ab1ae8fe0b902682dea80062e58e37a5850489e070e21b31421"},
+	{"REC-012", "kafka", "recommendCredentialWithheld", "KAFKA_CREDENTIAL_WITHHELD", rewritten, domain.SafetyObserve, false, "7cb5ece14f0d4de3197a2a64f1c87356a4870e5c46cda341a2d9c4c45cf0be0f"},
 	{"REC-013", "kafka", "recommendCredentialsRejected", "KAFKA_CREDENTIALS_REJECTED", migrated, domain.SafetyVerify, false, "b874815f7c4f98a23892f14a611aa8e7fdc4e5b0da71c2366eac13a5ef2c6021"},
-	{"REC-021", "kafka", "recommendDNS", "KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE", groupS, 0, false, "66d1a38b463bca9506d508eb8c92101f8d6d79bfc934dd8a1aa118666575ae56"},
+	{"REC-021", "kafka", "recommendDNS", "KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE", rewritten, domain.SafetyCompare, false, "d42dc2d07f1c92f102ec57eb34b03f46055f6234db58b2428a2dc8f2c0117ef1"},
 	{"REC-014", "kafka", "recommendHandshakeNotCompleted", "KAFKA_SASL_HANDSHAKE_NOT_COMPLETED", migrated, domain.SafetyObserve, false, "b85308d3c0104692ab7451ad265195d30056df1ae76f407a66aaa3fed7ad3d98"},
 	{"REC-015", "kafka", "recommendMechanismNotOffered", "KAFKA_AUTH_MECHANISM_NOT_OFFERED", migrated, domain.SafetyCompare, false, "56a094e5712b9b6b4fa6993357006ae3cc3b3429882334a61e31a8f19c3be0b2"},
 	{"REC-016", "kafka", "recommendMetadataNotCompleted", "KAFKA_METADATA_NOT_COMPLETED", migrated, domain.SafetyObserve, false, "fa5996ce13635c053d4aa6399fd384887cceddbfa3c89e77f97ac7fa87bd2185"},
@@ -95,12 +101,12 @@ var recommendationCorpus = []recommendationRecord{
 	{"REC-029", "postgres", "recommendAuthenticationFailed", "POSTGRES_AUTHENTICATION_FAILED", migrated, domain.SafetyObserve, false, "8e222e9e3aa017e646e4c21b1598d214846e66c2133cbb8303c628d934577302"},
 	{"REC-037", "postgres", "recommendConnectionLimitReached", "POSTGRES_CONNECTION_LIMIT_REACHED", alreadyClassified, domain.SafetyCompare, false, "9136b3928c3b83b8af8f9a471f66a41b373b8e8c09f6b68b720cb29da03d577c"},
 	{"REC-030", "postgres", "recommendCredentialNotConfigured", "POSTGRES_CREDENTIAL_NOT_CONFIGURED", migrated, domain.SafetyObserve, false, "5235f25384dea21b377783187f5ebd25a0cf2a5dbd8b32c31630960f3330e794"},
-	{"REC-031", "postgres", "recommendCredentialWithheld", "POSTGRES_CREDENTIAL_WITHHELD", groupS, 0, false, "b5512073b64794b4009cc79d8b7abc7dd682ed721a025af1bd30ee34d0c4bf9a"},
+	{"REC-031", "postgres", "recommendCredentialWithheld", "POSTGRES_CREDENTIAL_WITHHELD", rewritten, domain.SafetyObserve, false, "01a256bf2770f11da52521d2bdc6baee7ab9fed10b546e297a7e21d05b96401d"},
 	{"REC-032", "postgres", "recommendCredentialsRejected", "POSTGRES_CREDENTIALS_REJECTED", migrated, domain.SafetyVerify, false, "6e3355bde0bf167f758d2a472f99a783f061438ea91ef9fca001ac400feef282"},
 	{"REC-038", "postgres", "recommendDatabaseConnectDenied", "POSTGRES_DATABASE_CONNECT_DENIED", migrated, domain.SafetyVerify, false, "c7cb4086ece157b4a52213c5b33ff49c17a7bd26e3aa83d932d6329ed0df89a1"},
 	{"REC-039", "postgres", "recommendDatabaseNotFound", "POSTGRES_DATABASE_NOT_FOUND", migrated, domain.SafetyVerify, false, "c6424ca86613013e5398ed1396ebc6b358164d8ddf8adc1e1bd06fb7a3d8e270"},
 	{"REC-033", "postgres", "recommendMechanismNotOffered", "POSTGRES_AUTHENTICATION_MECHANISM_UNAVAILABLE", migrated, domain.SafetyObserve, false, "def6c5f1828304397dd998231014eaab67da29fa0ff50e691f342132db5054f5"},
-	{"REC-034", "postgres", "recommendMechanismUnsupported", "POSTGRES_AUTHENTICATION_MECHANISM_UNAVAILABLE", groupS, 0, false, "b39a4345180a01b8a085d3bff6ed0c04e5e9cd32053a7daeb709cf3974561e4a"},
+	{"REC-034", "postgres", "recommendMechanismUnsupported", "POSTGRES_AUTHENTICATION_MECHANISM_UNAVAILABLE", rewritten, domain.SafetyObserve, false, "3467352d38e4a26adf86b359f23201acb55f92baa870d578e84ffc87a995250c"},
 	{"REC-041", "postgres", "recommendNotPermitted", "POSTGRES_CONNECTION_NOT_PERMITTED", migrated, domain.SafetyObserve, false, "d5167a709428e51d70459cec8f7e44f8b91d78455350bc66daa086756ef6e3b5"},
 	{"REC-035", "postgres", "recommendPeerVerificationFailed", "POSTGRES_PEER_VERIFICATION_FAILED", migrated, domain.SafetyVerify, false, "e1c125436ba8e30761f35f8863621ecbbcc2d62b8bcb16de66a15c4c294e1525"},
 	{"REC-042", "postgres", "recommendSSLNegotiationFailed", "POSTGRES_SSL_NEGOTIATION_FAILED", migrated, domain.SafetyVerify, false, "2eb5002f5c1701a6353d246cb6494e6ef70640895649c7d1c54159d77c87ba07"},
@@ -112,11 +118,11 @@ var recommendationCorpus = []recommendationRecord{
 	{"REC-047", "postgres", "recommendTLSHandshakeFailed", "POSTGRES_TLS_HANDSHAKE_FAILED", migrated, domain.SafetyObserve, false, "69d10fe000fff4bfb9395919c22ae1de5d6c16e0ee62e074cababaaa5265ba6a"},
 	{"REC-048", "postgres", "recommendTLSIdentityMismatch", "POSTGRES_TLS_IDENTITY_MISMATCH", migrated, domain.SafetyCompare, false, "1fbacb641dd84d20b01ecb0a9a24958906854284845a012aa6ca84bd3a0f9a06"},
 	{"REC-049", "postgres", "recommendTLSUpgradeNotHonored", "POSTGRES_TLS_UPGRADE_NOT_HONORED", migrated, domain.SafetyObserve, false, "46a1b34057abcdabbc13ce3a11358541e6e6b7649372a6196c0fe93c2f5332c5"},
-	{"REC-036", "postgres", "recommendUnsupportedBySvcdoctor", "POSTGRES_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR", groupS, 0, false, "8fad92a4222b17c4b14ff29cdb5c2adc999a7378de46664272e221054f6c5d6f"},
+	{"REC-036", "postgres", "recommendUnsupportedBySvcdoctor", "POSTGRES_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR", rewritten, domain.SafetyObserve, false, "a06117c5370f7fafb9a895ab47cf03aab858b58a7f47bf263078a01b5eb5ac9e"},
 	{"REC-050", "redis", "recommendAuthenticationNotCompleted", "REDIS_AUTHENTICATION_NOT_COMPLETED", migrated, domain.SafetyObserve, false, "bb806efb10e5f56e5ca5f7ccb3b6a050a79550982604561634643e3b1afb6a2a"},
-	{"REC-055", "redis", "recommendCommandNotPermitted", "REDIS_COMMAND_NOT_PERMITTED", groupS, 0, false, "5c4be2b6de71ab59ef9b7327ec4b98983a4bd33f6fff6e00be18428b12d211e7"},
+	{"REC-055", "redis", "recommendCommandNotPermitted", "REDIS_COMMAND_NOT_PERMITTED", rewritten, domain.SafetyVerify, false, "74820b09be4fac870a09e0d501f4d7e23b23e549a1b68d32e131b6c693f94e63"},
 	{"REC-051", "redis", "recommendCredentialNotConfigured", "REDIS_CREDENTIAL_NOT_CONFIGURED", migrated, domain.SafetyObserve, false, "bf0fa792da942849cb68c041af2e47b54d179595c263746d26684ebce2eb7aa3"},
-	{"REC-052", "redis", "recommendCredentialWithheld", "REDIS_CREDENTIAL_WITHHELD", groupS, 0, false, "764c84d22890a879bf8e098e3b0e3c17c7db164b4d17f07ae6a5d4998ad9de23"},
+	{"REC-052", "redis", "recommendCredentialWithheld", "REDIS_CREDENTIAL_WITHHELD", rewritten, domain.SafetyObserve, false, "bbd2f6dfb677a7cc411cc7a9a5bd1a6b603f5ee603cbda48e05c6f7121928b44"},
 	{"REC-053", "redis", "recommendCredentialsRejected", "REDIS_CREDENTIALS_REJECTED", migrated, domain.SafetyVerify, false, "aee13c1683067ebc091c10f41ae2352b7165c890dd8c2314d4647cc6d591d01b"},
 	{"REC-056", "redis", "recommendEndpointNotServing", "REDIS_ENDPOINT_NOT_SERVING", migrated, domain.SafetyObserve, false, "f71047dd5d9d917c35e376cd2db90c3ae2688ba17f68c53df967e05d1fbc9646"},
 	{"REC-057", "redis", "recommendPingNotCompleted", "REDIS_PING_NOT_COMPLETED", migrated, domain.SafetyObserve, false, "19baef77d1cd6867dae25de3bbbbed1b024da6418e9a9cca4c09a89d4671e7cc"},
@@ -129,9 +135,9 @@ var recommendationCorpus = []recommendationRecord{
 	{"REC-061", "rabbitmq", "recommendCredentialNotConfigured", "RABBITMQ_CREDENTIAL_NOT_CONFIGURED", migrated, domain.SafetyObserve, false, "8aec77f663771d798e2ebf8ebfed187cd958d18c919fc697026acb285ef38a34"},
 	{"REC-062", "rabbitmq", "recommendCredentialWithheld", "RABBITMQ_CREDENTIAL_WITHHELD", migrated, domain.SafetyObserve, false, "7260febadc7c611af9aa898ec8b324c90ff5fff1d54d09ed13f359d291bc2936"},
 	{"REC-063", "rabbitmq", "recommendCredentialsRejected", "RABBITMQ_CREDENTIALS_REJECTED", migrated, domain.SafetyVerify, false, "7235afe1d433bf1e67d56aa06e1a2573b37d730c89f141dd7b81abe5957e2628"},
-	{"REC-064", "rabbitmq", "recommendMechanismNotOffered", "RABBITMQ_AUTH_MECHANISM_NOT_OFFERED", groupS, 0, false, "9242986373f48aba2c61e26e1e6041eb0eb14137bc7badeb3f54cabf2c77a01a"},
+	{"REC-064", "rabbitmq", "recommendMechanismNotOffered", "RABBITMQ_AUTH_MECHANISM_NOT_OFFERED", rewritten, domain.SafetyObserve, false, "3bc29c0cb8b202c9f289f70de5a822e055122e70ad1dff685e6139abdf97c8a6"},
 	{"REC-069", "rabbitmq", "recommendStartNotCompleted", "RABBITMQ_CONNECTION_START_NOT_COMPLETED", migrated, domain.SafetyVerify, false, "5eaceecb699dfb2f1065abbcb308c3863397441c40e0732f7d3d3a64fdc717f8"},
-	{"REC-067", "rabbitmq", "recommendVHostAccessRefused", "RABBITMQ_VHOST_ACCESS_REFUSED", groupS, 0, false, "fe396c79ed8b2a2fb1e647277d5a4914778d7573af7729e9c00217730c3356a1"},
+	{"REC-067", "rabbitmq", "recommendVHostAccessRefused", "RABBITMQ_VHOST_ACCESS_REFUSED", rewritten, domain.SafetyVerify, false, "02c6589529dbf97df62e20689ae6a8234c761fa6540f16d933cd7c823c694737"},
 	{"REC-068", "rabbitmq", "recommendVHostNotFound", "RABBITMQ_VHOST_NOT_FOUND", migrated, domain.SafetyVerify, false, "1f34aa8292d30f1b6dcbf0ef7142361a6024bf16749a510b74e140ed22151936"},
 	{"REC-070", "kubernetes", "recommendAPIAccessDenied", "KUBERNETES_API_ACCESS_DENIED", alreadyClassified, domain.SafetyVerify, false, "792d90b7ad50e8cabbfac91d1ecccc934b0298c377bde66365ec486bdf7c7cdc"},
 	{"REC-072", "kubernetes", "recommendNoReadyEndpoint", "KUBERNETES_SERVICE_NO_READY_ENDPOINT", alreadyClassified, domain.SafetyCompare, false, "a4960457d8fd977cabc3c95ae833225a8eec14352c6545f17784bd96ea43321a"},
@@ -240,7 +246,7 @@ func TestEveryRecommendationConstantIsAccountedFor(t *testing.T) {
 	}{
 		{migrated, 55, "Phase 13.1B migrated"},
 		{alreadyClassified, 9, "already classified before 13.1B"},
-		{groupS, 9, "deferred to Phase 13.1C"},
+		{rewritten, 9, "Phase 13.1C rewritten and classified"},
 	} {
 		if got := byGroup[want.group]; got != want.n {
 			t.Errorf("%d recommendations are %s, want %d", got, want.what, want.n)
@@ -249,13 +255,17 @@ func TestEveryRecommendationConstantIsAccountedFor(t *testing.T) {
 	if total := len(recommendationCorpus); total != 73 {
 		t.Errorf("the corpus holds %d recommendations, want 73", total)
 	}
-	structured := byGroup[migrated] + byGroup[alreadyClassified]
-	if structured != 64 {
-		t.Errorf("%d recommendations are structured, want 64", structured)
+	// **Every group is structured since Phase 13.1C.** There is no fourth group
+	// and no unclassified one, which is the invariant ADR 0097 section 2.1 was
+	// written to reach; TestNoProductionRuleBuildsAnUnclassifiedRecommendation is
+	// the structural half of the same statement.
+	structured := byGroup[migrated] + byGroup[alreadyClassified] + byGroup[rewritten]
+	if structured != 73 {
+		t.Errorf("%d recommendations are structured, want 73 — all of them", structured)
 	}
-	t.Logf("73 recommendations: %d structured (%d migrated in 13.1B, %d earlier), "+
-		"%d deferred to 13.1C", structured, byGroup[migrated],
-		byGroup[alreadyClassified], byGroup[groupS])
+	t.Logf("73 recommendations, all structured: %d migrated in 13.1B, %d earlier, "+
+		"%d rewritten and classified in 13.1C", byGroup[migrated],
+		byGroup[alreadyClassified], byGroup[rewritten])
 }
 
 // TestMigratedRecommendationActionTextIsFrozen is the proof that Phase 13.1B
@@ -305,9 +315,6 @@ func TestEveryMigratedRecommendationSurvivesAdmission(t *testing.T) {
 	var admitted int
 
 	for _, r := range recommendationCorpus {
-		if r.group == groupS {
-			continue
-		}
 		text, ok := found[r.pkg+"/"+r.constant]
 		if !ok {
 			continue // reported by the completeness guard
@@ -354,8 +361,9 @@ func TestEveryMigratedRecommendationSurvivesAdmission(t *testing.T) {
 		})
 		admitted++
 	}
-	if admitted != 64 {
-		t.Errorf("%d classified recommendations were admitted, want 64", admitted)
+	if admitted != 73 {
+		t.Errorf("%d classified recommendations were admitted, want 73 — every one in "+
+			"the corpus, since Phase 13.1C left none unclassified", admitted)
 	}
 	t.Logf("%d classified recommendations admitted, 0 silently dropped", admitted)
 }
@@ -395,9 +403,10 @@ func TestNoProductionRecommendationIsARemediation(t *testing.T) {
 
 	// And the same statement through the corpus, so the two readings are together.
 	for _, r := range recommendationCorpus {
-		if r.group != groupS && r.safety == domain.SafetyConfigChange {
-			t.Errorf("%s is classified CONFIG_CHANGE; none of the 55 was, and a "+
-				"target-changing class needs the review Phase 13.1C owns", r.rec)
+		if r.safety == domain.SafetyConfigChange {
+			t.Errorf("%s is classified CONFIG_CHANGE; no production recommendation is, "+
+				"and a target-changing class needs its own ADR and security review "+
+				"(ADR 0097 section 7)", r.rec)
 		}
 	}
 }
@@ -410,13 +419,6 @@ func TestNoProductionRecommendationIsARemediation(t *testing.T) {
 // RESTART, DISRUPTIVE and SECURITY_WEAKENING are refused by Producible() itself.
 func TestClassifiedRecommendationsUseOnlyTheReadOnlySafetyClasses(t *testing.T) {
 	for _, r := range recommendationCorpus {
-		if r.group == groupS {
-			if r.safety != domain.SafetyUnspecified {
-				t.Errorf("%s is deferred to Phase 13.1C but the corpus gives it safety %s; "+
-					"an unclassified recommendation carries none", r.rec, r.safety)
-			}
-			continue
-		}
 		if !r.safety.ChangesNothing() {
 			t.Errorf("%s is classified %s, which changes the target; every classified "+
 				"recommendation in this corpus is NEXT_EVIDENCE and must therefore be "+
@@ -433,109 +435,151 @@ func TestClassifiedRecommendationsUseOnlyTheReadOnlySafetyClasses(t *testing.T) 
 	}
 }
 
-// legacyRecommendationSites are the production functions still permitted to build
-// an unclassified recommendation, and the Phase 13.1C recommendations each serves.
+// TestNoProductionRuleBuildsAnUnclassifiedRecommendation is the permanent
+// invariant ADR 0097 section 2.1 exists to reach, and Phase 13.1C is where it
+// became provable.
 //
-// **Shrink-only.** The size is pinned below so a tenth exemption cannot arrive
-// without a deliberate edit and a written reason in the same change, which is the
-// friction the hypothesis-exemption list used before this one replaced it.
-var legacyRecommendationSites = map[string]string{
-	"internal/diagnosis/transport": "",
-	"internal/diagnosis/kafka": "REC-012 KAFKA_CREDENTIAL_WITHHELD (claim.recommendations, " +
-		"SafetyUnspecified branch) and REC-021 KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE's DNS " +
-		"sentence (recommendationFor, LayerDNS)",
-	"internal/diagnosis/postgres": "REC-031 POSTGRES_CREDENTIAL_WITHHELD, REC-034 " +
-		"POSTGRES_AUTHENTICATION_MECHANISM_UNAVAILABLE's second clause (mechanismAdvice, " +
-		"SafetyUnspecified) and REC-036 POSTGRES_AUTHENTICATION_UNSUPPORTED_BY_SVCDOCTOR",
-	"internal/diagnosis/redis": "REC-052 REDIS_CREDENTIAL_WITHHELD and REC-055 " +
-		"REDIS_COMMAND_NOT_PERMITTED",
-	"internal/diagnosis/rabbitmq": "REC-064 RABBITMQ_AUTH_MECHANISM_NOT_OFFERED and REC-067 " +
-		"RABBITMQ_VHOST_ACCESS_REFUSED",
-	"internal/diagnosis/kubernetes": "",
-}
+// # What replaced what
+//
+// Phase 13.1B left a shrink-only allowlist: five production construction sites in
+// four packages, each naming the Phase 13.1C recommendations it served, with the
+// package count and the nine identifiers pinned so a tenth exemption could not
+// arrive unnoticed. That machinery existed to make a temporary state safe. The
+// state is over — all nine sentences were reviewed, rewritten and classified —
+// so the allowlist is **deleted** rather than emptied. A guard that reads
+// "expected legacy producers = []" invites someone to append to it; one that
+// proves zero directly does not.
+//
+// # Why the scan is structural
+//
+// It walks every production file in every package under internal/diagnosis,
+// derived from allProductionPackages rather than from a remembered list, so a new
+// rule package cannot escape it. It matches the **call expression**
+// domain.NewRecommendation in an AST, not a substring, so a mention in a comment
+// or a doc string is not a finding and a helper that wraps the constructor under
+// another name still is — the wrapper has to call it somewhere.
+//
+// domain.NewRecommendation itself is kept: internal/security/redaction rebuilds
+// an unclassified recommendation through it, and the domain type still admits
+// one. What may not happen is a *rule* building one.
+func TestNoProductionRuleBuildsAnUnclassifiedRecommendation(t *testing.T) {
+	packages := productionDiagnosisPackages(t)
+	if len(packages) < 6 {
+		t.Fatalf("only %d production rule packages were found, want at least 6; the "+
+			"scan would be nearly vacuous", len(packages))
+	}
 
-// TestLegacyRecommendationConstructionIsBoundedToTheNine is the temporary
-// invariant ADR 0097 section 2.1 leaves for Phase 13.1C to close at zero.
-//
-// It scans the actual production boundary rather than a remembered list of files:
-// every package that calls domain.NewRecommendation must be one whose allowlist
-// entry names the Phase 13.1C recommendations it serves, and a package with an
-// empty entry may not call it at all.
-func TestLegacyRecommendationConstructionIsBoundedToTheNine(t *testing.T) {
-	callers := map[string][]string{}
-	for _, pkg := range productionDiagnosisPackages(t) {
-		for _, file := range productionFilesIn(t, pkg) {
+	var scanned int
+	for _, pkg := range packages {
+		files := productionFilesIn(t, pkg)
+		if len(files) == 0 {
+			t.Errorf("%s yielded no production file; the scan of it asserts nothing", pkg)
+		}
+		for _, file := range files {
+			scanned++
 			if callsUnclassifiedConstructor(t, file) {
-				callers[pkg] = append(callers[pkg], path.Base(file))
+				t.Errorf("%s builds an unclassified recommendation.\n\n"+
+					"ADR 0097 section 2.1: a production rule may not decline to classify "+
+					"its own advice, and since Phase 13.1C there is no exemption list to "+
+					"add it to. Route it through the package's advise helper with a "+
+					"safety class and a rationale.\n\n"+
+					"If the sentence genuinely cannot be classified as NEXT_EVIDENCE with "+
+					"OBSERVE, VERIFY or COMPARE, that is evidence it should be removed "+
+					"rather than that the taxonomy should widen.", file)
 			}
 		}
 	}
-	if len(callers) == 0 {
-		t.Fatal("no production package builds an unclassified recommendation, so either " +
-			"Phase 13.1C has landed and this guard and its allowlist should be deleted " +
-			"together, or the scan matched nothing and is vacuous")
+	if scanned == 0 {
+		t.Fatal("no production file was scanned at all; this guard would pass vacuously")
+	}
+	t.Logf("%d production files across %d rule packages build no unclassified "+
+		"recommendation", scanned, len(packages))
+}
+
+// TestTheUnclassifiedConstructorScanIsNotVacuous is the companion the invariant
+// above needs.
+//
+// Every assertion in it is an absence, so it would pass on an empty scan, on a
+// broken matcher, or on a matcher that looks for the wrong thing. This drives the
+// same detector over source that *does* call the constructor and requires a hit —
+// and over source that only mentions it in prose and requires none, because a
+// substring scan would fail that second half.
+func TestTheUnclassifiedConstructorScanIsNotVacuous(t *testing.T) {
+	dir := t.TempDir()
+
+	positive := filepath.Join(dir, "positive.go")
+	writeFixture(t, positive, `package p
+
+import "github.com/hakanaltindag/svcdoctor/internal/domain"
+
+func legacy(action string) []domain.Recommendation {
+	r, err := domain.NewRecommendation(action)
+	if err != nil {
+		return nil
+	}
+	return []domain.Recommendation{r}
+}
+`)
+	if !callsUnclassifiedConstructor(t, positive) {
+		t.Error("the detector missed a real domain.NewRecommendation call site, so the " +
+			"zero-legacy invariant proves nothing")
 	}
 
-	for pkg, files := range callers {
-		reason, listed := legacyRecommendationSites[pkg]
-		switch {
-		case !listed:
-			t.Errorf("%s builds an unclassified recommendation in %v and is not in "+
-				"legacyRecommendationSites.\n\n"+
-				"ADR 0097 section 2.1 forbids a production rule from declining to "+
-				"classify its own advice. Route it through the package's advise helper, "+
-				"or — if the sentence genuinely needs review first — add the exemption "+
-				"and move the pinned count in the same change.", pkg, files)
-		case reason == "":
-			t.Errorf("%s builds an unclassified recommendation in %v, and its allowlist "+
-				"entry names no Phase 13.1C recommendation; the package was fully "+
-				"migrated and must stay that way", pkg, files)
-		}
+	// The aliased form, which the Phase 13.1C mutation suite planted and which
+	// survived the first run: the detector was matching the identifier "domain"
+	// rather than the package it names.
+	aliased := filepath.Join(dir, "aliased.go")
+	writeFixture(t, aliased, `package p
+
+import dom "github.com/hakanaltindag/svcdoctor/internal/domain"
+
+func legacy(action string) []dom.Recommendation {
+	r, err := dom.NewRecommendation(action)
+	if err != nil {
+		return nil
+	}
+	return []dom.Recommendation{r}
+}
+`)
+	if !callsUnclassifiedConstructor(t, aliased) {
+		t.Error("the detector missed domain.NewRecommendation reached through an import " +
+			"alias, so renaming an import would silence the zero-legacy invariant")
 	}
 
-	var exempt int
-	for _, reason := range legacyRecommendationSites {
-		if reason != "" {
-			exempt++
-		}
-	}
-	const wantExemptPackages = 4
-	if exempt != wantExemptPackages {
-		t.Errorf("%d packages hold a legacy exemption, want %d.\n\n"+
-			"The list is shrink-only: Phase 13.1C removes entries as it rewrites the "+
-			"sentences, and a new one is a production rule declining to classify its own "+
-			"advice.", exempt, wantExemptPackages)
+	// And a selector of the same name on a package that is not the domain, which
+	// must not fire: the match is on the import path, not on the method name.
+	lookalike := filepath.Join(dir, "lookalike.go")
+	writeFixture(t, lookalike, `package p
+
+import domain "github.com/hakanaltindag/svcdoctor/internal/diagnosis"
+
+func notTheConstructor() { domain.NewRecommendation("x") }
+`)
+	if callsUnclassifiedConstructor(t, lookalike) {
+		t.Error("the detector fired on a NewRecommendation selector belonging to another " +
+			"package, so it matches the method name rather than the package")
 	}
 
-	// The nine, named individually, so the allowlist cannot be broadened by
-	// rewording a reason.
-	var named int
-	for _, reason := range legacyRecommendationSites {
-		named += len(regexp.MustCompile(`REC-\d{3}`).FindAllString(reason, -1))
-	}
-	if named != 9 {
-		t.Errorf("the allowlist names %d REC identifiers, want exactly the 9 Phase 13.1C "+
-			"owns", named)
-	}
+	negative := filepath.Join(dir, "negative.go")
+	writeFixture(t, negative, `package p
 
-	// And the nine it names are the nine the corpus marks deferred.
-	var deferred []string
-	for _, r := range recommendationCorpus {
-		if r.group == groupS {
-			deferred = append(deferred, r.rec)
-		}
+// domain.NewRecommendation is named here in prose only. Phase 13.1C deleted the
+// last production caller; this comment must not read as one.
+const note = "domain.NewRecommendation(action)"
+`)
+	if callsUnclassifiedConstructor(t, negative) {
+		t.Error("the detector fired on a comment and a string literal, which makes it a " +
+			"substring scan rather than an AST one; it would block a truthful comment " +
+			"and could be silenced by rewording")
 	}
-	sort.Strings(deferred)
-	var allowed []string
-	for _, reason := range legacyRecommendationSites {
-		allowed = append(allowed, regexp.MustCompile(`REC-\d{3}`).FindAllString(reason, -1)...)
+}
+
+// writeFixture writes one temporary Go file for the non-vacuity proof.
+func writeFixture(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
 	}
-	sort.Strings(allowed)
-	if strings.Join(deferred, ",") != strings.Join(allowed, ",") {
-		t.Errorf("the allowlist and the corpus disagree about which recommendations are "+
-			"deferred.\n\ncorpus:    %v\nallowlist: %v", deferred, allowed)
-	}
-	t.Logf("%d packages hold a legacy exemption covering %s", exempt, allowed)
 }
 
 // TestTheRecommendationClassificationGuardsCanFail proves the guards above are
@@ -596,16 +640,21 @@ func TestTheRecommendationClassificationGuardsCanFail(t *testing.T) {
 		}
 	})
 
-	t.Run("the legacy scan sees a real caller", func(t *testing.T) {
-		var found bool
-		for _, file := range productionFilesIn(t, "internal/diagnosis/redis") {
-			if callsUnclassifiedConstructor(t, file) {
-				found = true
+	// The legacy scan used to be proved non-vacuous by pointing it at
+	// internal/diagnosis/redis, which really did hold two exemptions. Phase 13.1C
+	// removed the last caller in the tree, so there is no longer a production file
+	// that would make it fire — and a detector with nothing to detect is exactly
+	// the vacuity this sub-test existed to refuse. It moved to a synthetic fixture
+	// rather than being deleted: TestTheUnclassifiedConstructorScanIsNotVacuous
+	// drives the same detector over source that does call the constructor and over
+	// source that only names it in prose.
+	t.Run("no production file would make the legacy scan fire", func(t *testing.T) {
+		for _, pkg := range productionDiagnosisPackages(t) {
+			for _, file := range productionFilesIn(t, pkg) {
+				if callsUnclassifiedConstructor(t, file) {
+					t.Errorf("%s still builds an unclassified recommendation", file)
+				}
 			}
-		}
-		if !found {
-			t.Error("the legacy scan finds no caller in internal/diagnosis/redis, which " +
-				"holds two Phase 13.1C exemptions; the boundary guard is vacuous")
 		}
 	})
 }
@@ -637,8 +686,44 @@ func identifiersUsed(t *testing.T, file string) []string {
 // domain.NewRecommendation, read from the call expressions rather than the bytes.
 func callsUnclassifiedConstructor(t *testing.T, file string) bool {
 	t.Helper()
+
+	parsed := parseFile(t, file)
+
+	// The local names under which this file can reach the domain package.
+	//
+	// **Resolved from the import declarations rather than assumed to be
+	// "domain".** The Phase 13.1C mutation suite planted `dom
+	// "…/internal/domain"` and called `dom.NewRecommendation`, and it survived:
+	// the detector was matching the identifier a reader expects instead of the
+	// package it names, so renaming the import silenced the phase's load-bearing
+	// guard. Nothing about the plant was exotic — this repository already imports
+	// packages under an alias in a dozen places, `servicekafka` among them.
+	locals := map[string]bool{}
+	for _, spec := range parsed.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || path != domainPackage {
+			continue
+		}
+		switch {
+		case spec.Name == nil:
+			// The package's own name, which is its last path segment here.
+			locals["domain"] = true
+		case spec.Name.Name == "_" || spec.Name.Name == ".":
+			// A blank import cannot call anything, and a dot import would put
+			// NewRecommendation in file scope with no selector at all — which the
+			// selector match below cannot see. Treated as a finding rather than
+			// ignored, because it is a way to reach the constructor.
+			locals[spec.Name.Name] = true
+		default:
+			locals[spec.Name.Name] = true
+		}
+	}
+	if locals["."] {
+		return true
+	}
+
 	var found bool
-	ast.Inspect(parseFile(t, file), func(node ast.Node) bool {
+	ast.Inspect(parsed, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -647,10 +732,231 @@ func callsUnclassifiedConstructor(t *testing.T, file string) bool {
 		if !ok || sel.Sel.Name != "NewRecommendation" {
 			return true
 		}
-		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "domain" {
+		if pkg, ok := sel.X.(*ast.Ident); ok && locals[pkg.Name] {
 			found = true
 		}
 		return true
 	})
 	return found
+}
+
+// domainPackage is the import path that owns the unclassified constructor.
+const domainPackage = "github.com/hakanaltindag/svcdoctor/internal/domain"
+
+// The Phase 13.1C semantic closure, as two guards with different jobs.
+//
+// ADR 0097 section 2.2 and Phase 13.1A section 8: a finding proves a *condition*
+// and the evidence that authorizes the condition does not authorize a *policy*.
+// Nine recommendations instructed, or could be read as instructing, a change to
+// the diagnosed target; each was rewritten as bounded next evidence.
+//
+// The pin below is the primary proof and the rule after it is supplemental, in
+// that order deliberately. A keyword rule cannot decide whether a sentence
+// prescribes policy — English is not that tractable, and section 31 of the phase
+// brief says so — but it does stop the *specific* prose this phase removed from
+// being written again by someone who has not read the record.
+
+// rewrittenActions are the nine Phase 13.1C sentences, byte for byte.
+//
+// Keyed by package-qualified constant rather than by finding code, because three
+// of the nine share a finding code with a recommendation Phase 13.1B had already
+// classified, so a code-level pin would assert the wrong thing.
+var rewrittenActions = map[string]string{
+	"kafka/recommendCredentialWithheld": "Use --tls require with a trusted certificate " +
+		"chain, or supply --tls-ca-file, so this broker's identity is verified before a " +
+		"credential crosses to it",
+	"kafka/recommendDNS": "Compare the name this broker publishes in advertised.listeners " +
+		"with the names resolvable from this network position",
+	"postgres/recommendCredentialWithheld": "Use --tls require with a trusted certificate " +
+		"chain, or supply --tls-ca-file, so this endpoint's identity is verified before a " +
+		"password crosses to it",
+	"postgres/recommendMechanismUnsupported": "Diagnose this endpoint with a client that " +
+		"performs the authentication method it demands",
+	"postgres/recommendUnsupportedBySvcdoctor": "Re-run this diagnosis against a role whose " +
+		"password is already printable ASCII, or diagnose this endpoint with a client that " +
+		"implements the full mechanism",
+	"redis/recommendCredentialWithheld": "Use --tls require with a trusted certificate " +
+		"chain, or supply --tls-ca-file, so this endpoint's identity is verified before a " +
+		"credential is presented",
+	"redis/recommendCommandNotPermitted": "Verify whether this identity is intended to run " +
+		"PING, or diagnose with an identity that already has it",
+	"rabbitmq/recommendMechanismNotOffered": "Diagnose this endpoint with a client that " +
+		"implements one of the mechanisms it offers",
+	"rabbitmq/recommendVHostAccessRefused": "Verify whether this identity is intended to " +
+		"have access to this virtual host, in the broker's own permissions configuration",
+}
+
+// retiredTargetMutatingActions are the nine sentences Phase 13.1C removed.
+//
+// They are quoted here so that reintroducing one is a named failure rather than a
+// silent digest mismatch. Five of them would also be refused by the imperative
+// rule below; four would not, and that gap is the reason this list exists.
+var retiredTargetMutatingActions = map[string]string{
+	"Establish verified TLS to this endpoint, or review the trust context this run used, " +
+		"then re-run": "REC-012",
+	"Check whether the advertised hostname resolves from this vantage point, and what the " +
+		"broker publishes in advertised.listeners": "REC-021",
+	"Establish a verified TLS channel to this endpoint before presenting a credential, or " +
+		"re-run with the transport policy this run is meant to use": "REC-031",
+	"Diagnose this endpoint with a client that performs the authentication method it " +
+		"demands, or configure a mechanism svcdoctor performs for the role this run used": "REC-034",
+	"Re-run against a role whose password is printable ASCII, or diagnose this endpoint " +
+		"with a client that implements the full mechanism": "REC-036",
+	"Enable TLS for this endpoint and supply the trust material that verifies it, then run " +
+		"again": "REC-052",
+	"Grant the diagnostic identity permission to run PING, or diagnose with an identity " +
+		"that already has it": "REC-055",
+	"Enable SASL PLAIN on this endpoint, or diagnose it with a client that implements the " +
+		"mechanisms it offers": "REC-064",
+	"Grant this user permissions on the virtual host, for example with rabbitmqctl " +
+		"set_permissions": "REC-067",
+}
+
+// TestTheRewrittenRecommendationsAreTheFrozenOnes is the primary proof.
+func TestTheRewrittenRecommendationsAreTheFrozenOnes(t *testing.T) {
+	found := recommendationConstants(t)
+
+	for key, want := range rewrittenActions {
+		got, ok := found[key]
+		if !ok {
+			t.Errorf("%s no longer exists, so its Phase 13.1C pin asserts nothing", key)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s reads\n  %q\nwant the frozen Phase 13.1C text\n  %q", key, got, want)
+		}
+	}
+
+	// And the retired prose is gone from the whole corpus, not merely from the
+	// nine constants that used to carry it — a rule could reintroduce the
+	// sentence under a different name.
+	for text, rec := range retiredTargetMutatingActions {
+		for key, action := range found {
+			if action == text {
+				t.Errorf("%s carries %s's retired action %q.\n\n"+
+					"Phase 13.1C removed it because it instructs a change to the "+
+					"diagnosed target, or reads as one, and the evidence that "+
+					"authorizes the finding does not authorize the change "+
+					"(ADR 0097 section 2.2).", key, rec, text)
+			}
+		}
+	}
+}
+
+// TestNoProductionRecommendationInstructsATargetMutation is the supplemental
+// rule, so that a **new** recommendation is refused on the day it is written
+// rather than on the day somebody remembers to add a row above.
+//
+// # Why it reads clause openings and not the whole string
+//
+// The obvious implementation — does the action contain "change " anywhere —
+// has a false positive already in the tree. Kafka's `recommendUnsupportedExchange`
+// ends *"this is a gap in svcdoctor rather than something to change on the
+// cluster"*, which is a refusal to recommend a change and would be flagged by a
+// substring scan. Phase 12.1D found the same class of defect in a fuzz guard that
+// matched "clu" inside "the cluster". An imperative instructs only when it opens
+// a clause, so that is what this matches.
+//
+// # Why "establish" is not on the list
+//
+// It was, and it flagged two correct recommendations — *"…and establish what this
+// broker is before presenting the credential again"* — where the verb means
+// *determine*, not *set up*. That ambiguity is exactly why REC-012 and REC-031
+// had to be rewritten by hand, and it is why a keyword rule cannot be the whole
+// proof. Those two are covered by the byte pin above.
+func TestNoProductionRecommendationInstructsATargetMutation(t *testing.T) {
+	imperatives := []string{
+		"change ", "create ", "delete ", "recreate ", "restart ", "scale ",
+		"grant ", "revoke ", "edit ", "increase ", "decrease ", "add ",
+		"remove ", "apply ", "patch ", "set ", "disable ", "enable ",
+		"bind ", "install ", "rotate ", "configure ", "reconfigure ",
+		"allow ", "update ", "modify ", "broaden ", "lower ", "turn ",
+	}
+
+	found := recommendationConstants(t)
+	if len(found) == 0 {
+		t.Fatal("no recommendation constant was found; this guard would pass vacuously")
+	}
+	for key, action := range found {
+		for _, clause := range actionClauses(action) {
+			for _, imperative := range imperatives {
+				if strings.HasPrefix(clause, imperative) {
+					t.Errorf("%s recommends %q, whose clause %q opens with the "+
+						"imperative %q.\n\n"+
+						"Proving a condition does not authorize a policy: the operator's "+
+						"ACL, listener, trust and authentication configuration may be "+
+						"doing exactly what its author intended. State the observation "+
+						"that would settle it (ADR 0097 section 2.2, Phase 13.1A "+
+						"section 8.2).", key, action, clause, imperative)
+				}
+			}
+		}
+	}
+	t.Logf("%d production recommendations instruct no change to the target", len(found))
+}
+
+// TestTheTargetMutationRuleCanFail is the non-vacuity proof for the rule above.
+//
+// Every assertion in it is an absence, so it would pass on an empty corpus or a
+// broken matcher. This drives the matcher over the exact prose Phase 13.1C
+// removed and requires the refusal, and over the sentence that caused the false
+// positive and requires none.
+func TestTheTargetMutationRuleCanFail(t *testing.T) {
+	mutating := func(action string) bool {
+		for _, clause := range actionClauses(action) {
+			for _, imperative := range []string{"grant ", "enable ", "configure ", "change "} {
+				if strings.HasPrefix(clause, imperative) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	for _, retired := range []string{
+		"Grant this user permissions on the virtual host, for example with rabbitmqctl " +
+			"set_permissions",
+		"Enable SASL PLAIN on this endpoint, or diagnose it with a client that implements " +
+			"the mechanisms it offers",
+		"Diagnose this endpoint with a client that performs the authentication method it " +
+			"demands, or configure a mechanism svcdoctor performs for the role this run used",
+	} {
+		if !mutating(retired) {
+			t.Errorf("the rule admits %q, which Phase 13.1C removed for instructing a "+
+				"change to the target", retired)
+		}
+	}
+
+	// The clause after "or" is reached, not only the first one: REC-034's
+	// mutating half was its second clause.
+	if !mutating("Do something harmless, or grant the identity a permission") {
+		t.Error("the rule reads only the first clause, so an imperative after a comma " +
+			"would survive it")
+	}
+
+	keep := "Check the referenced evidence for which limit applied; if the endpoint is " +
+		"behaving correctly this is a gap in svcdoctor rather than something to change " +
+		"on the cluster"
+	if mutating(keep) {
+		t.Error("the rule refuses a sentence that declines to recommend a change, which " +
+			"makes it a substring scan rather than a clause-opening one")
+	}
+}
+
+// actionClauses splits an action into the clauses a reader takes as separate
+// instructions, with a leading conjunction removed.
+func actionClauses(action string) []string {
+	var out []string
+	for _, part := range strings.FieldsFunc(action, func(r rune) bool {
+		return r == ',' || r == ';'
+	}) {
+		clause := strings.ToLower(strings.TrimSpace(part))
+		for _, conjunction := range []string{"or ", "and ", "then ", "but "} {
+			clause = strings.TrimPrefix(clause, conjunction)
+		}
+		if clause != "" {
+			out = append(out, clause)
+		}
+	}
+	return out
 }

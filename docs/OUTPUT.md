@@ -58,7 +58,8 @@ Five states appear:
 **Findings** are the conclusions. Each carries a code, a severity, the subject it is about, a
 one-line summary, the detail, what the finding does *not* establish, and a `→` recommendation.
 
-A recommendation may carry a classification, shown in brackets after the action:
+**Every recommendation carries a classification**, shown in brackets after the action, with its
+rationale on the line beneath:
 
 ```text
     → Identify the connection limits applicable to this attempted session …  [NEXT_EVIDENCE / COMPARE / you must collect]
@@ -67,17 +68,32 @@ A recommendation may carry a classification, shown in brackets after the action:
 
 | Part | Meaning |
 |---|---|
-| `NEXT_EVIDENCE` | an **observation** that would separate the remaining explanations. It changes nothing |
-| `REMEDIATION` | a **change** to make. svcdoctor emits one only from a CONFIRMED finding at HIGH confidence |
-| `OBSERVE` / `VERIFY` / `COMPARE` / `CONFIG_CHANGE` | what taking it would cost, by blast radius |
+| `NEXT_EVIDENCE` | an **observation** that would separate the remaining explanations. It changes nothing. **Every recommendation svcdoctor produces is one of these** |
+| `OBSERVE` / `VERIFY` / `COMPARE` | what taking it would cost, by blast radius. All three are read-only; they differ in whether you are reading something, checking a claim against it, or contrasting two things |
 | `svcdoctor can collect` | a differently configured run — a larger budget, for instance — could take this observation. **It does not mean svcdoctor took it, or will** |
 | `you must collect` | svcdoctor cannot take it from where it stands. This is the common case and is said plainly rather than implied away |
 
-The indented line beneath is the **rationale**: why that observation discriminates.
+The indented line beneath is the **rationale**: why that observation discriminates. It is
+svcdoctor's own prose, never a message from the endpoint, and it is redacted in a shareable report
+exactly as the action is.
 
-A recommendation with no brackets is one svcdoctor has not classified. That is normal — most of
-the advice in the product predates the classification — and it means *nobody said*, never *this is
-safe*.
+### What svcdoctor will not recommend
+
+**It never tells you to change the thing it is diagnosing.** No recommendation enables a
+mechanism, grants a permission, edits a configuration, installs a certificate, restarts anything
+or relaxes a security setting — and that is a rule rather than a habit: a finding proves a
+*condition*, and the evidence that proves the condition does not establish that the condition is
+wrong. Your ACL, your listener configuration and your host-based access rules may be doing exactly
+what their author intended. svcdoctor tells you what it established, and what observation would
+settle the rest.
+
+Where an action names a flag, the flag is always one of **svcdoctor's own** — `--tls require`,
+`--tls-ca-file` — because re-running the diagnosis differently is a change to this run and not to
+your service.
+
+`REMEDIATION`, a second kind meaning *a change to make*, exists in the report schema and **has no
+producer**. Nothing emits one today, and activating it needs its own decision record and security
+review (ADR 0097 §7). A recommendation with no brackets at all cannot occur in current output.
 
 **The `Result` block** is the summary. `status` is the whole report's verdict, `outcome` is the
 service's terminal question — a session, Kafka metadata, a PING, a virtual host — and `execution`

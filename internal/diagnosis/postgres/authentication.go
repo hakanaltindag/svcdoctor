@@ -109,9 +109,13 @@ const (
 		"What the endpoint demanded or advertised is recorded on the referenced startup node."
 	recommendMechanismNotOffered = "Check which authentication mechanisms this endpoint offers " +
 		"for the role this run used and from the address this run connected from"
+	// Phase 13.1C REC-034. The second clause used to read "or configure a
+	// mechanism svcdoctor performs for the role this run used", which asks the
+	// server to change its authentication so the diagnostic tool can
+	// authenticate — the product inverted. It is dropped; the first clause was
+	// always the correct and sufficient one.
 	recommendMechanismUnsupported = "Diagnose this endpoint with a client that performs the " +
-		"authentication method it demands, or configure a mechanism svcdoctor performs for the " +
-		"role this run used"
+		"authentication method it demands"
 
 	summaryUnsupportedBySvcdoctor = "svcdoctor could not complete the authentication this " +
 		"PostgreSQL endpoint required"
@@ -122,8 +126,17 @@ const (
 		"the rest. Those bounds are svcdoctor's own defensive limits rather than a protocol " +
 		"rule, so the endpoint's message may be entirely valid.\n" +
 		"The credential was neither accepted nor rejected."
-	recommendUnsupportedBySvcdoctor = "Re-run against a role whose password is printable ASCII, " +
-		"or diagnose this endpoint with a client that implements the full mechanism"
+	// Phase 13.1C REC-036. It used to open "Re-run against a role whose password
+	// is printable ASCII", which reads as *change a password* as easily as
+	// *choose another role*. The two differ in kind, and "already" is what
+	// settles it on selection.
+	//
+	// The first draft opened with "Select a role ...", which
+	// TestNoRecommendationIsExecutable rejected for containing the SQL verb —
+	// correctly, in a PostgreSQL report. The guard was not widened.
+	recommendUnsupportedBySvcdoctor = "Re-run this diagnosis against a role whose password is " +
+		"already printable ASCII, or diagnose this endpoint with a client that implements the " +
+		"full mechanism"
 
 	summaryCredentialWithheld = "svcdoctor withheld the credential because this connection did " +
 		"not meet the credential-transport policy"
@@ -132,8 +145,12 @@ const (
 		"requires a verified TLS channel before a password crosses it.\n" +
 		"Nothing was presented, so no refusal took place and nothing is known about the " +
 		"credential."
-	recommendCredentialWithheld = "Establish a verified TLS channel to this endpoint before " +
-		"presenting a credential, or re-run with the transport policy this run is meant to use"
+	// Phase 13.1C REC-031. It used to open "Establish a verified TLS channel to
+	// this endpoint", which could be read as *configure the server*. Every token
+	// here names one of svcdoctor's own options instead.
+	recommendCredentialWithheld = "Use --tls require with a trusted certificate chain, or " +
+		"supply --tls-ca-file, so this endpoint's identity is verified before a password " +
+		"crosses to it"
 
 	// Fixed by ADR 0040 section 14, word for word.
 	summaryAuthenticationFailed = "The PostgreSQL authentication exchange did not complete successfully"
@@ -291,11 +308,8 @@ func unknownAuthentication(node domain.Evidence, refs []domain.EvidenceID) (doma
 	case domain.FailureAuthMechanismUnsupported:
 		// INFO: a gap in svcdoctor. Grading a tool gap higher would spend the
 		// endpoint's severity budget on svcdoctor's own coverage.
-		// Unclassified: Phase 13.1A REC-034 reserved this sentence, whose second
-		// clause asks the endpoint to reconfigure its authentication so that
-		// svcdoctor can authenticate.
 		return mechanismUnavailable(node, domain.SeverityInfo, recommendMechanismUnsupported,
-			diagnosis.SafetyUnspecified, "", refs)
+			diagnosis.SafetyObserve, rationaleMechanismUnsupported, refs)
 
 	case domain.FailureExecUnsupportedBySvcdoctor:
 		return build(domain.FindingInput{
@@ -312,7 +326,8 @@ func unknownAuthentication(node domain.Evidence, refs []domain.EvidenceID) (doma
 			// address.
 			VantageDependent: true,
 			EvidenceRefs:     refs,
-			Recommendations:  recommend(recommendUnsupportedBySvcdoctor),
+			Recommendations: advise(diagnosis.SafetyObserve, recommendUnsupportedBySvcdoctor,
+				rationaleUnsupportedBySvcdoctor),
 		})
 	}
 	return domain.Finding{}, false
@@ -367,7 +382,8 @@ func skippedAuthentication(
 		// neither of which is a property of network position.
 		VantageDependent: false,
 		EvidenceRefs:     refs,
-		Recommendations:  recommend(recommendCredentialWithheld),
+		Recommendations: advise(diagnosis.SafetyObserve, recommendCredentialWithheld,
+			rationaleCredentialWithheld),
 	})
 }
 
@@ -457,31 +473,32 @@ func mechanismUnavailable(
 		// one of a client elsewhere.
 		VantageDependent: true,
 		EvidenceRefs:     refs,
-		// Mixed while one of the two actions is Phase 13.1C's: the caller decides,
-		// because the caller is what chose the action, and SafetyUnspecified is
-		// how it says the sentence has not been reviewed.
-		Recommendations: mechanismAdvice(safety, action, rationale),
+		// Classified by the caller, because the caller is what chose the action:
+		// this code is reached by two failure classes with two different
+		// sentences (Phase 13.1B section 9.1).
+		Recommendations: advise(safety, action, rationale),
 	})
 }
 
-// mechanismAdvice classifies this finding's advice, or leaves it unclassified
-// when the action is one Phase 13.1C owns.
-func mechanismAdvice(
-	safety diagnosis.SafetyClass, action, rationale string,
-) []domain.Recommendation {
-	if safety == diagnosis.SafetyUnspecified {
-		return recommend(action)
-	}
-	return advise(safety, action, rationale)
-}
-
-// The rationales for the classified half of this file.
-//
-// `recommendCredentialWithheld` and `recommendUnsupportedBySvcdoctor` have none:
-// their actions are the ones Phase 13.1C reviews (REC-031 and REC-036), and
-// writing a rationale for a sentence whose scope is unsettled would settle it
-// here instead.
+// The rationales for this file's advice. Phase 13.1C completed the set: every
+// action here carries one, and `mechanismAdvice` is gone with the exemption it
+// served.
 const (
+	rationaleCredentialWithheld = "svcdoctor sent no credential material because this " +
+		"connection did not verify the endpoint's identity, so no refusal took place and " +
+		"nothing is known about the credential; what a verified channel would have produced " +
+		"is the observation this run did not take."
+
+	rationaleUnsupportedBySvcdoctor = "svcdoctor declined on its own defensive bounds rather " +
+		"than on anything the endpoint did, and the credential was neither accepted nor " +
+		"rejected; which role this run uses and which client performs the mechanism are both " +
+		"inputs this run was given."
+
+	rationaleMechanismUnsupported = "The endpoint demanded an authentication method svcdoctor " +
+		"does not perform and no credential was presented, so this states the tool's coverage " +
+		"and nothing about the endpoint; what a client performing that method would observe " +
+		"is still open."
+
 	rationaleCredentialsRejected = "The endpoint rejected the credential and said nothing " +
 		"about which half was wrong, so a mistyped secret and a role the server does not know " +
 		"are the same observation here; the endpoint's own log is where they separate."

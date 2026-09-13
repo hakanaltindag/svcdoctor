@@ -121,28 +121,6 @@ func advise(
 	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
 }
 
-// recommend wraps one unclassified action, dropping it only if the constant were
-// malformed.
-//
-// **The remaining legacy construction site in this package**, and it serves only
-// the three actions Phase 13.1C owns: `recommendCredentialWithheld` and
-// `recommendUnsupportedBySvcdoctor`, whose scope is ambiguous between a change to
-// the endpoint and a change to this run, and `recommendMechanismUnsupported`,
-// whose second clause asks the server to reconfigure its authentication so that
-// the diagnostic tool can authenticate. ADR 0097 section 2.1 forbids a production
-// rule from declining to classify its advice; this exemption is temporary, named
-// in the Phase 13.1B allowlist, and removed with the review that rewrites those
-// sentences.
-//
-// TestEveryRecommendationTextIsValid pins that none is malformed.
-func recommend(action string) []domain.Recommendation {
-	recommendation, err := domain.NewRecommendation(action)
-	if err != nil {
-		return nil
-	}
-	return []domain.Recommendation{recommendation}
-}
-
 // parentWithStep returns the single parent of node at the given step, when
 // exactly one exists.
 //

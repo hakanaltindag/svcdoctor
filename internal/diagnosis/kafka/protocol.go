@@ -241,8 +241,14 @@ const (
 		"established did not satisfy the credential-transport policy.\n" +
 		"No credential material was written. This is svcdoctor's own refusal, not an " +
 		"observation of the endpoint."
-	recommendCredentialWithheld = "Establish verified TLS to this endpoint, or review the " +
-		"trust context this run used, then re-run"
+	// Phase 13.1C REC-012. It used to read "Establish verified TLS to this
+	// endpoint, or review the trust context this run used, then re-run", whose
+	// first clause could be read as *configure the broker*. Nothing here is a
+	// change to the broker: every token names one of svcdoctor's own options,
+	// which is the shape RabbitMQ's equivalent already carried.
+	recommendCredentialWithheld = "Use --tls require with a trusted certificate chain, or " +
+		"supply --tls-ca-file, so this broker's identity is verified before a credential " +
+		"crosses to it"
 
 	summaryCredentialNotConfigured = "The Kafka endpoint required authentication and this run " +
 		"had no credential configured"
@@ -312,6 +318,11 @@ const (
 		"position, which is not a rejection; the broker's log for this connection is the only " +
 		"place an unanswered attempt and a refused one are distinguished."
 
+	rationaleCredentialWithheld = "svcdoctor refused to write the credential because the " +
+		"channel this path established did not verify the broker's identity, so nothing was " +
+		"sent and the broker took no position on it; what a verified channel would have " +
+		"produced is the observation this run did not take."
+
 	rationaleUnsupportedBySvcdoctor = "The listener negotiated a mechanism svcdoctor does not " +
 		"perform, so this states the tool's coverage and nothing about the endpoint; what the " +
 		"listener offers and what another client would complete are both still open."
@@ -336,12 +347,12 @@ type claim struct {
 
 	// safety and rationale classify the recommendation (ADR 0097 section 2.1).
 	//
-	// **SafetyUnspecified means the entry is one Phase 13.1C owns.** Exactly one
-	// is — CodeCredentialWithheld, whose action is ambiguous about whether
-	// "establish verified TLS" is a change to the broker or trust material
-	// supplied to svcdoctor (Phase 13.1A REC-012) — and its advice stays
-	// unclassified until that sentence is reviewed rather than being classified
-	// on a reading nobody has made.
+	// **Every entry carries both since Phase 13.1C.** There is no unclassified
+	// entry and no way to add one: `recommendations` calls `advise`
+	// unconditionally, so a table row that left `safety` zero would construct
+	// SafetyUnspecified, which `diagnosis.NewAdvice` refuses — and the refusal
+	// is a dropped recommendation the per-package wiring guard fails on, not a
+	// quietly unclassified one.
 	safety    diagnosis.SafetyClass
 	rationale string
 
@@ -649,6 +660,8 @@ var protocolClaims = map[outcome]claim{
 		summary:          summaryCredentialWithheld,
 		detail:           detailCredentialWithheld,
 		recommendation:   recommendCredentialWithheld,
+		safety:           diagnosis.SafetyObserve,
+		rationale:        rationaleCredentialWithheld,
 	},
 	{servicekafka.StepSASLAuthenticate, domain.StateSkipped, domain.FailureExecRequiredInputMissing}: {
 		code:     CodeCredentialNotConfigured,
@@ -858,12 +871,8 @@ func detailWithMechanism(detail string, node domain.Evidence) string {
 	return fmt.Sprintf("%s\nThe mechanism this step concerned was %s.", detail, mechanism)
 }
 
-// recommendations builds this claim's advice, classified unless the claim is one
-// Phase 13.1C owns.
+// recommendations builds this claim's advice. Every claim is classified.
 func (c claim) recommendations() []domain.Recommendation {
-	if c.safety == diagnosis.SafetyUnspecified {
-		return recommend(c.recommendation)
-	}
 	return advise(c.safety, c.recommendation, c.rationale)
 }
 
@@ -892,23 +901,4 @@ func advise(
 		SelfCollectable: false,
 		Rationale:       rationale,
 	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
-}
-
-// recommend wraps one unclassified action, dropping it if the model rejects the
-// text.
-//
-// **The one remaining legacy construction site in this package**, and it exists
-// only for the claim Phase 13.1C owns. ADR 0097 section 2.1 forbids a production
-// rule from declining to classify its own advice; the exemption is temporary,
-// named in the Phase 13.1B allowlist, and removed with the review that replaces
-// that sentence.
-func recommend(action string) []domain.Recommendation {
-	recommendation, err := domain.NewRecommendation(action)
-	if err != nil {
-		// Unreachable: every action is a package constant, non-empty, trimmed
-		// and free of control characters. Pinned by
-		// TestProtocolRecommendationTextIsValid.
-		return nil
-	}
-	return []domain.Recommendation{recommendation}
 }

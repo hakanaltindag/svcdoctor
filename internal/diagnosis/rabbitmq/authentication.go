@@ -100,8 +100,13 @@ const (
 		"This is not a claim that the endpoint is misconfigured. It is behaving correctly " +
 		"and svcdoctor is the limited party."
 
-	recommendMechanismNotOffered = "Enable SASL PLAIN on this endpoint, or diagnose it with a " +
-		"client that implements the mechanisms it offers"
+	// Phase 13.1C REC-064. It used to open "Enable SASL PLAIN on this endpoint",
+	// which is a change to the broker's security posture carrying no TLS
+	// condition — and advice svcdoctor's own policy would then refuse to act on,
+	// because ADR 0068 forbids it sending PLAIN without verified TLS. The clause
+	// is dropped rather than softened.
+	recommendMechanismNotOffered = "Diagnose this endpoint with a client that implements one " +
+		"of the mechanisms it offers"
 
 	summaryAuthUnsupported = "svcdoctor could not complete the negotiation this endpoint " +
 		"requires"
@@ -210,7 +215,8 @@ func authenticationFinding(node domain.Evidence) (domain.FindingInput, bool) {
 				Summary:          summaryMechanismNotOffered,
 				Detail:           detailMechanismNotOffered,
 				VantageDependent: false,
-				Recommendations:  recommend(recommendMechanismNotOffered),
+				Recommendations: advise(diagnosis.SafetyObserve, recommendMechanismNotOffered,
+					rationaleMechanismNotOffered),
 			}, true
 		case domain.FailureProtocolUnsupportedCapability:
 			return domain.FindingInput{
@@ -287,6 +293,11 @@ const (
 	rationaleCredentialWithheld = "The credential was withheld because the channel's identity " +
 		"was not established, so nothing was sent and the broker took no position; what the " +
 		"endpoint is comes before what it would say about the credential."
+
+	rationaleMechanismNotOffered = "svcdoctor performs PLAIN only and sent no credential, so " +
+		"this states the tool's coverage and not a fault in the endpoint; whether a credential " +
+		"would be accepted here is something only a client implementing an offered mechanism " +
+		"can establish."
 
 	rationaleAuthUnsupported = "The frame size this endpoint negotiated is below what AMQP " +
 		"0-9-1 requires of any peer, so the two numbers are the whole of it; the endpoint's " +

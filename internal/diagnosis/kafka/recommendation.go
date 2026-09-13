@@ -18,8 +18,14 @@ import (
 // evidence the finding just proved. None of these is executable — svcdoctor
 // suggests where to look and never what to run.
 const (
-	recommendDNS = "Check whether the advertised hostname resolves from this vantage point, " +
-		"and what the broker publishes in advertised.listeners"
+	// Phase 13.1C REC-021. It used to open with "Check whether the advertised
+	// hostname resolves from this vantage point", which asks the reader to redo
+	// the measurement that produced this finding — svcdoctor resolved that name
+	// from here and recorded the answer. What is left is the half svcdoctor
+	// cannot answer: which names the broker's own listener configuration was
+	// written to publish.
+	recommendDNS = "Compare the name this broker publishes in advertised.listeners with the " +
+		"names resolvable from this network position"
 	recommendTCP = "Check routing, firewall rules and security group policy between this " +
 		"vantage point and the advertised address and port"
 	recommendTLS = "Check whether the broker certificate names the advertised host, and " +
@@ -35,6 +41,11 @@ const (
 // exists. Phase 13.1A recorded it as REC-021 and reserved the sentence for
 // Phase 13.1C rather than classifying a clause that restates the report.
 const (
+	rationaleDNS = "svcdoctor asked this host's resolver for the advertised name and was " +
+		"given no address it could use, so the name and this network position are the two " +
+		"halves; which of them the advertisement was written for is held in the broker's own " +
+		"listener configuration."
+
 	rationaleTCP = "Name resolution succeeded for the advertised endpoint and the connection " +
 		"did not, so what differs lies between this network position and that address; " +
 		"routing, filtering and security-group policy are where that decision is made, and a " +
@@ -69,21 +80,9 @@ func recommendations(
 		if !ok {
 			continue
 		}
-		// SafetyUnspecified is the DNS layer, whose sentence Phase 13.1C owns.
-		// The list is therefore mixed while that exemption stands, which the
-		// report model admits: a classified and an unclassified recommendation
-		// are both valid values, and each says exactly what is known about it.
-		if safety == diagnosis.SafetyUnspecified {
-			recommendation, err := domain.NewRecommendation(action)
-			if err != nil {
-				// Unreachable: the action is a constant and is non-empty,
-				// trimmed and free of control characters. Pinned by
-				// TestRecommendationTextIsValid.
-				continue
-			}
-			out = append(out, recommendation)
-			continue
-		}
+		// Every layer is classified since Phase 13.1C, so the list is uniform:
+		// diagnosis.Recommend is the only construction path here and it refuses
+		// an unclassified value rather than admitting one.
 		out = append(out, diagnosis.Recommend(diagnosis.AdviceInput{
 			Kind:   diagnosis.AdviceKindNextEvidence,
 			Safety: safety,
@@ -111,9 +110,7 @@ func recommendationFor(
 ) (action string, safety diagnosis.SafetyClass, rationale string, ok bool) {
 	switch layer {
 	case domain.LayerDNS:
-		// Unclassified, and named as an exemption rather than left to look like
-		// an oversight: Phase 13.1A REC-021.
-		return recommendDNS, diagnosis.SafetyUnspecified, "", true
+		return recommendDNS, diagnosis.SafetyCompare, rationaleDNS, true
 	case domain.LayerTCP:
 		return recommendTCP, diagnosis.SafetyVerify, rationaleTCP, true
 	case domain.LayerTLS:

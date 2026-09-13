@@ -74,23 +74,6 @@ func advise(
 	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
 }
 
-// recommend wraps one unclassified action.
-//
-// **The remaining legacy construction site in this package**, and it serves only
-// the two actions Phase 13.1C owns: `recommendCredentialWithheld`, whose "enable
-// TLS for this endpoint" is a change to the endpoint's configuration, and
-// `recommendCommandNotPermitted`, whose first clause asks for an ACL grant that
-// the refusal does not establish is the right policy. ADR 0097 section 2.1
-// forbids a production rule from declining to classify its advice; this exemption
-// is temporary and named in the Phase 13.1B allowlist.
-func recommend(action string) []domain.Recommendation {
-	recommendation, err := domain.NewRecommendation(action)
-	if err != nil {
-		return nil
-	}
-	return []domain.Recommendation{recommendation}
-}
-
 // nodesAt returns every node recorded at one step, in graph order.
 func nodesAt(g domain.Graph, step domain.Step) []domain.Evidence {
 	var out []domain.Evidence

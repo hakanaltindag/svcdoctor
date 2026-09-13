@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hakanaltindag/svcdoctor/internal/diagnosis"
 	"github.com/hakanaltindag/svcdoctor/internal/domain"
 	servicekafka "github.com/hakanaltindag/svcdoctor/internal/service/kafka"
 )
@@ -491,7 +492,23 @@ func TestMetadataFloorClaimsNothingAboutTopology(t *testing.T) {
 func TestRecommendationsAreNotExecutable(t *testing.T) {
 	for key, c := range protocolClaims {
 		action := c.recommendation
-		for _, shell := range []string{"$ ", "kafka-topics.sh", "sudo ", "curl ", "openssl ", "--"} {
+
+		// The authoritative rule, rather than a list maintained here. It refuses
+		// shell metacharacters, a leading command word and a single-hyphen flag,
+		// which is more than this test ever checked.
+		//
+		// **It deliberately permits a double-hyphen token**, and Phase 13.1C is
+		// where that starts to matter: `recommendCredentialWithheld` now names
+		// `--tls require` and `--tls-ca-file`, which are svcdoctor's *own*
+		// options and change nothing on the broker. This test used to ban "--"
+		// outright, which would have rejected the very rewrite that removed the
+		// target-mutating reading from that sentence — and RabbitMQ's equivalent
+		// has carried the same tokens since Phase 8.2.
+		if err := diagnosis.ValidateActionText(action); err != nil {
+			t.Errorf("%s %s/%s: recommendation %q is not safe advice: %v",
+				key.step, key.state, key.failure, action, err)
+		}
+		for _, shell := range []string{"$ ", "kafka-topics.sh", "sudo ", "curl ", "openssl "} {
 			if strings.Contains(action, shell) {
 				t.Errorf("%s %s/%s: recommendation %q looks executable",
 					key.step, key.state, key.failure, action)
@@ -503,12 +520,25 @@ func TestRecommendationsAreNotExecutable(t *testing.T) {
 	}
 }
 
-// TestProtocolRecommendationTextIsValid proves the unreachable branch in
-// recommend really is unreachable.
+// TestProtocolRecommendationTextIsValid proves every claim survives admission.
+//
+// It used to drive the legacy `recommend`, which Phase 13.1C deleted along with
+// the exemption it served. Driving `advise` instead is the stronger statement:
+// `diagnosis.Recommend` returns nil on *any* refusal — a blank rationale, a
+// non-producible safety class, an unclassified kind, an action the text
+// validator rejects — so a table row that lost its classification comes back
+// empty rather than unclassified, and this is where that shows up.
 func TestProtocolRecommendationTextIsValid(t *testing.T) {
 	for key, c := range protocolClaims {
-		if got := recommend(c.recommendation); len(got) != 1 {
-			t.Errorf("%s %s/%s: recommendation text was rejected by the model",
+		got := advise(c.safety, c.recommendation, c.rationale)
+		if len(got) != 1 {
+			t.Errorf("%s %s/%s: the claim produced %d recommendations, want 1; "+
+				"diagnosis.Recommend drops an invalid classification silently",
+				key.step, key.state, key.failure, len(got))
+			continue
+		}
+		if !got[0].Classified() {
+			t.Errorf("%s %s/%s: the claim produced an unclassified recommendation",
 				key.step, key.state, key.failure)
 		}
 	}

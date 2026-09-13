@@ -34,22 +34,16 @@ var kafkaClassification = map[string]classificationExpectation{
 	// observation in the package svcdoctor can take itself.
 	recommendUnmeasured: {diagnosis.SafetyObserve, true},
 	recommendUnsuitable: {diagnosis.SafetyCompare, false},
-}
-
-// kafkaDeferred are the two Phase 13.1C owns.
-//
-// `recommendDNS` is the interesting one: it is a member of the *same* list as
-// `recommendTCP` and `recommendTLS`, so `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE`
-// carries a mixed set of classified and unclassified advice while the exemption
-// stands. That is the shape this guard has to tolerate, and the report model does
-// tolerate it: both are valid values and each says what is known about it.
-var kafkaDeferred = map[string]string{
-	recommendCredentialWithheld: "REC-012",
-	recommendDNS:                "REC-021",
+	// Phase 13.1C. `recommendDNS` is the interesting one: it is a member of the
+	// *same* list as `recommendTCP` and `recommendTLS`, so
+	// `KAFKA_ADVERTISED_ENDPOINT_UNREACHABLE` used to carry a mixed set of
+	// classified and unclassified advice. That shape is now unreachable.
+	recommendCredentialWithheld: {diagnosis.SafetyObserve, false},
+	recommendDNS:                {diagnosis.SafetyCompare, false},
 }
 
 func TestEveryProducedRecommendationCarriesItsFrozenClassification(t *testing.T) {
-	assertFrozenClassification(t, everyKafkaFinding(t), kafkaClassification, kafkaDeferred,
+	assertFrozenClassification(t, everyKafkaFinding(t), kafkaClassification,
 		// A complete advertised set needs no next observation from the aggregate:
 		// it states what was measured, the per-endpoint findings state the impact,
 		// and the boundary states where each stopped. That is the designed answer,
@@ -121,7 +115,6 @@ func assertFrozenClassification(
 	t *testing.T,
 	findings []domain.Finding,
 	want map[string]classificationExpectation,
-	deferred map[string]string,
 	mayCarryNone map[domain.FindingCode]string,
 ) {
 	t.Helper()
@@ -144,27 +137,19 @@ func assertFrozenClassification(
 			action := r.Action()
 			seen[action] = true
 
-			if rec, isDeferred := deferred[action]; isDeferred {
-				if r.Classified() {
-					t.Errorf("%s carries %s classified %s/%s; Phase 13.1C owns that "+
-						"sentence and 13.1B is read-only for it",
-						f.Code(), rec, r.Kind(), r.Safety())
-				}
-				continue
-			}
-
 			expect, known := want[action]
 			if !known {
-				t.Errorf("%s produced the action %q, which is in neither the frozen "+
-					"classification nor the deferred list.\n\n"+
+				t.Errorf("%s produced the action %q, which is not in the frozen "+
+					"classification.\n\n"+
 					"ADR 0097 section 2.1: a production rule may not decline to classify "+
-					"its own advice. Add it to one list, deliberately.", f.Code(), action)
+					"its own advice, and Phase 13.1C left no exemption list to add it "+
+					"to. Classify it, deliberately.", f.Code(), action)
 				continue
 			}
 			if !r.Classified() {
-				t.Errorf("%s produced %q unclassified; it was classified at the "+
-					"Phase 13.1B baseline, so a call site stopped passing the "+
-					"classification", f.Code(), action)
+				t.Errorf("%s produced %q unclassified; every production "+
+					"recommendation is classified since Phase 13.1C, so a call site "+
+					"stopped passing the classification", f.Code(), action)
 				continue
 			}
 			if r.Kind() != domain.RecommendationKindNextEvidence {
@@ -194,12 +179,6 @@ func assertFrozenClassification(
 		if !seen[action] {
 			t.Errorf("the producer matrix never produced %q, so its row asserts nothing; "+
 				"either the matrix lost a shape or the constant is unreachable", action)
-		}
-	}
-	for action, rec := range deferred {
-		if !seen[action] {
-			t.Errorf("the producer matrix never produced %s (%q), so its exemption "+
-				"asserts nothing", rec, action)
 		}
 	}
 }

@@ -77,23 +77,6 @@ func advise(
 	}, domain.FindingKindConfirmed, domain.ConfidenceHigh)
 }
 
-// recommend wraps one unclassified action.
-//
-// **The remaining legacy construction site in this package**, and it serves only
-// the two actions Phase 13.1C owns: `recommendMechanismNotOffered`, whose "enable
-// SASL PLAIN on this endpoint" carries no TLS condition, and
-// `recommendVHostAccessRefused`, which asks for a permission grant and names an
-// administrative command. ADR 0097 section 2.1 forbids a production rule from
-// declining to classify its advice; this exemption is temporary and named in the
-// Phase 13.1B allowlist.
-func recommend(action string) []domain.Recommendation {
-	recommendation, err := domain.NewRecommendation(action)
-	if err != nil {
-		return nil
-	}
-	return []domain.Recommendation{recommendation}
-}
-
 // nodesAt returns every node recorded at one step, in graph order.
 func nodesAt(g domain.Graph, step domain.Step) []domain.Evidence {
 	var out []domain.Evidence

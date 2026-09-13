@@ -91,8 +91,15 @@ const (
 		"refused; a loopback or private address grants no exemption, because an address says " +
 		"nothing about the path the bytes take."
 
-	recommendCredentialWithheld = "Enable TLS for this endpoint and supply the trust material " +
-		"that verifies it, then run again"
+	// Phase 13.1C REC-052. It used to read "Enable TLS for this endpoint and
+	// supply the trust material that verifies it, then run again", whose first
+	// clause is unambiguously a change to the server's configuration — and one
+	// nothing here establishes is the right change. The whole sentence is
+	// replaced rather than trimmed: every token now names one of svcdoctor's own
+	// options.
+	recommendCredentialWithheld = "Use --tls require with a trusted certificate chain, or " +
+		"supply --tls-ca-file, so this endpoint's identity is verified before a credential " +
+		"is presented"
 
 	summaryCredentialNotConfigured = "This endpoint requires authentication and this run was " +
 		"given no credential, so usability was not measured"
@@ -149,7 +156,8 @@ func evaluateAuthentication(node domain.Evidence) (domain.Finding, bool) {
 				// configured with.
 				VantageDependent: true,
 				EvidenceRefs:     refs,
-				Recommendations:  recommend(recommendCredentialWithheld),
+				Recommendations: advise(diagnosis.SafetyObserve, recommendCredentialWithheld,
+					rationaleCredentialWithheld),
 			})
 		case domain.FailureExecRequiredInputMissing:
 			return build(domain.FindingInput{
@@ -212,6 +220,11 @@ func evaluateAuthentication(node domain.Evidence) (domain.Finding, bool) {
 // `recommendCredentialWithheld` has none: "enable TLS for this endpoint" is a
 // change to the endpoint, and Phase 13.1A reserved it as REC-052.
 const (
+	rationaleCredentialWithheld = "svcdoctor presents a credential only over a channel whose " +
+		"peer identity was verified, and this one was not, so nothing was sent and the " +
+		"endpoint took no position; what a verified channel would have produced is the " +
+		"observation this run did not take."
+
 	rationaleCredentialNotConfigured = "No credential was supplied, so authentication was " +
 		"never attempted and the endpoint took no position on one; which credential the " +
 		"application uses for this endpoint is not something svcdoctor can read."

@@ -21,65 +21,32 @@ import (
 // execution test alone sees only what the corpora reach. Neither is sufficient and
 // the record says so rather than implying the coverage is total.
 
-// deferredActions are the nine Phase 13.1C owns, by their action text.
-//
-// Named by action rather than by finding code, because that is the granularity of
-// what remains: three of the nine share a finding code with a recommendation this
-// phase classified, so a code-level list would exempt too much.
-var deferredActions = map[string]string{
-	"Establish verified TLS to this endpoint, or review the trust context this run used, " +
-		"then re-run": "REC-012",
-	"Check whether the advertised hostname resolves from this vantage point, and what the " +
-		"broker publishes in advertised.listeners": "REC-021",
-	"Establish a verified TLS channel to this endpoint before presenting a credential, or " +
-		"re-run with the transport policy this run is meant to use": "REC-031",
-	"Diagnose this endpoint with a client that performs the authentication method it " +
-		"demands, or configure a mechanism svcdoctor performs for the role this run used": "REC-034",
-	"Re-run against a role whose password is printable ASCII, or diagnose this endpoint " +
-		"with a client that implements the full mechanism": "REC-036",
-	"Enable TLS for this endpoint and supply the trust material that verifies it, then run " +
-		"again": "REC-052",
-	"Grant the diagnostic identity permission to run PING, or diagnose with an identity " +
-		"that already has it": "REC-055",
-	"Enable SASL PLAIN on this endpoint, or diagnose it with a client that implements the " +
-		"mechanisms it offers": "REC-064",
-	"Grant this user permissions on the virtual host, for example with rabbitmqctl " +
-		"set_permissions": "REC-067",
-}
-
-// TestEveryProducedRecommendationIsClassifiedExceptTheNine drives the production
-// rule sets over the production corpora and inspects what they attached.
+// TestEveryProducedRecommendationIsClassified drives the production rule sets
+// over the production corpora and inspects what they attached.
 //
 // This is the guard that would catch a migration that edited a table and forgot
 // the call site: the metadata has to arrive on a recommendation a rule really
 // built, from a graph a fixture really produced.
-func TestEveryProducedRecommendationIsClassifiedExceptTheNine(t *testing.T) {
-	var produced, classified, exempt int
-	seenExempt := map[string]bool{}
+//
+// **It carries no exemption since Phase 13.1C.** It used to hold a nine-entry
+// table keyed by action text — named by action rather than by finding code,
+// because three of the nine shared a code with a recommendation Phase 13.1B had
+// already classified, so a code-level list would have exempted too much. All nine
+// sentences were reviewed, rewritten and classified, so the table is deleted
+// rather than emptied and the assertion below is unconditional.
+func TestEveryProducedRecommendationIsClassified(t *testing.T) {
+	var produced, classified int
 
 	check := func(t *testing.T, findings []domain.Finding) {
 		t.Helper()
 		for _, f := range findings {
 			for _, r := range f.Recommendations() {
 				produced++
-				if rec, deferred := deferredActions[r.Action()]; deferred {
-					exempt++
-					seenExempt[rec] = true
-					if r.Classified() {
-						t.Errorf("%s carries %s, which Phase 13.1A reserved for 13.1C, "+
-							"and it is classified %s/%s.\n\n"+
-							"Phase 13.1B is metadata-only for the 55 it migrated and "+
-							"read-only for these nine; classifying one here settles a "+
-							"sentence whose meaning 13.1C reviews.",
-							f.Code(), rec, r.Kind(), r.Safety())
-					}
-					continue
-				}
 				if !r.Classified() {
 					t.Errorf("%s produced the unclassified recommendation %q.\n\n"+
 						"ADR 0097 section 2.1: a production rule may not decline to "+
-						"classify its own advice, and this action is not one of the nine "+
-						"Phase 13.1C owns. Route it through the package's advise helper.",
+						"classify its own advice, and Phase 13.1C left no exemption "+
+						"list. Route it through the package's advise helper.",
 						f.Code(), r.Action())
 					continue
 				}
@@ -126,11 +93,12 @@ func TestEveryProducedRecommendationIsClassifiedExceptTheNine(t *testing.T) {
 	if produced == 0 {
 		t.Fatal("the corpora produced no recommendation at all; this guard would pass vacuously")
 	}
-	if classified == 0 {
-		t.Fatal("the corpora produced no classified recommendation; the migration is invisible here")
+	if classified != produced {
+		t.Fatalf("the corpora produced %d recommendations and only %d are classified; "+
+			"every production recommendation is classified since Phase 13.1C",
+			produced, classified)
 	}
-	t.Logf("%d recommendations produced: %d classified, %d exempt (%d distinct of the nine)",
-		produced, classified, exempt, len(seenExempt))
+	t.Logf("%d recommendations produced, %d classified, 0 exempt", produced, classified)
 }
 
 // TestClassifyingOneConstantOnceKeepsConvergenceNeutral is the ADR 0097 section

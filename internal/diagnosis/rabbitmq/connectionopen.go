@@ -64,8 +64,15 @@ const (
 		"RabbitMQ evaluates configure, write and read permissions at channel operations, " +
 		"and svcdoctor opens no channel and names no resource."
 
-	recommendVHostAccessRefused = "Grant this user permissions on the virtual host, for " +
-		"example with rabbitmqctl set_permissions"
+	// Phase 13.1C REC-067, the strongest case in the Phase 13.1A table. It used
+	// to read "Grant this user permissions on the virtual host, for example with
+	// rabbitmqctl set_permissions": it prescribes a privilege grant that an
+	// authoritative refusal does not establish is correct, and it names an
+	// administrative command — ADR 0082 rule 3 says state what to look at, not
+	// what to type, and that sentence typed. It passed ValidateActionText only
+	// because the command carries no single-hyphen flag.
+	recommendVHostAccessRefused = "Verify whether this identity is intended to have access to " +
+		"this virtual host, in the broker's own permissions configuration"
 
 	summaryConnectionNotPermitted = "This endpoint refused to open the connection"
 
@@ -207,7 +214,8 @@ func connectionOpenFinding(node domain.Evidence) (domain.FindingInput, bool) {
 			Detail:     detailVHostAccessRefused,
 			// Virtual host permissions are held per user, not per source address.
 			VantageDependent: false,
-			Recommendations:  recommend(recommendVHostAccessRefused),
+			Recommendations: advise(diagnosis.SafetyVerify, recommendVHostAccessRefused,
+				rationaleVHostAccessRefused),
 		}, true
 
 	case domain.FailureResourceLimitReached, domain.FailureAuthzNotPermitted:
@@ -326,6 +334,11 @@ const (
 		"fixes the mismatch and not which half is wrong; a virtual-host name is " +
 		"case-sensitive and may carry a leading slash, and the broker's own list is the other " +
 		"half of the comparison."
+
+	rationaleVHostAccessRefused = "The broker accepted the credential and then refused this " +
+		"virtual host, which is an authoritative refusal and not evidence that the refusal is " +
+		"wrong; whether this identity was meant to reach this virtual host is an intent held " +
+		"in the broker's own configuration."
 
 	rationaleConnectionNotPermitted = "The broker refused this attempt and named at most the " +
 		"scope of a limit, never its value or its current usage, so an authoritative refusal " +

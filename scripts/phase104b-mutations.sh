@@ -290,9 +290,16 @@ assert "func IndistinguishableSets" in s' \
 
 # Planted where it was deleted from, which is where a service author would put it
 # back: a local helper that quietly returns to the action-only shape.
+#
+# **Re-anchored twice, and never weakened.** Phase 13.1B reworded the comment this
+# plant first anchored on; Phase 13.1C deleted `func recommend`, the declaration
+# it was re-anchored to, when it closed the legacy constructor at zero. It now
+# anchors on `func advise`, the classified helper that replaced it — which is the
+# more durable choice anyway, because it is the helper this mutation exists to
+# contrast with. The planted body, the assertion and the guard are unchanged.
 mutate NBE-M17 "a service-local lossy projection helper returns" \
   internal/diagnosis/postgres/shared.go \
-  's = s.replace("""func recommend(action string) []domain.Recommendation {""",
+  's = s.replace("""func advise(""",
 """func projectAdvice(action string) []domain.Recommendation {
 	r, err := domain.NewRecommendation(action)
 	if err != nil {
@@ -301,7 +308,7 @@ mutate NBE-M17 "a service-local lossy projection helper returns" \
 	return []domain.Recommendation{r}
 }
 
-func recommend(action string) []domain.Recommendation {""", 1)
+func advise(""", 1)
 assert "func projectAdvice" in s' \
   ./test/security 'TestNoServiceLocalAdviceProjectionHelperExists'
 

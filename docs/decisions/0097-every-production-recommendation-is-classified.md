@@ -126,8 +126,15 @@ field population, not schema evolution.
 - **Terminal output also gains a rationale line** on those same recommendations — *added by the
   Phase 13.1A.1 amendment, see §8*. The renderer has printed the rationale since Phase 10.4B; this
   record's original text said it did not.
-- **Six recommendation strings change.** That is a behaviour change, it is enumerated in the Phase
-  13.1A record, and it is reviewed as prose rather than as metadata.
+- ~~**Six recommendation strings change.**~~ **Nine did** — corrected by Phase 13.1C, which
+  implemented this section. The forecast of six counted the high-risk table's mutation cases; the
+  full GROUP S set is nine, because REC-021 and REC-036 also needed prose review (the first asked
+  the reader to redo a measurement svcdoctor had already taken and recorded, the second read as
+  *change a password* as easily as *choose another role*), and REC-012 joined them for the same
+  ambiguity as REC-031. It remains a behaviour change, enumerated in
+  `docs/validation/PHASE131C_SEMANTIC_HIGH_RISK_RECOMMENDATION_CLOSURE.md` §5 with every
+  before/after pair, and reviewed as prose rather than as metadata. **The other 64 are
+  byte-identical**, proven per constant by SHA-256.
 - **The `SelfCollectable: true` inventory becomes complete**, and today it would be **2** — both
   *"re-run with a larger execution budget."* That is the measurement the planner question has been
   waiting for, and it is why the planner stays deferred.
@@ -176,11 +183,20 @@ as svcdoctor-owned bounded prose: no peer bytes, no runtime error text, no forma
 `ValidateActionText` — which already refuses command-shaped advice across all 73 strings — is
 unchanged and begins running on the 64 that previously bypassed it.
 
-One residual is recorded rather than claimed away: `RABBITMQ_VHOST_ACCESS_REFUSED` names
-`rabbitmqctl set_permissions`, and it passes `ValidateActionText` only because that command carries
+One residual was recorded rather than claimed away: `RABBITMQ_VHOST_ACCESS_REFUSED` named
+`rabbitmqctl set_permissions`, and it passed `ValidateActionText` only because that command carries
 no single-hyphen flag and no shell metacharacter. ADR 0082 rule 3 says *state what to look at, not
-what to type*, and that sentence types. It is fixed by the rewrite rather than by widening the
-validator.
+what to type*, and that sentence typed. **Phase 13.1C closed it by the rewrite, as this section
+said it would, and the validator was not widened**: the action now reads *"Verify whether this
+identity is intended to have access to this virtual host, in the broker's own permissions
+configuration"*.
+
+**Since Phase 13.1C the whole class is closed and guarded rather than reviewed.** No production
+action instructs a change to the diagnosed target, and two guards hold it there: the nine rewritten
+sentences are pinned byte for byte, and a clause-opening imperative rule refuses a *new* one on the
+day it is written. The keyword rule is supplemental on purpose — it cannot decide whether prose
+prescribes policy, and the one verb it could not be trusted with is recorded in the Phase 13.1C
+record §10.
 
 ## 6. Verification
 

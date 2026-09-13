@@ -74,7 +74,12 @@ const (
 		"svcdoctor did not try a different command afterwards. Each attempt would be another " +
 		"entry in the endpoint's ACL log and another guess."
 
-	recommendCommandNotPermitted = "Grant the diagnostic identity permission to run PING, or " +
+	// Phase 13.1C REC-055. It used to open "Grant the diagnostic identity
+	// permission to run PING", which prescribes an ACL change this refusal does
+	// not establish is correct — the ACL may be doing exactly what its author
+	// wrote. The first clause becomes a verification of intent; the second was
+	// already sound and survives.
+	recommendCommandNotPermitted = "Verify whether this identity is intended to run PING, or " +
 		"diagnose with an identity that already has it"
 
 	summaryEndpointNotServing = "The endpoint refused the usability probe and named the " +
@@ -145,7 +150,8 @@ func evaluatePing(node domain.Evidence) (domain.Finding, bool) {
 				Detail:           detailCommandNotPermitted,
 				VantageDependent: false,
 				EvidenceRefs:     refs,
-				Recommendations:  recommend(recommendCommandNotPermitted),
+				Recommendations: advise(diagnosis.SafetyVerify, recommendCommandNotPermitted,
+					rationaleCommandNotPermitted),
 			})
 		case domain.FailureProtocolUnexpectedResponse:
 			return build(domain.FindingInput{
@@ -211,6 +217,10 @@ func detailWithNamedCondition(node domain.Evidence) string {
 // `recommendCommandNotPermitted` has none: its first clause asks for an ACL grant
 // and Phase 13.1A reserved that sentence as REC-055.
 const (
+	rationaleCommandNotPermitted = "The endpoint refused one keyless command for one identity " +
+		"and that may be exactly what its ACL was written to do, so whether this identity was " +
+		"meant to run it is an intent the refusal itself cannot state."
+
 	rationaleEndpointNotServing = "The endpoint answered and named its own condition, which " +
 		"svcdoctor restates and does not interpret; whether the condition persists, and what " +
 		"produced it, are both held in the endpoint's own logs and current state."
