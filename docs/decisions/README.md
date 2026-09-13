@@ -711,6 +711,25 @@ simply stop being empty. The measurement the planner has been waiting for arrive
 across all 73, **`SelfCollectable: true` is 2**, and both are *"re-run with a larger execution
 budget"*.
 
+**0098 adds one clause to a bar that already existed, and that is why the gap formed.**
+`docs/COMPATIBILITY.md` §6 has always required a Level-3 row to have *"a committed repeatable
+fixture with its own `make` target"* — and **nothing said the target had to run.** Phase 13.2
+measured the result: Redis, Valkey, RabbitMQ and LavinMQ each had the fixture and the target, 76
+integration test functions between them, and **all five uncovered targets appeared zero times across
+all six workflow files** while the release integration matrix was `[postgres, kafka, redpanda]`. A
+release could publish four Level-3 claims no automation had re-verified for that commit. So a
+Level-3 claim must now also **gate release publication** — defined as a property of the `needs:`
+graph rather than of a job name, because a job that runs beside publication and blocks nothing is
+decoration. It generalizes two sentences ADR 0095 stated for Kubernetes and meant generally: *a
+green lane protects a claim, it never creates one*, and *a version the pinned toolchain can no
+longer run is no longer Level 3*. **It broadens no support**: `docs/COMPATIBILITY.md`'s "svcdoctor
+does no version arithmetic" is inherited unchanged, so a row naming Redis 8.2.1 obliges a lane
+against 8.2.1 and predicts nothing about any other 8.x. **Trigger frequency is deliberately not in
+it** — that is CI economics, decided on measured runtime by the phase that measures it — and
+**multi-target is deliberately not in it**, because `run --config` is a product surface rather than
+a claim about somebody else's product. The four rows it names are **non-compliant today**, which the
+record says in as many words; Phase 14.0B closes them.
+
 **0081 was amended a second time, and the second amendment is a supersession.** Phase 10.1B's
 §2.2a filled a silence — the table said nothing about `Layer`, and measurement showed a
 tie-break publishing an L5 claim over an L4 node. Phase 10.2A's **§2.2b** is different in kind:

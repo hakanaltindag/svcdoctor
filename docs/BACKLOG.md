@@ -5204,6 +5204,179 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 14.0A.1 — Compatibility release-gate policy ADR and contract reconciliation: COMPLETE
+
+**Documentation and one ADR. 0 production, 0 test, 0 workflow, 0 script, 0 fixture change.**
+Records: `docs/validation/PHASE140A1_COMPATIBILITY_RELEASE_GATE_POLICY_ADR.md` and **ADR 0098**.
+
+**Phase 14.0A ended with a contradiction and this phase closes it.** It concluded
+**ADR: REQUIRED** and **Phase 14.0B: AUTHORIZED BY CONTRACT** in the same block, while its governing
+contract said an unresolved ADR **blocks** 14.0B.
+
+| Point in time | ADR | Phase 14.0B |
+|---|---|---|
+| End of 14.0A | REQUIRED, unresolved | **BLOCKED** |
+| End of 14.0A.1 | **ADR 0098, Accepted** | **AUTHORIZED** |
+
+The 14.0A record is corrected **in place with the original text preserved and marked** — header,
+§22, §33, §34, §35 — not rewritten as though the ADR had existed. **The error is worth remembering
+because its reasoning was defensible**: 14.0A argued the ADR was needed only for the general
+cross-service policy, which the five concrete lanes do not consume. True, and irrelevant — the stop
+condition was about the ADR being unresolved, not about whether the next phase consumed it. Reading
+a stop condition narrowly until it stops applying is how a contract stops meaning anything.
+
+### ADR 0098 — one clause added to a bar that already existed
+
+> A **Level 3 — SUPPORTED BASIC** claim must be backed by a repeatable **real-product** integration
+> path that **gates release publication**.
+
+`docs/COMPATIBILITY.md` §6 already required *"a committed repeatable fixture with its own `make`
+target"*. **Nothing said the target had to run** — which is the whole gap Phase 13.2 measured, and
+why the fix is four appended words rather than a new grading system. No row's meaning changes.
+
+**"Real product"** = the actual server, or the explicitly named compatibility implementation, over
+its real wire protocol. Mocks, fake servers, hermetic fixtures and unit tests do not satisfy it
+alone — a wire regression whose only symptom is a real exchange survives all of them.
+**"Gates publication"** = a property of the `needs:` graph, explicitly *not* "a workflow contains a
+job with that name".
+
+**Version semantics inherited unchanged**: `docs/COMPATIBILITY.md`'s *"svcdoctor does no version
+arithmetic"* means `Redis 8.2.1 — Level 3` obliges a lane against 8.2.1 and predicts nothing about
+any other 8.x. **No support was broadened and no compatibility level changed.**
+
+**Deliberately outside the ADR:** trigger frequency (CI economics, owned by the 14.0A/14.0B
+contract — the ADR fixes only the *release* edge) and **multi-target** (a product surface, not a
+claim about somebody else's product; its release invariant stays with ADR 0062's job graph, and
+**no second ADR was created**).
+
+**Four rows are non-compliant today** — Redis, Valkey, RabbitMQ, LavinMQ — and ADR 0098 §7 says so
+rather than implying otherwise: a Level-3 row without a gating lane is permitted only as a recorded,
+time-bounded exception with a named closing phase. That phase is 14.0B. Kafka, Redpanda, PostgreSQL
+and Kubernetes are already compliant.
+
+### RabbitMQ tree-neutrality — FROZEN as a 14.0B prerequisite
+
+> **RabbitMQ hosted gating is not complete until `make integration-rabbitmq` is tree-neutral** —
+> clean tree before, clean tree after, **no Git restoration required**.
+
+14.0A measured the suite rewriting a committed `__pycache__` artifact. A gate whose own execution
+dirties the repository cannot support the cleanliness assertion a release gate exists for.
+**The remedy is not prescribed** — 14.0A saw the symptom, not the cause; 14.0B derives the fix from
+source.
+
+14.0B's file scope therefore gains exactly one narrow surface: `test/integration/rabbitmq/**` and an
+ignore file, **solely** for tree neutrality. It authorizes nothing else, and **any behavioural test
+weakening is a blocker**, not a trade for a green lane.
+
+14.0B's validation contract gains a before/after file-hash comparison across the five-suite set,
+which **`git stash`/`checkout`/`restore`/`reset` may not satisfy**.
+
+**PHASE 14.0B: AUTHORIZED — by ADR 0098.** Next action unchanged: implement the hosted lanes and the
+release gate.
+
+## Phase 14.0A — Hosted integration CI and release-gate contract freeze: COMPLETE
+
+**Documentation only. 0 production, 0 test, 0 script, 0 workflow, 0 ADR change.** Record:
+`docs/validation/PHASE140A_INTEGRATION_CI_RELEASE_GATE_CONTRACT_FREEZE.md`.
+
+**MODEL B, the shape Phase 12.2A already proved.** Four cheap service lanes on every pull request;
+all five weekly, on demand and as a **release gate**.
+
+| Lane | PR | main | weekly | dispatch | release gate | job timeout |
+|---|---|---|---|---|---|---|
+| Redis | ✓ | ✓ | ✓ | ✓ | **✓** | 25 m |
+| Valkey | ✓ | ✓ | ✓ | ✓ | **✓** | 25 m |
+| RabbitMQ | ✓ | ✓ | ✓ | ✓ | **✓** | 30 m |
+| LavinMQ | ✓ | ✓ | ✓ | ✓ | **✓** | 25 m |
+| Multi-target | — | ✓ | ✓ | ✓ | **✓** | 40 m |
+
+### The release gate changes by one line
+
+`release-oci.yml`'s `integration` job matrix grows from `[postgres, kafka, redpanda]` to eight
+entries. **No new `needs:` edge is required** — `stage-and-verify needs: [… integration …]` already
+blocks on every matrix leg, and `fail-fast: false` means all legs run. That shape was chosen over
+five new jobs precisely for auditability, and the guard that protects it
+(`TestOCIPublicationCannotStartBeforeLinuxIntegration`) extends by five strings.
+
+### Measured, not estimated
+
+`/usr/bin/time -p` over each full `integration-*` target on Darwin/arm64 + OrbStack, warm images:
+**valkey 14 s · lavinmq 17 s · redis 19 s · rabbitmq 117 s** (kafka 290 s, for scale). Those four
+run as parallel matrix legs against a Kubernetes lane that already holds a 40-minute PR budget, so
+putting them on every pull request is affordable by a wide margin.
+
+**postgres and multitarget could not be measured**, and the reason is recorded rather than worked
+around: an unrelated container on this machine holds host port `55434`, which the PostgreSQL fixture
+binds, and `multitarget-up` depends on `postgres-up`. That is a shared-developer-machine collision,
+not a repository defect — and it is evidence *for* hosted CI. Multi-target is derived at ≈ 6–8 min
+(Kafka-dominated) and 14.0B measures it for real.
+
+### Two decisions a future agent should not re-derive
+
+- **Multi-target is deliberately not on `pull_request`.** It is the heaviest lane by roughly an order
+  of magnitude, starts four fixture sets at once (the largest flake surface in the repository), and
+  its unique content — scheduler, `RunReport` envelope, ordering — is the part most thoroughly
+  covered hermetically inside `make check`. **The cost is stated exactly**: a mixed-service-only
+  regression can reach `main` and is caught at the merge commit, not a week later, and can never
+  reach a release. **Promotion condition recorded**: four consecutive green weeks of hosted `main`
+  and scheduled runs makes it a one-line change. Promotion is cheap; demotion after it has annoyed
+  every contributor is not.
+- **Local evidence is arm64; hosted runners are amd64.** Docker here is OrbStack linux/arm64, so
+  every lane 14.0B adds is the **first amd64 evidence** for Redis, Valkey, RabbitMQ and LavinMQ.
+  That does **not** upgrade any compatibility row — ADR 0095 §13: *a green lane authorizes nothing*.
+
+### The one ADR question, resolved without blocking
+
+> *A Level-3 / SUPPORTED BASIC claim must be backed by a repeatable real-product integration lane
+> that gates releases.*
+
+**ADR-worthy and NOT ADMITTED here.** ADR 0095 §2.4 establishes the principle for Kubernetes only —
+*"a version the pinned toolchain can no longer run is not repeatable and therefore no longer Level
+3"*. Generalising it across every service and binding it to the release gate would constrain every
+future adapter, and this phase's file scope excludes `docs/decisions/`.
+
+~~**14.0B is not blocked.** … **Phase 14.0A.1** — one ADR — is recommended, optional, and runnable
+before or after 14.0B.~~ **Corrected by Phase 14.0A.1 (see the entry above): 14.0B was BLOCKED at
+the end of 14.0A**, because the governing contract made an unresolved ADR blocking regardless of
+whether the next phase consumed it. **ADR 0098 resolves it and 14.0B is now authorized.**
+
+The **multi-target release invariant** *is* admitted and needs no ADR: `svcdoctor run --config` is a
+released CLI surface whose only end-to-end validation is one local command, and gating it adds an
+entry to a matrix publication already depends on.
+
+### Frozen refusals
+
+No path filters (shared code reaches every suite) · no automatic retry · no `continue-on-error` ·
+no artifacts (the `*-up` targets already print `compose ps` and per-service logs on failure) ·
+**0 repository secrets** · `contents: read` with no escalation · no `pull_request_target` · no test
+tiering · no product version moves · no compatibility auto-promotion. Images gain **tag + digest**;
+14.0B derives the digests. `postgres:18` is a pre-existing floating tag on an already-gated suite,
+recorded and out of scope.
+
+**Kafka, Redpanda and PostgreSQL PR/main expansion: DEFERRED.** Phase 13.2 selected the five
+uncovered suites; widening 14.0 into a full CI redesign would be a different phase.
+
+### PRIMARY NEXT — Phase 14.0B, implement the lanes and the gate
+
+Allowed surface: `.github/workflows/integration.yml` (new), `release-oci.yml` (the matrix line),
+workflow-contract tests, the 14.0B record, `docs/BACKLOG.md`, and `docs/COMPATIBILITY.md` **only** to
+describe the new gating — **no row may be upgraded**. No production Go, no `Makefile`, no suite
+assertion.
+
+It must prove the lanes are load-bearing with **three controlled failures** — one Redis/Valkey, one
+RabbitMQ/LavinMQ, one multi-target — using the Phase 13.1C harness pattern with whole-tree
+restoration verified independently of the harness's own file list. No remote branch mutation.
+
+**One defect the runtime measurement found, for 14.0B to fix first:** `make integration-rabbitmq`
+**rewrites a committed file** — `test/integration/rabbitmq/env/__pycache__/groundtruth.cpython-314.pyc`,
+same length, different bytes. The suite is therefore **not tree-neutral**, which breaks any
+post-lane cleanliness or reproducibility assertion. Restored to its committed bytes during the audit
+and left untouched, because 14.0A changes no non-documentation file.
+
+**Hosted-first closure is preserved.** 14.0B may stop at READY FOR USER REVIEW; **Phase 14.0 is
+operationally closed only after the new workflows run green on the committed revision.** A workflow
+that has never run is not a gate.
+
 ## Phase 13.2 — Post-13.1 roadmap and validation investment checkpoint: COMPLETE
 
 **Documentation only. 0 production, 0 test, 0 script, 0 workflow, 0 ADR change.** Record:
