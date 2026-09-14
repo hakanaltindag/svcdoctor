@@ -20,7 +20,7 @@ name: svcdoctor-valkey
 services:
   # R-00, R-11, R-18, R-19 baseline: plaintext, no authentication at all.
   valkey:
-    image: valkey/valkey:8.1.1-alpine
+    image: valkey/valkey:8.1.1-alpine@sha256:6a57d58c0a37cf7acc3045ac0fd6dd91be339774106ab4d9ca088013a096a99f
     container_name: svcd-valkey
     ports:
       - "56479:6379"
@@ -28,7 +28,7 @@ services:
 
   # R-01, R-02, R-13: a password, and nothing else.
   valkey-pw:
-    image: valkey/valkey:8.1.1-alpine
+    image: valkey/valkey:8.1.1-alpine@sha256:6a57d58c0a37cf7acc3045ac0fd6dd91be339774106ab4d9ca088013a096a99f
     container_name: svcd-valkey-pw
     ports:
       - "56480:6379"
@@ -40,7 +40,7 @@ services:
   #   disabled   is off, so AUTH is refused
   #   nopassuser accepts every password
   valkey-acl:
-    image: valkey/valkey:8.1.1-alpine
+    image: valkey/valkey:8.1.1-alpine@sha256:6a57d58c0a37cf7acc3045ac0fd6dd91be339774106ab4d9ca088013a096a99f
     container_name: svcd-valkey-acl
     ports:
       - "56481:6379"
@@ -62,7 +62,7 @@ services:
   # not have. The default case is measured in R-20 instead, against its own
   # server, where the expected outcome is a handshake failure.
   valkey-tls:
-    image: valkey/valkey:8.1.1-alpine
+    image: valkey/valkey:8.1.1-alpine@sha256:6a57d58c0a37cf7acc3045ac0fd6dd91be339774106ab4d9ca088013a096a99f
     container_name: svcd-valkey-tls
     ports:
       - "56482:6379"
@@ -90,7 +90,7 @@ services:
   # R-15: a replica of the baseline server, so `role` is measured rather than
   # asserted.
   valkey-replica:
-    image: valkey/valkey:8.1.1-alpine
+    image: valkey/valkey:8.1.1-alpine@sha256:6a57d58c0a37cf7acc3045ac0fd6dd91be339774106ab4d9ca088013a096a99f
     container_name: svcd-valkey-replica
     depends_on:
       - valkey
@@ -108,7 +108,7 @@ services:
   # cluster: BASIC measures the endpoint journey and no topology, so a node that
   # reports mode=cluster is the whole of what this scenario needs.
   valkey-cluster:
-    image: valkey/valkey:8.1.1-alpine
+    image: valkey/valkey:8.1.1-alpine@sha256:6a57d58c0a37cf7acc3045ac0fd6dd91be339774106ab4d9ca088013a096a99f
     container_name: svcd-valkey-cluster
     ports:
       - "56485:6379"

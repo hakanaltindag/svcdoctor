@@ -37,7 +37,7 @@ name: svcdoctor-rabbitmq
 
 services:
   rabbit:
-    image: rabbitmq:4.2.0
+    image: rabbitmq:4.2.0@sha256:8b31dd492c1f97d48127326dd07519f8aa854b6e75cb7ebf76878daba1c57259
     container_name: svcd-rabbit
     hostname: svcd-rabbit
     ports:
@@ -61,7 +61,7 @@ services:
       - /var/lib/rabbitmq:uid=999,gid=999,size=256m
 
   rabbit-313:
-    image: rabbitmq:3.13.7
+    image: rabbitmq:3.13.7@sha256:87178a0ee3e2f52980ba356d38646ed1056705ff2d5ff281f8965456eaa0c1e3
     container_name: svcd-rabbit-313
     hostname: svcd-rabbit-313
     ports:
@@ -78,7 +78,7 @@ services:
       - /var/lib/rabbitmq:uid=999,gid=999,size=256m
 
   rabbit-409:
-    image: rabbitmq:4.0.9
+    image: rabbitmq:4.0.9@sha256:ac54b28e5fafef680274661eb0011bd6d9801e12c51ccbb0e19e57281b2654f2
     container_name: svcd-rabbit-409
     hostname: svcd-rabbit-409
     ports:
@@ -98,7 +98,7 @@ services:
   # a property of the node, so it cannot be set on a broker any other scenario
   # uses — the same reasoning `rabbit-stop` below is separate for.
   rabbit-nodelimit:
-    image: rabbitmq:4.2.0
+    image: rabbitmq:4.2.0@sha256:8b31dd492c1f97d48127326dd07519f8aa854b6e75cb7ebf76878daba1c57259
     container_name: svcd-rabbit-nodelimit
     hostname: svcd-rabbit-nodelimit
     ports:
@@ -114,7 +114,7 @@ services:
       - /var/lib/rabbitmq:uid=999,gid=999,size=256m
 
   rabbit-stop:
-    image: rabbitmq:4.2.0
+    image: rabbitmq:4.2.0@sha256:8b31dd492c1f97d48127326dd07519f8aa854b6e75cb7ebf76878daba1c57259
     container_name: svcd-rabbit-stop
     hostname: svcd-rabbit-stop
     ports:

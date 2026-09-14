@@ -5204,6 +5204,91 @@ visible"*. It **was** an open question, and making it visible is what let Phase 
 | **`SEMANTICALLY_EQUIVALENT` prose is not a class the engine acts on.** Two rules that mean one claim must share the constant that states it | Closes if a service needs two rules in *different packages* to converge, which would force ADR 0081 §4's model C or E — a typed semantic payload generating canonical prose. Nothing needs it today |
 | **The inventory guard cannot see a single rule producing two findings with one identity** | Not fixable statically; it depends on how many evidence nodes a run produces. The safety net is the preconditions themselves, which make that case two findings rather than one invented one |
 
+## Phase 14.0B — Hosted integration and release gates: IMPLEMENTATION READY FOR HOSTED VALIDATION
+
+**NOT operationally closed. Phase 14.0 is closed only after the new workflows run green on the
+committed revision** — a workflow that has never run is not a gate. Record:
+`docs/validation/PHASE140B_HOSTED_INTEGRATION_RELEASE_GATES.md`.
+
+**0 production Go, 0 finding codes, 0 rules, 0 failure classes, 0 schema, 0 CLI, 0 renderer, 0 Go
+dependencies, 0 compatibility rows changed.** `docs/COMPATIBILITY.md` was not modified: a green lane
+authorizes nothing (ADR 0095 §2.3).
+
+### What landed
+
+`.github/workflows/integration.yml` — five lanes on an event-dependent matrix. Redis, Valkey,
+RabbitMQ and LavinMQ on `pull_request`, `push: main`, weekly `37 4 * * 2` and dispatch;
+**multi-target on everything except `pull_request`**. `ubuntu-24.04`, Go from `go.mod`,
+`contents: read`, zero secrets, no path filters, no retry, no `continue-on-error`, no artifacts,
+per-lane timeouts 25/25/25/30/40.
+
+`release-oci.yml` — the integration matrix grows **3 → 8**
+(`postgres, kafka, redpanda, redis, valkey, rabbitmq, lavinmq, multitarget`), the job's
+`go-version: '1.26'` is aligned to `go-version-file: go.mod` (14.0A §14 admitted it), and an
+`if: always()` teardown step is added. **No `needs:` edge was added** — ADR 0098 §2.3 gating comes
+from the existing `stage-and-verify needs: [… integration …]` edge plus `fail-fast: false`, so all
+five new suites are direct blockers of `stage-and-verify` and transitive blockers of `publish`.
+
+**ADR 0098 §7's four non-compliant rows are now compliant**: Redis, Valkey, RabbitMQ and LavinMQ
+each have a release-gating real-product lane.
+
+### The RabbitMQ tree-neutrality prerequisite: CLOSED
+
+**Cause**, derived from source rather than from the symptom: `harness_test.go` runs
+`python3 env/probe.py` on the host, `probe.py` imports `groundtruth`, and CPython writes the
+compiled cache beside it — one copy of which was tracked.
+
+**Fix**: `probe.py` sets `sys.dont_write_bytecode = True` *before* the import (verified empirically
+on Python 3.14.7, the interpreter named in the stale artifact); the tracked `.pyc` is deleted; and
+`.gitignore` gains `__pycache__/` and `*.pyc` as a second line of defence. **No scenario removed, no
+assertion weakened, no ground-truth validation skipped** — `env/groundtruth.py` stays tracked.
+
+**Proved**: tracked-file SHA-256 manifests taken before and after `make integration-rabbitmq` are
+identical, and not even an ignored file appeared. No `git stash`/`checkout`/`restore`/`reset` was
+used to reach it.
+
+### Image pinning: the 14.0A §7 derivation, done
+
+All **20** image lines across the four compose files now carry tag **and** digest — six distinct
+references. Each digest was confirmed **twice independently** (Docker Hub registry API and Docker's
+own `RepoDigests`) and each is a multi-architecture **index** digest, so it resolves on hosted amd64
+and local arm64 alike. **No product version moved.** The pins stay in the compose files, not in YAML.
+
+### Validation
+
+`make check` **GREEN**. `git diff --check` **CLEAN**. `go test -race ./internal/cli/` **PASS**.
+Mutation closure **28 planted / 28 caught / 0 survivors** (`scripts/phase140b-mutations.sh`), with
+restoration proved three ways — the declared write-set, every tracked file from `git ls-files`, and
+every worktree path from `find` — the last two independent of the harness's own file list.
+
+Break-it proof, all three families: a broken RESP `PING` fails `integration-valkey`, a broken AMQP
+header fails `integration-lavinmq`, and multi-target's removal and PR-smuggling are both caught.
+
+Integration: **redis, valkey, rabbitmq, lavinmq, kafka and redpanda all GREEN** after digest pinning.
+
+### Open items
+
+| Item | State |
+|---|---|
+| **`make integration-multitarget` and `make integration-postgres` NOT RUN locally** | **two** host ports, not one: the PostgreSQL fixture binds `55432`/`55433`/`55434`, and `55433` and `55434` are held by two unrelated developer containers (`apsis_local`, `apsis_fresh`). 14.0A §9 and this record's first draft both named only `55434` because that is whichever container compose started first. Three closure attempts failed at `postgres-up` in ~1.3 s, two on `55434` and one on `55433`. The *gate* is implemented, guarded and mutation-proved; the *suites* are unproved on this commit. **Freeing both ports and re-running the two commands closes it**, as does the hosted `push: main` run |
+| **`kubernetesworkflow_test.go:733` is vacuous** | its `"a missing release edge is detected"` fixture begins `"jobs:\n…"` but `jobNeeds` cuts at `"\njobs:\n"`, so it parses to **0 jobs** and the sub-test has nothing to contradict. Measured, not theorised. Pre-existing and outside 14.0B's subject; the remedy is one leading `\n`. The two equivalent fixtures in `integrationworkflow_test.go` were written correctly and assert their parsed job count first |
+| `postgres:18` floating minor tag | pre-existing, 14.0A freeze row 15 deferred it, not opportunistically redesigned |
+| `release-oci.yml` `source` job's `go-version: '1.26'` | pre-existing second toolchain authority; only the `integration` job was aligned |
+| Branch protection / required checks | user-owned repository setting, **not touched** |
+
+### Hosted validation — REQUIRED
+
+Two properties are statements about GitHub's runtime and cannot be asserted from the tree: that
+`include: ${{ … fromJSON(…) }}` expands into one job per object, and that the job name renders the
+check as `Integration / Integration (redis)`. A failure in the first makes the job fail to start —
+loud, never a false green.
+
+The first hosted run must confirm all five lanes execute, the four PR lanes appear on the pull
+request, images pull within the timeout, `gen-certs.sh` works on `ubuntu-24.04`, RabbitMQ's
+`rabbitmq-users` step succeeds after `ping`, multi-target passes on `main`, and cleanup leaves no
+volume. **A hosted failure is a real failure until classified** — no assertion weakening, no
+`continue-on-error`, no retry-to-green (ADR 0098 §2.5).
+
 ## Phase 14.0A.1 — Compatibility release-gate policy ADR and contract reconciliation: COMPLETE
 
 **Documentation and one ADR. 0 production, 0 test, 0 workflow, 0 script, 0 fixture change.**

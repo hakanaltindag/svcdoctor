@@ -14,6 +14,21 @@ import argparse
 import os
 import sys
 
+# Importing groundtruth writes env/__pycache__/groundtruth.cpython-NNN.pyc, and
+# this fixture is a release gate: Phase 14.0A measured `make integration-rabbitmq`
+# rewriting a *committed* copy of that file — same length, different bytes,
+# because the cache header carries source metadata. A gate whose own execution
+# dirties the repository cannot support the cleanliness or reproducibility
+# assertion a release gate exists to make.
+#
+# Set before the import, which is where CPython consults it. The generated cache
+# is not test evidence and nothing reads it, so the fix is to stop producing it
+# rather than to tolerate and ignore it — the ignore rule in .gitignore is the
+# second line of defence, for an interpreter or invocation path that writes one
+# anyway. Bytecode caching saves single-digit milliseconds on a fixture that then
+# opens a TCP connection.
+sys.dont_write_bytecode = True
+
 # Anchor to this file's directory so a caller may invoke it from anywhere and
 # still have `--ca certs/server.crt` mean the fixture's own material. The Go
 # suite runs from test/integration/rabbitmq, one level up.

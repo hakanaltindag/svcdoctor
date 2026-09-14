@@ -189,23 +189,55 @@ jobs:
   # 3. Integration suites
   # ---------------------------------------------------------------------------
   #
-  # All three, on a release tag, without exception. Kafka takes several minutes;
-  # this is publication, not quick feedback, and PR-time cost is governed by
-  # ci.yml and unchanged by this workflow.
+  # All eight, on a release tag, without exception. Kafka takes several minutes
+  # and multi-target starts four fixture sets at once; this is publication, not
+  # quick feedback, and PR-time cost is governed by integration.yml and unchanged
+  # by this workflow.
+  #
+  # ADR 0098 is why the matrix has eight entries rather than three. A Level-3 —
+  # SUPPORTED BASIC compatibility claim must be backed by a repeatable
+  # real-product integration path that gates release publication, and "gates"
+  # is defined there as a property of the `needs:` graph rather than as a job
+  # with a plausible name. `stage-and-verify` already names `integration` in
+  # `needs:`, and `fail-fast: false` runs every leg while the job still fails if
+  # any leg fails — so redis, valkey, rabbitmq and lavinmq became direct blockers
+  # of `stage-and-verify`, and transitive blockers of `publish`, by growing this
+  # one line. **No new dependency edge was added**, which is what makes the
+  # change auditable: the gate is the matrix.
+  #
+  # `multitarget` is here for a different reason and is deliberately not a
+  # compatibility claim (ADR 0098 §2.8). `svcdoctor run --config` is a released
+  # CLI surface whose only end-to-end validation is this suite, and Phase 14.0A
+  # §23 admits its own invariant: publication is blocked unless at least one real
+  # mixed-service run passes.
   integration:
     name: Integration (${{ matrix.suite }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        suite: [postgres, kafka, redpanda]
+        suite: [postgres, kafka, redpanda, redis, valkey, rabbitmq, lavinmq, multitarget]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26'
+          # go.mod, not a second hardcoded version. Phase 14.0A §14 recorded the
+          # pre-existing `go-version: '1.26'` here as an inconsistency with
+          # kubernetes.yml and admitted aligning it in the same change that grows
+          # this matrix; this is that alignment, and it removes a second toolchain
+          # authority that would drift from go.mod on the first edit of either.
+          go-version-file: go.mod
       - name: Run suite
         run: make integration-${{ matrix.suite }}
+
+      # `make` stops at a failing target, so `integration-<suite>` does not reach
+      # `<suite>-down` when the suite fails. The runner is ephemeral, so this
+      # changes nothing about the next release — it is here so a failing release
+      # leg releases its ports and volumes before the job ends, matching the
+      # cleanup contract every other container lane in this repository follows.
+      - name: Tear down the fixtures
+        if: always()
+        run: make ${{ matrix.suite }}-down
 
   # ---------------------------------------------------------------------------
   # 3b. Kubernetes real-cluster gate

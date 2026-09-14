@@ -1465,14 +1465,27 @@ func TestOCIPublicationCannotStartBeforeLinuxIntegration(t *testing.T) {
 
 	// Every suite, not a subset. Dropping the one that failed is the specific
 	// temptation after a release is blocked by it.
+	//
+	// The list grew from three to eight in Phase 14.0B. The three that were here
+	// carry the v0.3.1 lesson; the four that joined them carry ADR 0098 §2.1 —
+	// Redis, Valkey, RabbitMQ and LavinMQ are graded Level 3 — SUPPORTED BASIC and
+	// nothing ran their committed fixtures, so a release could publish an artifact
+	// making four compatibility claims that no automation had re-verified for that
+	// commit. `multitarget` is the fifth and is deliberately *not* a compatibility
+	// claim (ADR 0098 §2.8): it is the only end-to-end validation of the released
+	// `svcdoctor run --config` surface.
 	_, matrix, found := strings.Cut(wf, "suite:")
 	if !found {
 		t.Fatal("the release workflow declares no integration matrix")
 	}
 	matrix, _, _ = strings.Cut(matrix, "\n")
-	for _, suite := range []string{"postgres", "kafka", "redpanda"} {
+	for _, suite := range releaseIntegrationSuites {
 		if !strings.Contains(matrix, suite) {
-			t.Errorf("the release integration matrix no longer runs %q (matrix: %s)",
+			t.Errorf("the release integration matrix no longer runs %q (matrix: %s).\n\n"+
+				"ADR 0098 §2.5 names the four permitted responses to a failing Level-3 "+
+				"lane — fix svcdoctor, fix the fixture without weakening an assertion, "+
+				"keep the previously validated pin, or downgrade the claim. Removing the "+
+				"gate in order to publish is not among them.",
 				suite, strings.TrimSpace(matrix))
 		}
 	}

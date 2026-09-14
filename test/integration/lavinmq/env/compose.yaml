@@ -23,7 +23,7 @@ name: svcdoctor-lavinmq
 
 services:
   lavinmq:
-    image: cloudamqp/lavinmq:2.3.0
+    image: cloudamqp/lavinmq:2.3.0@sha256:3dd7f348e5ef59dc62d4a9b0216e7f980f98afa7aee718e1c7226e7997c14da3
     container_name: svcd-lavinmq
     hostname: svcd-lavinmq
     ports:

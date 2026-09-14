@@ -1,0 +1,174 @@
+# The hosted service-integration gate.
+#
+# This workflow implements the Phase 14.0A contract and ADR 0098. It decides
+# nothing; every rule it enforces was accepted there and is normative there.
+#
+# # Why it exists
+#
+# `docs/COMPATIBILITY.md` grades Redis 8.2.1, Valkey 8.1.1, RabbitMQ (3.13.7,
+# 4.0.9, 4.2.0) and LavinMQ 2.3.0 at **Level 3 — SUPPORTED BASIC**. Each already
+# had the committed fixture and `make` target that bar requires. **Nothing ran
+# them.** All five uncovered integration targets appeared zero times across every
+# workflow file, so a release could publish an artifact carrying four Level-3
+# claims that no automation had re-verified for that commit.
+#
+# ADR 0098 closes that by adding one clause to the Level-3 bar — the fixture must
+# gate release publication. This workflow is the developer-feedback half; the
+# release half is the `integration` job inside `release-oci.yml`, because GitHub
+# cannot make one workflow depend on another's recent result and "green last
+# Tuesday" is a statement about a different commit.
+#
+# # The one idea worth understanding before reading it
+#
+# **The matrix depends on the event, and multi-target is the reason.** Phase
+# 14.0A measured the four service lanes at 14 s, 17 s, 19 s and 117 s, which is
+# affordable on every pull request by a wide margin. Multi-target starts four
+# fixture sets at once — the largest flake surface in the repository — and its
+# *unique* content, the scheduler and the `RunReport` envelope, is the part most
+# thoroughly covered hermetically inside `make check`. So:
+#
+#   pull_request                              redis, valkey, rabbitmq, lavinmq
+#   push to main, schedule, workflow_dispatch  + multitarget
+#
+# The cost of that choice, stated exactly: a regression that breaks mixed-service
+# composition *only* can pass review and reach `main`. It is caught at the merge
+# commit by the `push: main` run, not a week later, and it cannot reach a
+# release. Phase 14.0A §10 records the promotion condition for putting it on pull
+# requests: four consecutive weeks of green hosted `main` and scheduled runs.
+#
+# # Nothing floats
+#
+# Every service image is pinned by tag **and** digest in the compose files the
+# Make targets read. Go comes from `go.mod`. The two actions are pinned by the
+# commit SHAs this repository already carries, so no digest had to be invented
+# for this file. The runner generation is explicit, because `ubuntu-latest` rolls
+# to the next LTS on its own and this is a release gate.
+#
+# # What a green lane does not mean
+#
+# ADR 0095 §2.3, applied unchanged: a green lane protects a claim, it never
+# creates one. Hosted runners are amd64 and Phase 14.0A's local measurements were
+# arm64, so these lanes are the first amd64 evidence for all five suites — and
+# that makes each product validated on two architectures for the BASIC journey,
+# which is the most any document may say.
+
+name: Integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Weekly, deliberately not on the hour — scheduled runs that cluster on :00 are
+  # the ones GitHub delays most — and on a different weekday from kubernetes.yml's
+  # `17 4 * * 1` so the two heavy container workflows do not contend.
+  #
+  # With images digest-pinned, this detects runner-image drift, toolchain drift,
+  # Docker-version drift and project regressions on main. It does **not** test new
+  # upstream product releases: a new Redis or RabbitMQ version is only ever tested
+  # by an explicit pull request that moves the pin and updates
+  # docs/COMPATIBILITY.md in the same change (ADR 0098 §2.4).
+  schedule:
+    - cron: '37 4 * * 2'
+  # No inputs. A dispatched run picks its lanes from the frozen matrix and cannot
+  # name an image or a version, so it cannot manufacture evidence for a product
+  # nobody graded (ADR 0095 §2.3, ADR 0098 §2.4).
+  workflow_dispatch:
+
+# Read-only, and no job escalates. The fixtures are created on the runner and
+# destroyed there; nothing here writes to the repository, publishes a package or
+# holds a signing identity.
+#
+# `pull_request` and never `pull_request_target`: these lanes execute the pull
+# request's own code inside a container runtime, which is the worst possible place
+# to hand it the base repository's token and secrets. A fork pull request
+# therefore runs normally, with a read-only token and no secrets, and needs no
+# special case.
+permissions:
+  contents: read
+
+# The event is part of the group on purpose. Without it a scheduled run on `main`
+# and a push to `main` share a group and one cancels the other.
+#
+# Cancellation is enabled for pull requests only — a superseded commit should not
+# keep four broker fixtures alive — and disabled everywhere else. Release
+# validation lives in `release-oci.yml` under that workflow's own never-cancel
+# group, so no branch activity here can ever cancel it.
+concurrency:
+  group: integration-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The job is named `Integration (<suite>)`, the convention `release-oci.yml`
+  # already declares verbatim and Phase 14.0A §13 froze, so a failure names the
+  # product that failed rather than an opaque matrix index.
+  suite:
+    name: Integration (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    # Per-lane, from Phase 14.0A §16, and each deliberately above its suite's own
+    # `go test -timeout`: a shorter job budget would kill the job before the Go
+    # test timeout fires and destroy the goroutine dump, which is the most useful
+    # thing a hang produces. These detect a hang; they do not bound a slow run.
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      # Every lane reports. A cancelled sibling would leave the run ambiguous
+      # about whether the other products would have passed, and one broken
+      # product must not hide the state of the other four.
+      fail-fast: false
+      matrix:
+        # The event decides the lanes, and the timeout travels with the lane.
+        #
+        # One line on purpose. A folded block scalar keeps the newlines of its
+        # continuation lines, so the expression would reach GitHub with literal
+        # line breaks inside it; that happens to work and is not worth relying on.
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"suite":"redis","timeout":25},{"suite":"valkey","timeout":25},{"suite":"rabbitmq","timeout":30},{"suite":"lavinmq","timeout":25}]') || fromJSON('[{"suite":"redis","timeout":25},{"suite":"valkey","timeout":25},{"suite":"rabbitmq","timeout":30},{"suite":"lavinmq","timeout":25},{"suite":"multitarget","timeout":40}]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          # go.mod is the single source of truth for the toolchain. A second
+          # version written here would be a second authority that drifts from it.
+          go-version-file: go.mod
+
+      # Printed before the gate runs, because every local measurement behind this
+      # contract was taken on Darwin/arm64 under OrbStack and every hosted runner
+      # is amd64 — so this is the first amd64 execution of these suites, and the
+      # next person should not have to reproduce the environment to find out what
+      # it was. This is the precedent validate-integration.yml set after a release
+      # was lost to exactly one such unrecorded difference.
+      #
+      # Bounded on purpose: versions and identity, never an environment dump.
+      # There is no `set -x` anywhere in this workflow.
+      - name: Record the runner and the tool versions
+        run: |
+          printf 'suite=%s\n' '${{ matrix.suite }}'
+          printf 'runner uid=%s gid=%s user=%s\n' "$(id -u)" "$(id -g)" "$(id -un)"
+          printf 'runner os=%s arch=%s\n' "$(uname -s)" "$(uname -m)"
+          docker version --format 'docker {{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}'
+          go version
+
+      # The canonical developer command, unchanged. The harness owns the fixture
+      # lifecycle, the certificates, the deterministic readiness loop, the
+      # principals, the assertions and the failure dump; this workflow owns the
+      # runner and the lane. No fixture logic belongs in YAML — a second recipe
+      # here would be one no local gate exercises, and it would drift on its first
+      # edit.
+      #
+      # There is no retry, of a job, a step or a test. The readiness loop inside
+      # each `*-up` target is a bounded deterministic wait for a declared
+      # condition, not a retry, and that distinction is frozen (Phase 14.0A §17).
+      # A repeatable infrastructure failure is classified and fixed in the
+      # harness; a retry loop would make that class of bug permanently invisible.
+      - name: Run the integration gate
+        run: make integration-${{ matrix.suite }}
+
+      # `make` stops at a failing target, so `integration-<suite>` does not reach
+      # `<suite>-down` when the suite fails — which is exactly when a fixture was
+      # left behind. This calls the harness's own target, contains no cleanup
+      # logic of its own, and is idempotent, so the extra call after a successful
+      # run costs nothing.
+      #
+      # It cannot mask the failure above: the two steps report separately and the
+      # job's conclusion is already failure.
+      - name: Tear down the fixtures
+        if: always()
+        run: make ${{ matrix.suite }}-down

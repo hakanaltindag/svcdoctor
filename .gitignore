@@ -63,6 +63,18 @@ test/integration/valkey/env/certs/
 # fixture mounts this same directory rather than minting its own.
 test/integration/rabbitmq/env/certs/
 
+# Generated Python bytecode. `env/probe.py` imports `env/groundtruth.py`, and
+# CPython would write the compiled cache next to it. One such file was tracked
+# and the RabbitMQ suite rewrote it on every run, which made a release gate
+# dirty the repository it gates (Phase 14.0A §9.1).
+#
+# `probe.py` now sets `sys.dont_write_bytecode` so nothing is produced at all;
+# this is the second line of defence, for an invocation path or interpreter that
+# writes one anyway. Generated cache is not test evidence — the ground-truth
+# source is, and it stays tracked.
+__pycache__/
+*.pyc
+
 # The kubeconfig `make kubernetes-up` generates for the kind validation cluster.
 # It carries that throwaway cluster's client certificate and key, so it is never
 # a tracked artefact — the cluster is created and destroyed by the same gate.

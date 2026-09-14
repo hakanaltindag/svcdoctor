@@ -16,7 +16,7 @@ name: svcdoctor-redis
 services:
   # R-00, R-11, R-18, R-19 baseline: plaintext, no authentication at all.
   redis:
-    image: redis:8.2.1-alpine
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
     container_name: svcd-redis
     ports:
       - "56379:6379"
@@ -24,7 +24,7 @@ services:
 
   # R-01, R-02, R-13: a password, and nothing else.
   redis-pw:
-    image: redis:8.2.1-alpine
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
     container_name: svcd-redis-pw
     ports:
       - "56380:6379"
@@ -36,7 +36,7 @@ services:
   #   disabled   is off, so AUTH is refused
   #   nopassuser accepts every password
   redis-acl:
-    image: redis:8.2.1-alpine
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
     container_name: svcd-redis-acl
     ports:
       - "56381:6379"
@@ -58,7 +58,7 @@ services:
   # not have. The default case is measured in R-20 instead, against its own
   # server, where the expected outcome is a handshake failure.
   redis-tls:
-    image: redis:8.2.1-alpine
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
     container_name: svcd-redis-tls
     ports:
       - "56382:6379"
@@ -105,7 +105,7 @@ services:
   # certificate, so the handshake must fail — truthfully, and without claiming
   # the endpoint is unhealthy.
   redis-mtls:
-    image: redis:8.2.1-alpine
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
     container_name: svcd-redis-mtls
     ports:
       - "56383:6379"
@@ -129,7 +129,7 @@ services:
   # R-15: a replica of the baseline server, so `role` is measured rather than
   # asserted.
   redis-replica:
-    image: redis:8.2.1-alpine
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
     container_name: svcd-redis-replica
     depends_on:
       - redis
@@ -147,7 +147,7 @@ services:
   # cluster: BASIC measures the endpoint journey and no topology, so a node that
   # reports mode=cluster is the whole of what this scenario needs.
   redis-cluster:
-    image: redis:8.2.1-alpine
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
     container_name: svcd-redis-cluster
     ports:
       - "56385:6379"
@@ -161,7 +161,7 @@ services:
   # R-17: a real Sentinel. It answers PING, AUTH and HELLO, which is exactly why
   # the guard exists.
   redis-sentinel:
-    image: redis:8.2.1-alpine
+    image: redis:8.2.1-alpine@sha256:987c376c727652f99625c7d205a1cba3cb2c53b92b0b62aade2bd48ee1593232
     container_name: svcd-redis-sentinel
     depends_on:
       - redis
